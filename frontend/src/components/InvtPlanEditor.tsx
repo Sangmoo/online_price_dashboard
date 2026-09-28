@@ -27,6 +27,11 @@ const EDITABLE: (keyof InvtPlan)[] = [
   'invtPlanDt', 'rmk', 'twiceYearYn', 'shopRankNm', 'stlmTeam', 'smasrNm', 'smasrHp', 'shopTel',
 ]
 
+// 업체 예상 비용 자동 계산 규칙
+const BASE_FEE_CAPITAL = 150000 // 권역 '수도권' 기본료
+const BASE_FEE_OTHER = 200000 // 그 외 권역 기본료
+const EXPECT_PER_QTY = 85 // 실사예상액 = 재고 수량 × 85
+
 const str = (v: unknown) => (v == null ? '' : String(v))
 const numOrNull = (v: unknown) => {
   const s = str(v).replaceAll(',', '').trim()
@@ -39,6 +44,7 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
   const [missing, setMissing] = useState<string[]>([])
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
   const [existing, setExisting] = useState(0)
+  const [notes, setNotes] = useState<string[]>([])
   const [shopPicker, setShopPicker] = useState(false)
   const [mgrPicker, setMgrPicker] = useState(false)
   const [loadingShop, setLoadingShop] = useState(false)
@@ -46,7 +52,7 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
   const [error, setError] = useState<string | null>(null)
 
   const set = (k: keyof InvtPlan, v: string | number | boolean | null) => {
-    setForm((f) => ({ ...f, [k]: v }))
+    setForm((f) => derive({ ...f, [k]: v }, k))
     if (missing.includes(k as string) && v !== '' && v != null) setMissing((m) => m.filter((x) => x !== k))
   }
 
@@ -63,8 +69,9 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
     setError(null)
     try {
       const d = await invtApi.shop(shop.shopId)
-      setForm((f) => ({ ...f, ...d.values }))
+      setForm((f) => derive({ ...f, ...d.values }, 'stockQty'))
       setMissing(d.missing)
+      setNotes(d.notes ?? [])
       setLoadErrors(d.errors)
       setExisting(isNew ? d.existingPlans : Math.max(0, d.existingPlans - 1))
     } catch (e) {
@@ -170,8 +177,15 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
                 <AlertTriangle size={15} />
                 <div>
                   다음 항목은 조회된 데이터가 없습니다. 직접 입력해 주세요: <b>{missing.map(labelOf).join(', ')}</b>
+                  {notes.map((n) => <div key={n}>{n}</div>)}
                   {Object.keys(loadErrors).length > 0 && <div className="muted small">일부 항목은 조회 중 오류가 발생했습니다.</div>}
                 </div>
+              </div>
+            )}
+            {missing.length === 0 && notes.length > 0 && (
+              <div className="notice-box warn">
+                <AlertTriangle size={15} />
+                <div>{notes.map((n) => <div key={n}>{n}</div>)}</div>
               </div>
             )}
             {existing > 0 && (
@@ -224,8 +238,10 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
             <div className="form-grid">
               <Field label="최종실사일" auto missing={miss('lastInvtDt')}>{dateInput('lastInvtDt')}</Field>
               <Field label="경과일"><div className="readonly">{elapsed != null ? `${fmtNum(elapsed)}일` : '-'}</div></Field>
-              <Field label="전실사유형">{select('prevInvtType', options.invtTypes)}</Field>
-              <Field label="전실사결과">{input('prevInvtResult', '숫자', 'number')}</Field>
+              <Field label="전실사유형" auto missing={miss('prevInvtType')}>{select('prevInvtType', options.invtTypes)}</Field>
+              <Field label="전실사결과" auto missing={miss('prevInvtResult')} hint={fmtWonHint(form.prevInvtResult)}>
+                {input('prevInvtResult', '숫자', 'number')}
+              </Field>
               <Field label="재고 수량" auto missing={miss('stockQty')} hint={form.stockBaseDt ? `${ymdToIso(form.stockBaseDt)} 기준` : '당일 기준'}>
                 {input('stockQty', '', 'number')}
               </Field>
@@ -239,8 +255,8 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
               <Field label="실사예정" wide>
                 <textarea className="input textarea" rows={2} value={str(form.invtPlanNote)} placeholder="자유롭게 작성" onChange={(e) => set('invtPlanNote', e.target.value)} />
               </Field>
-              <Field label="기본료(원)">{input('baseFee', '0', 'number')}</Field>
-              <Field label="실사예상액(원)">{input('expectAmt', '0', 'number')}</Field>
+              <Field label="기본료(원)" hint="수도권 15만 · 그 외 20만">{input('baseFee', '권역 선택 시 자동', 'number')}</Field>
+              <Field label="실사예상액(원)" hint="재고 수량 × 85">{input('expectAmt', '재고 입력 시 자동', 'number')}</Field>
               <Field label="실사예정일" hint="비우면 미정">
                 <div className="date-with-clear">
                   {dateInput('invtPlanDt')}
@@ -317,7 +333,24 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
 
 const LABELS: Record<string, string> = {
   brdNm: '브랜드', shopFormNm: '유통', shopNm: '매장명', prevSaleAmt: '전년 매출', currSaleAmt: '당년 매출',
-  lastInvtDt: '최종실사일', stockQty: '재고 수량', shopRankNm: '관리등급', shopTel: '매장번호',
+  lastInvtDt: '최종실사일', prevInvtType: '전실사유형', prevInvtResult: '전실사결과', stockQty: '재고 수량',
+  shopRankNm: '관리등급', shopTel: '매장번호',
+}
+
+/** 입력값 변경에 따른 자동 계산: 권역 → 기본료, 재고 수량 → 실사예상액 (계산 후 사용자가 직접 수정 가능) */
+function derive(f: PlanForm, changed: keyof InvtPlan): PlanForm {
+  if (changed === 'regionNm' && f.regionNm) {
+    return { ...f, baseFee: f.regionNm === '수도권' ? BASE_FEE_CAPITAL : BASE_FEE_OTHER }
+  }
+  if (changed === 'stockQty') {
+    const qty = numOrNull(f.stockQty)
+    return { ...f, expectAmt: qty == null ? null : Math.round(qty * EXPECT_PER_QTY) }
+  }
+  return f
+}
+const fmtWonHint = (v: unknown) => {
+  const n = numOrNull(v)
+  return n == null ? undefined : `${n > 0 ? '+' : ''}${fmtNum(n)}원`
 }
 const labelOf = (k: string) => LABELS[k] ?? k
 const fmtMil = (v: unknown) => {
@@ -442,7 +475,7 @@ function ManagerPicker({ shopId, onClose, onPick }: { shopId: string; onClose: (
 
   return (
     <div className="modal-backdrop top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal card picker-modal sm">
+      <div className="modal card picker-modal">
         <div className="modal-head">
           <h3><UserRound size={16} /> 매니저 선택 · {shopId}</h3>
           <button className="icon-btn" onClick={onClose}><X size={18} /></button>
@@ -457,12 +490,16 @@ function ManagerPicker({ shopId, onClose, onPick }: { shopId: string; onClose: (
         {rows && rows.length > 0 && (
           <div className="picker-list">
             <table className="table">
-              <thead><tr><th>매니저명</th><th>매니저번호</th></tr></thead>
+              <thead><tr><th>매니저명</th><th>매니저번호</th><th>오픈일</th><th>종료일</th></tr></thead>
               <tbody>
                 {rows.map((m, i) => (
-                  <tr key={i} className="clickable" onClick={() => onPick(m)}>
-                    <td className="strong">{m.smasrNm ?? '-'}</td>
+                  <tr key={i} className={`clickable ${m.current ? 'current-mgr' : ''}`} onClick={() => onPick(m)}>
+                    <td className="strong">
+                      {m.smasrNm ?? '-'} {m.current && <span className="tag auto">현재</span>}
+                    </td>
                     <td className="mono">{m.smasrHp ?? <span className="muted">번호 없음</span>}</td>
+                    <td className="muted">{ymdToIso(m.openDt) || '-'}</td>
+                    <td className="muted">{m.closeDt === '99991231' ? '근무 중' : ymdToIso(m.closeDt) || '-'}</td>
                   </tr>
                 ))}
               </tbody>

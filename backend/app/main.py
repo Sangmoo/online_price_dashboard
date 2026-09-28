@@ -1,18 +1,23 @@
 """FastAPI 엔트리포인트."""
 from __future__ import annotations
 
+import os
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import admin, auth, chat_service, config, data_service as ds, invt_plan, store, usage
+from . import admin, auth, chat_service, config, data_service as ds, invt_plan, sale_monthly, store, usage, userdb
 from .auth import current_user, require_admin, require_page
 
 store.init()
+_moved = userdb.migrate_from_sqlite(store)  # 1회: 이전 SQLite 사용자/설정 → Oracle
+if _moved:
+    print(f"[migration] 사용자 권한을 Oracle 로 이전했습니다: {', '.join(_moved)}")
 
 app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
@@ -286,6 +291,11 @@ def admin_directory(q: str, _: dict = Depends(require_admin)):
     return {"users": admin.directory_search(q)}
 
 
+@app.post("/api/admin/users")
+def admin_create_user(body: dict, me: dict = Depends(require_admin)):
+    return {"user": admin.create_user(me, body)}
+
+
 @app.put("/api/admin/users/{usr_id}")
 def admin_save_user(usr_id: str, body: dict, me: dict = Depends(require_admin)):
     return {"user": admin.save_user(me, usr_id, body)}
@@ -297,8 +307,8 @@ def admin_get_settings(_: dict = Depends(require_admin)):
 
 
 @app.put("/api/admin/settings")
-def admin_put_settings(body: dict, _: dict = Depends(require_admin)):
-    return admin.save_settings(body)
+def admin_put_settings(body: dict, me: dict = Depends(require_admin)):
+    return admin.save_settings(body, by=me["id"])
 
 
 @app.get("/api/admin/usage")
@@ -332,6 +342,37 @@ def admin_kill_session(sid: str, _: dict = Depends(require_admin)):
 # 데이터 관리 > 매장 재고 실사계획
 # ----------------------------------------------------------------------------
 invt_page = require_page("invt_plan")
+
+
+# ----------------------------------------------------------------------------
+# 월별 매장별 판매 집계 (T_CLOSE_SALE_BASE)
+# ----------------------------------------------------------------------------
+sale_page = require_page("sale_monthly")
+
+
+@app.get("/api/sale-monthly/options")
+def sale_options(_: dict = Depends(sale_page)):
+    return sale_monthly.options()
+
+
+@app.get("/api/sale-monthly")
+def sale_search(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
+                seasons: str | None = None, page: int = 1, total: bool = True, _: dict = Depends(sale_page)):
+    return sale_monthly.search(ymFrom, ymTo, shops, planYys, seasons, page, total)
+
+
+@app.get("/api/sale-monthly/export")
+def sale_export(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
+                seasons: str | None = None, _: dict = Depends(sale_page)):
+    path, name = sale_monthly.export_xlsx(ymFrom, ymTo, shops, planYys, seasons)
+    return FileResponse(path, media_type=XLSX,
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+                        background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)))
+
+
+@app.get("/api/sale-monthly/shops")
+def sale_shops(q: str, _: dict = Depends(sale_page)):
+    return {"shops": invt_plan.search_shops(q)}
 
 
 @app.get("/api/invt-plans/options")

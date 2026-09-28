@@ -3,7 +3,7 @@ export type Row = Record<string, string | number | null>
 
 export type DateInfo = { dt: string; count: number }
 
-export type PageKey = 'dashboard' | 'detail' | 'invt_plan' | 'admin'
+export type PageKey = 'dashboard' | 'detail' | 'sale_monthly' | 'invt_plan' | 'admin'
 
 export type AiLimits = {
   enabled: boolean
@@ -177,6 +177,7 @@ export const api = {
   admin: {
     users: (q?: string) => getJson<AdminUsersResponse>(`/api/admin/users?${qs({ q })}`),
     directory: (q: string) => getJson<{ users: { id: string; name: string; registered: boolean }[] }>(`/api/admin/directory?${qs({ q })}`),
+    createUser: (body: AdminUserUpdate & { id: string }) => sendJson<{ user: AdminUser }>('POST', '/api/admin/users', body),
     saveUser: (id: string, body: Partial<AdminUserUpdate>) => sendJson<{ user: AdminUser }>('PUT', `/api/admin/users/${encodeURIComponent(id)}`, body),
     settings: () => getJson<AdminSettings>('/api/admin/settings'),
     saveSettings: (body: Partial<AdminSettings>) => sendJson<AdminSettings>('PUT', '/api/admin/settings', body),

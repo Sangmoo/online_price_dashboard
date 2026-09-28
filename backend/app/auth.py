@@ -2,24 +2,27 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
 from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from . import config, db, store
+from . import config, db, store, userdb
 
 SESSION_COOKIE = "opd_session"
 SESSION_TTL = 60 * 60          # 1시간 (사용 시마다 연장)
 MAX_FAILS = 5
 LOCK_SECONDS = 60
 
-PAGES = ["dashboard", "detail", "invt_plan"]   # 권한 부여 가능한 일반 페이지
-DEFAULT_PAGES = PAGES                          # 신규 사용자 기본 권한 (현재 전 페이지)
-PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "invt_plan": "매장 재고 실사계획", "admin": "관리자"}
+PAGES = ["dashboard", "detail", "sale_monthly", "invt_plan"]   # 권한 부여 가능한 일반 페이지
+EMP_NO_RE = re.compile(r"^\d{6}$")             # 사번 형식 (6자리 숫자)
+PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "sale_monthly": "월별 매장별 판매 집계", "invt_plan": "매장 재고 실사계획",
+               "admin": "관리자"}
 
 MSG_BAD_LOGIN = "아이디 또는 패스워드가 일치하지 않습니다."
+MSG_NOT_REGISTERED = "이 서비스에 등록되지 않은 사용자입니다. 관리자에게 사용자 등록을 요청하세요."
 
 
 class AuthError(HTTPException):
@@ -34,20 +37,26 @@ def is_super_admin(usr_id: str) -> bool:
     return usr_id == config.SUPER_ADMIN_ID
 
 
-def ensure_user(usr_id: str, usr_nm: str | None) -> dict:
-    u = store.row("SELECT * FROM users WHERE usr_id=?", (usr_id,))
+def is_emp_no(usr_id: str) -> bool:
+    return bool(EMP_NO_RE.match(usr_id or ""))
+
+
+def registered_user(usr_id: str, usr_nm: str | None) -> dict | None:
+    """서비스 사용자 테이블(T_ERP_WEB_USER)에 등록된 사용자만 반환. 자동 등록하지 않는다.
+    예외: 최고 관리자는 테이블이 비어 있어도 들어올 수 있도록 없으면 ADMIN 으로 등록한다."""
+    u = userdb.get_user(usr_id, fresh=True)
     if u is None:
-        role = "ADMIN" if is_super_admin(usr_id) else "USER"
-        store.execute("INSERT INTO users(usr_id, usr_nm, role, pages) VALUES(?,?,?,?)",
-                      (usr_id, usr_nm, role, json.dumps(DEFAULT_PAGES)))
+        if not is_super_admin(usr_id):
+            return None
+        userdb.create_user(usr_id, usr_nm, "ADMIN", PAGES, by="SYSTEM")
     elif usr_nm and u["usr_nm"] != usr_nm:
-        store.execute("UPDATE users SET usr_nm=? WHERE usr_id=?", (usr_nm, usr_id))
-    return store.row("SELECT * FROM users WHERE usr_id=?", (usr_id,))
+        userdb.update_name(usr_id, usr_nm)
+    return userdb.get_user(usr_id, fresh=True)
 
 
 def effective(u: dict, settings: dict | None = None) -> dict:
     """users 행 + 전역 설정 → 실제 적용 권한."""
-    s = settings or store.get_settings()
+    s = settings or userdb.get_settings()
     super_admin = is_super_admin(u["usr_id"])
     role = "ADMIN" if super_admin else u["role"]
     pages = PAGES[:] if super_admin else [p for p in json.loads(u["pages"] or "[]") if p in PAGES]
@@ -126,7 +135,10 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
         raise AuthError(401, MSG_BAD_LOGIN, "BAD_CREDENTIALS", remaining=MAX_FAILS - fails)
 
     store.execute("DELETE FROM login_attempts WHERE usr_id=?", (usr_id,))
-    u = ensure_user(found["USR_ID"], found["USR_NM"])
+    u = registered_user(found["USR_ID"], found["USR_NM"])
+    if u is None:
+        _log(usr_id, False, "NOT_REGISTERED", ip)
+        raise AuthError(403, MSG_NOT_REGISTERED, "NOT_REGISTERED")
     me = effective(u)
     if not me["active"]:
         _log(usr_id, False, "INACTIVE", ip)
@@ -138,7 +150,7 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
         "INSERT INTO sessions(token, sid, usr_id, created_at, last_seen, expires_at, ip, user_agent) VALUES(?,?,?,?,?,?,?,?)",
         (token, secrets.token_hex(8), usr_id, now, now, now + SESSION_TTL, ip, (user_agent or "")[:200]),
     )
-    store.execute("UPDATE users SET last_login_at=datetime('now','localtime') WHERE usr_id=?", (usr_id,))
+    userdb.touch_login(usr_id)
     _log(usr_id, True, "OK", ip)
     return token, me
 
@@ -160,7 +172,7 @@ def current_user(request: Request) -> dict:
             store.execute("DELETE FROM sessions WHERE token=?", (token,))
         raise AuthError(401, "로그인이 필요합니다." if not sess else "1시간 동안 사용하지 않아 로그아웃되었습니다.",
                         "SESSION_EXPIRED")
-    u = store.row("SELECT * FROM users WHERE usr_id=?", (sess["usr_id"],))
+    u = userdb.get_user(sess["usr_id"])
     me = effective(u) if u else None
     if not me or not me["active"]:
         store.execute("DELETE FROM sessions WHERE token=?", (token,))

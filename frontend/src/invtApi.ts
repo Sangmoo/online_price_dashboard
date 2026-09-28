@@ -56,10 +56,18 @@ export type ShopDetail = {
   values: PlanForm
   missing: string[]
   missingLabels: string[]
+  notes?: string[]
   errors: Record<string, string>
   existingPlans: number
 }
-export type Manager = { shopId: string; smasrNm: string | null; smasrHp: string | null }
+export type Manager = {
+  shopId: string
+  smasrNm: string | null
+  smasrHp: string | null
+  openDt: string | null
+  closeDt: string | null
+  current: boolean
+}
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return (await apiFetch(url, init)).json()

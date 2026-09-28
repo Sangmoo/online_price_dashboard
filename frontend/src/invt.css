@@ -120,3 +120,5 @@
 .date-range-label { font-size: 12.5px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
 .date-range input { border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; width: 124px; }
 .date-range .clear { border: 0; background: var(--surface-3); border-radius: 999px; width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-2); }
+
+.picker-list tr.current-mgr td { background: rgba(20, 184, 166, 0.07); }

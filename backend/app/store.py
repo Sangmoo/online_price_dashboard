@@ -131,6 +131,8 @@ def tx() -> Iterator[sqlite3.Connection]:
 def init() -> None:
     conn().executescript(SCHEMA)
     _migrate()
+    # 참고: users / settings 테이블은 이전 저장소입니다. 사용자 권한·전역 설정은 Oracle(userdb)로 이전되었고,
+    # 여기 남은 값은 최초 1회 마이그레이션에만 사용됩니다.
 
 
 def _migrate() -> None:

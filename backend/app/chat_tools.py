@@ -276,23 +276,27 @@ def _run_price_tool(name: str, inp: Any) -> dict:
 # 도구 레지스트리 (메뉴 권한 연동)
 # ----------------------------------------------------------------------------
 from . import chat_tools_invt as invt  # noqa: E402
+from . import chat_tools_sale as sale  # noqa: E402
 
 PRICE_PAGES = {"dashboard", "detail"}   # 온라인 가격 데이터 메뉴
+SALE_PAGES = {"sale_monthly"}           # 월별 매장별 판매 집계 메뉴
 INVT_PAGES = {"invt_plan"}              # 매장 재고 실사계획 메뉴
 TOOL_LABELS.update(invt.TOOL_LABELS)
+TOOL_LABELS.update(sale.TOOL_LABELS)
 _PRICE_TOOL_NAMES = {t["name"] for t in TOOLS}
 _INVT_TOOL_NAMES = {t["name"] for t in invt.TOOLS}
+_SALE_TOOL_NAMES = {t["name"] for t in sale.TOOLS}
 
 
 def data_scopes(me: dict) -> dict[str, bool]:
     pages = set(me.get("pages") or [])
-    return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES)}
+    return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES), "sale": bool(pages & SALE_PAGES)}
 
 
 def tools_for(me: dict) -> list[dict]:
     """사용자가 권한을 가진 메뉴의 데이터 도구만 모델에 제공."""
     sc = data_scopes(me)
-    return (TOOLS if sc["price"] else []) + (invt.TOOLS if sc["invt"] else [])
+    return (TOOLS if sc["price"] else []) + (sale.TOOLS if sc["sale"] else []) + (invt.TOOLS if sc["invt"] else [])
 
 
 def run_tool(name: str, inp: Any, me: dict) -> dict:
@@ -310,5 +314,12 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
         try:
             return invt.run(name, inp)
         except invt.InvtToolError as ex:
+            raise ToolInputError(str(ex))
+    if name in _SALE_TOOL_NAMES:
+        if not sc["sale"]:
+            raise ToolInputError("이 사용자는 월별 매장별 판매 집계 메뉴 권한이 없어 조회할 수 없습니다.")
+        try:
+            return sale.run(name, inp)
+        except sale.SaleToolError as ex:
             raise ToolInputError(str(ex))
     raise ToolInputError(f"알 수 없는 도구: {name}")

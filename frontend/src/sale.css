@@ -1,0 +1,27 @@
+/* 월별 매장별 판매 집계 */
+.sale-filter { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+.sale-filter-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sale-filter-row .toolbar-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.filter-label { width: 64px; flex: none; font-size: 13px; font-weight: 700; color: var(--muted, #8b93a7); }
+.chips.wrap { flex-wrap: wrap; align-items: center; }
+.shop-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.shop-tag {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 240px;
+  padding: 3px 4px 3px 9px; border-radius: 999px; font-size: 12px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shop-tag b { color: var(--primary); }
+.shop-tag button { border: 0; background: none; color: inherit; opacity: .6; display: grid; place-items: center; padding: 2px; border-radius: 50%; cursor: pointer; }
+.shop-tag button:hover { opacity: 1; background: rgba(148,163,184,.25); }
+.sale-wrap { position: relative; }
+.sale-table th, .sale-table td { white-space: nowrap; }
+.sale-table thead th { position: sticky; top: 0; z-index: 1; }
+.picker-modal .picked-bar { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border, rgba(148,163,184,.3)); padding-top: 10px; }
+.picker-modal .picked-bar .shop-tags { max-height: 96px; overflow: auto; }
+.picker-list tr.selected td { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+@media (max-width: 720px) {
+  .filter-label { width: 100%; }
+  .sale-filter-row .toolbar-actions { margin-left: 0; }
+}
+.sale-filter .date-range { flex-wrap: wrap; max-width: 100%; }

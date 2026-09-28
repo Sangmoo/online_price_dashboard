@@ -115,7 +115,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
     <section className="card panel">
       <div className="panel-head row">
         <h3>사용자 · 권한 관리</h3>
-        <span className="panel-hint">로그인한 사용자는 자동 등록됩니다 (기본: 일반 권한, 대시보드·일자별 상세, AI 사용)</span>
+        <span className="panel-hint">등록된 사용자만 로그인할 수 있습니다 · 신규 사용자는 '사용자 추가'로 등록</span>
         <div className="grow" />
         <div className="search compact">
           <Search size={15} />
@@ -223,6 +223,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
 
       {adding && (
         <AddUserModal
+          pages={pages}
           onClose={() => setAdding(false)}
           onAdded={(name) => {
             notify(`${name} 사용자를 등록했습니다.`)
@@ -273,10 +274,22 @@ function LimitInput({ value, placeholder, step, onSave }: { value: number | null
   )
 }
 
-function AddUserModal({ onClose, onAdded, notify }: { onClose: () => void; onAdded: (name: string) => void; notify: Notify }) {
+function AddUserModal({ pages, onClose, onAdded, notify }: {
+  pages: { key: PageKey; label: string }[]
+  onClose: () => void
+  onAdded: (name: string) => void
+  notify: Notify
+}) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<{ id: string; name: string; registered: boolean }[]>([])
   const [loading, setLoading] = useState(false)
+  const [picked, setPicked] = useState<{ id: string; name: string } | null>(null)
+  const [role, setRole] = useState<'ADMIN' | 'USER'>('USER')
+  const [sel, setSel] = useState<PageKey[]>(pages.map((p) => p.key))
+  const [aiEnabled, setAiEnabled] = useState(true)
+  const [dq, setDq] = useState('')
+  const [dc, setDc] = useState('')
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -294,12 +307,29 @@ function AddUserModal({ onClose, onAdded, notify }: { onClose: () => void; onAdd
     return () => clearTimeout(t)
   }, [q, notify])
 
-  const add = async (id: string, name: string) => {
+  const num = (t: string) => (t.trim() === '' ? null : Number(t))
+  const add = async () => {
+    if (!picked) return
+    const q_ = num(dq)
+    const c_ = num(dc)
+    if (sel.length === 0) return notify('메뉴 권한을 하나 이상 선택하세요.', true)
+    if ((q_ !== null && (isNaN(q_) || q_ < 0)) || (c_ !== null && (isNaN(c_) || c_ < 0))) return notify('한도는 0 이상 숫자로 입력하세요.', true)
+    setSaving(true)
     try {
-      await api.admin.saveUser(id, {})
-      onAdded(name)
+      await api.admin.createUser({
+        id: picked.id,
+        role,
+        pages: sel,
+        aiEnabled,
+        dailyQuestions: q_ === null ? null : Math.round(q_),
+        dailyCostUsd: c_,
+        active: true,
+      })
+      onAdded(picked.name)
     } catch (e) {
       notify((e as Error).message, true)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -310,7 +340,57 @@ function AddUserModal({ onClose, onAdded, notify }: { onClose: () => void; onAdd
           <h3>사용자 추가</h3>
           <button className="icon-btn" onClick={onClose}><X size={18} /></button>
         </div>
-        <p className="muted">사내 계정(T_USR, 사용 중)에서 ID 또는 이름으로 검색해 미리 등록하고 권한을 지정할 수 있습니다.</p>
+        {picked ? (
+          <div className="add-user-form">
+            <div className="dir-row picked">
+              <div>
+                <div className="strong">{picked.name}</div>
+                <div className="muted mono">사번 {picked.id}</div>
+              </div>
+              <button className="btn ghost sm" onClick={() => setPicked(null)}>다시 선택</button>
+            </div>
+            <label className="form-row">
+              <span>권한</span>
+              <select className="input select small" value={role} onChange={(e) => setRole(e.target.value as 'ADMIN' | 'USER')}>
+                <option value="USER">일반</option>
+                <option value="ADMIN">관리자</option>
+              </select>
+            </label>
+            <div className="form-row">
+              <span>메뉴 권한</span>
+              <div className="page-chips">
+                {pages.map((p) => {
+                  const on = sel.includes(p.key)
+                  return (
+                    <button key={p.key} className={`page-chip ${on ? 'on' : ''}`} onClick={() => setSel(on ? sel.filter((x) => x !== p.key) : [...sel, p.key])}>
+                      {on && <Check size={11} />} {p.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="form-row">
+              <span>AI 사용</span>
+              <Toggle on={aiEnabled} onChange={setAiEnabled} labels={['사용', '중지']} />
+            </div>
+            <label className="form-row">
+              <span>일일 질문 한도</span>
+              <input className="input limit-input" type="number" min={0} step={1} value={dq} placeholder="비우면 기본값" onChange={(e) => setDq(e.target.value)} />
+            </label>
+            <label className="form-row">
+              <span>일일 비용 한도($)</span>
+              <input className="input limit-input" type="number" min={0} step={0.5} value={dc} placeholder="비우면 기본값" onChange={(e) => setDc(e.target.value)} />
+            </label>
+            <div className="setting-actions">
+              <button className="btn ghost" onClick={onClose}>취소</button>
+              <button className="btn primary" onClick={add} disabled={saving}>
+                {saving ? <Loader2 size={15} className="spin" /> : <UserPlus size={15} />} 등록
+              </button>
+            </div>
+          </div>
+        ) : (
+        <>
+        <p className="muted">사내 계정(T_USR, 사용 중)에서 사번 또는 이름으로 검색합니다. 사번(6자리 숫자) 계정만 등록할 수 있고, 등록된 사용자만 로그인할 수 있습니다.</p>
         <div className="search">
           <Search size={16} />
           <input autoFocus placeholder="ID 또는 이름 (2자 이상)" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -323,11 +403,13 @@ function AddUserModal({ onClose, onAdded, notify }: { onClose: () => void; onAdd
                 <div className="strong">{r.name}</div>
                 <div className="muted mono">{r.id}</div>
               </div>
-              {r.registered ? <span className="muted">등록됨</span> : <button className="btn primary sm" onClick={() => add(r.id, r.name)}>등록</button>}
+              {r.registered ? <span className="muted">등록됨</span> : <button className="btn primary sm" onClick={() => setPicked({ id: r.id, name: r.name })}>선택</button>}
             </div>
           ))}
           {q.trim().length >= 2 && !loading && results.length === 0 && <div className="muted small-pad">검색 결과가 없습니다.</div>}
         </div>
+        </>
+        )}
       </div>
     </div>
   )
@@ -516,7 +598,7 @@ function MiniKpi({ label, value }: { label: string; value: string }) {
 // ----------------------------------------------------------------------------
 // 로그인 · 잠금
 // ----------------------------------------------------------------------------
-const REASON: Record<string, string> = { OK: '성공', BAD_CREDENTIALS: '불일치', LOCKED: '잠금', INACTIVE: '사용중지 계정' }
+const REASON: Record<string, string> = { OK: '성공', BAD_CREDENTIALS: '불일치', LOCKED: '잠금', INACTIVE: '사용중지 계정', NOT_REGISTERED: '미등록 사용자' }
 
 function LoginsTab({ notify }: { notify: Notify }) {
   const [q, setQ] = useState('')

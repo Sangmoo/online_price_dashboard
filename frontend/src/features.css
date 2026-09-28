@@ -218,3 +218,10 @@
 .lock-row.locked { border-color: rgba(225, 29, 72, 0.3); background: rgba(225, 29, 72, 0.06); }
 .lock-row .btn { margin-left: auto; }
 .table-wrap.tall-ish { max-height: 520px; }
+
+/* 사용자 추가: 등록 시 권한·AI 설정 */
+.add-user-form { display: flex; flex-direction: column; gap: 12px; }
+.add-user-form .dir-row.picked { border: 1px solid var(--border, rgba(148,163,184,.3)); border-radius: 10px; padding: 10px 12px; }
+.add-user-form .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
+.add-user-form .form-row > span:first-child { font-weight: 600; font-size: 13px; }
+.add-user-form .form-row .limit-input { max-width: 160px; }

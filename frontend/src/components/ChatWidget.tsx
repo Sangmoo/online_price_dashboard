@@ -55,7 +55,12 @@ const INVT_SUGGESTIONS = [
   '권역별 실사계획 건수와 업체 예상 비용 합계를 알려줘',
   '실사예정월별 계획 건수와 예상 비용을 정리해줘',
 ]
-const RAW_KEYS = new Set(['ONLINE_ID', 'DT', 'INS_DAY', 'PLAN_ID'])
+const SALE_SUGGESTIONS = [
+  '지난달 매장별 실판금액 상위 10개 매장을 알려줘',
+  '최근 12개월 월별 수량과 실판금액 추이를 보여줘',
+  '지난달 시즌별 판매 수량과 실판금액을 정리해줘',
+]
+const RAW_KEYS = new Set(['ONLINE_ID', 'DT', 'INS_DAY', 'PLAN_ID', 'MAKE_YYMM', 'PLAN_YY'])
 
 export default function ChatWidget({ user, context }: { user: User; context: Record<string, string> }) {
   const [open, setOpen] = useState(false)
@@ -102,7 +107,10 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
   const suggestions = useMemo(() => {
     const price = user.pages.includes('dashboard') || user.pages.includes('detail') ? PRICE_SUGGESTIONS : []
     const invt = user.pages.includes('invt_plan') ? INVT_SUGGESTIONS : []
-    return context.view === 'invt_plan' ? [...invt, ...price].slice(0, 4) : [...price, ...invt].slice(0, 4)
+    const sale = user.pages.includes('sale_monthly') ? SALE_SUGGESTIONS : []
+    if (context.view === 'invt_plan') return [...invt, ...sale, ...price].slice(0, 4)
+    if (context.view === 'sale_monthly') return [...sale, ...invt, ...price].slice(0, 4)
+    return [...price, ...sale, ...invt].slice(0, 4)
   }, [user.pages, context.view])
 
   const updateLast = (fn: (parts: Part[]) => Part[], streaming = true) =>

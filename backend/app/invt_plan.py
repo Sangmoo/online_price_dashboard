@@ -321,16 +321,44 @@ def shop_detail(shop_id: str) -> dict:
     if err:
         errors["stock"] = err
 
-    last_dt, err = _safe(lambda: db.query(
-        """SELECT MAX(INV.INVT_DT)
-             FROM T_SHOP_INVT_STLM_TOT TOT, T_SHOP_INVT INV
-            WHERE INV.SHOP_ID = TOT.SHOP_ID
-              AND INV.INVT_DT = TOT.INVT_DT
-              AND INV.INVT_COST_CLSBY = 'C70210'
-              AND TOT.SHOP_ID = :id""", p)[1][0][0])
+    # 최종실사일 · 전실사유형 · 전실사결과: 최종 실사일을 먼저 구한 뒤(WITH), 그 실사 1건 기준으로 계산
+    # (원 쿼리처럼 전체 기간을 한 번에 집계하면 과거 실사 결과가 모두 합산되고 유형도 최신 건이 아님)
+    last, err = _safe(lambda: db.query_dicts(
+        """
+        WITH LAST_INVT AS (
+            SELECT MAX(INV.INVT_DT) AS INVT_DT
+              FROM T_SHOP_INVT_STLM_TOT TOT
+                 , T_SHOP_INVT          INV
+                 , T_SHOP_INVT_PRE_INFO PRE
+             WHERE INV.SHOP_ID = TOT.SHOP_ID
+               AND INV.SHOP_ID = PRE.SHOP_ID
+               AND INV.INVT_DT = TOT.INVT_DT
+               AND INV.INVT_DT = PRE.INVT_EXEC_DT
+               AND INV.INVT_COST_CLSBY = 'C70210'
+               AND TOT.SHOP_ID = :id
+        )
+        SELECT L.INVT_DT AS LAST_INVT_DT
+             , (SELECT F_CD_NM(MAX(PRE.INVT_EXEC_CLSBY))
+                  FROM T_SHOP_INVT_PRE_INFO PRE
+                 WHERE PRE.SHOP_ID = :id
+                   AND PRE.INVT_EXEC_DT = L.INVT_DT) AS PREV_INVT_TYPE
+             , (SELECT SUM(TOT.INVT_DFNT_QTY * TOT.SUPP_RPICE) - SUM(TOT.SYSTEM_STOCK_QTY * TOT.SUPP_RPICE)
+                  FROM T_SHOP_INVT_STLM_TOT TOT
+                 WHERE TOT.SHOP_ID = :id
+                   AND TOT.INVT_DT = L.INVT_DT) AS PREV_INVT_RESULT
+          FROM LAST_INVT L
+        """, p))
     if err:
         errors["lastInvt"] = err
-    last_dt_s = _yyyymmdd(last_dt)
+    li = last[0] if last else {}
+    last_dt_s = _yyyymmdd(li.get("LAST_INVT_DT"))
+    prev_type = li.get("PREV_INVT_TYPE") if last_dt_s else None
+    prev_result = _num(li.get("PREV_INVT_RESULT")) if last_dt_s else None
+    notes: list[str] = []
+    if prev_type and prev_type not in INVT_TYPES:
+        # 테이블 CHECK 제약(교체/정기/오픈)에 없는 유형(예: 폐점)은 저장할 수 없어 비워 두고 안내
+        notes.append(f"전실사유형 '{prev_type}'은(는) 선택 목록({'/'.join(INVT_TYPES)})에 없어 비워 두었습니다.")
+        prev_type = None
 
     rank, err = _safe(lambda: invt_rank(shop_id, last_dt_s))
     if err:
@@ -367,30 +395,51 @@ def shop_detail(shop_id: str) -> dict:
         "stockQty": _num(stock),
         "stockBaseDt": date.today().strftime("%Y%m%d") if stock is not None else None,
         "lastInvtDt": last_dt_s,
+        "prevInvtType": prev_type,
+        "prevInvtResult": prev_result,
         "prevSaleAmt": _num(s.get("PREV_SALE")),
         "currSaleAmt": _num(s.get("CURR_SALE")),
     }
-    auto_keys = ["brdNm", "shopFormNm", "shopNm", "prevSaleAmt", "currSaleAmt", "lastInvtDt", "stockQty",
-                 "shopRankNm", "shopTel"]
+    auto_keys = ["brdNm", "shopFormNm", "shopNm", "prevSaleAmt", "currSaleAmt", "lastInvtDt", "prevInvtType",
+                 "prevInvtResult", "stockQty", "shopRankNm", "shopTel"]
     missing = [k for k in auto_keys if values.get(k) in (None, "")]
     return {
         "values": values,
         "missing": missing,
         "missingLabels": [LABELS[k] for k in missing],
+        "notes": notes,
         "errors": errors,
         "existingPlans": active_count_for_shop(shop_id),
     }
 
 
 def shop_managers(shop_id: str) -> list[dict]:
+    """매니저 팝업: 최신 등록(SMASR_ID) 순. 종료일 99991231 = 현재 근무."""
     rows = db.query_dicts(
-        "SELECT SHOP_ID, SMASR_NM, HP_NO1, HP_NO2, HP_NO3 FROM T_SHOP_SMAS WHERE SHOP_ID = :id",
+        """
+        SELECT SHOP_ID
+             , SMASR_NM
+             , HP_NO1 || '-' || HP_NO2 || '-' || HP_NO3 AS SMASR_HP
+             , OPEN_DT
+             , CLOSE_DT
+          FROM T_SHOP_SMAS
+         WHERE SHOP_ID = :id
+         ORDER BY SMASR_ID DESC
+        """,
         {"id": shop_id},
     )
     out = []
     for r in rows:
-        hp = "-".join(x for x in (str(r.get(k) or "").strip() for k in ("HP_NO1", "HP_NO2", "HP_NO3")) if x)
-        out.append({"shopId": r["SHOP_ID"], "smasrNm": r["SMASR_NM"], "smasrHp": hp or None})
+        hp = (r.get("SMASR_HP") or "").strip("- ")  # 번호가 비어 있으면 '--' 가 되므로 정리
+        close_dt = r.get("CLOSE_DT")
+        out.append({
+            "shopId": r["SHOP_ID"],
+            "smasrNm": r["SMASR_NM"],
+            "smasrHp": hp or None,
+            "openDt": r.get("OPEN_DT"),
+            "closeDt": close_dt,
+            "current": close_dt is None or close_dt >= "99991231" or close_dt >= date.today().strftime("%Y%m%d"),
+        })
     return out
 
 
