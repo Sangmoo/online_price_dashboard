@@ -138,7 +138,12 @@ def load_day(dt: str) -> pd.DataFrame:
     return df
 
 
-def _filter_sort(df: pd.DataFrame, q: str | None, mall: str | None, sort: str | None, order: str) -> pd.DataFrame:
+def _filter_sort(df: pd.DataFrame, q: str | None, mall: str | None, sort: str | None, order: str,
+                 min_rate: float | None = None, max_rate: float | None = None) -> pd.DataFrame:
+    if min_rate is not None:
+        df = df[df["DC_RATE"] >= min_rate]
+    if max_rate is not None:
+        df = df[df["DC_RATE"] <= max_rate]
     if mall:
         df = df[df["MALL_NM"] == mall]
     if q:
@@ -152,9 +157,10 @@ def _filter_sort(df: pd.DataFrame, q: str | None, mall: str | None, sort: str | 
     return df
 
 
-def day_rows(dt: str, page: int, size: int, sort: str | None, order: str, q: str | None, mall: str | None) -> dict:
+def day_rows(dt: str, page: int, size: int, sort: str | None, order: str, q: str | None, mall: str | None,
+             min_rate: float | None = None, max_rate: float | None = None) -> dict:
     base = load_day(dt)
-    df = _filter_sort(base, q, mall, sort, order)
+    df = _filter_sort(base, q, mall, sort, order, min_rate, max_rate)
     size = max(10, min(size, 500))
     total = len(df)
     pages = max(1, -(-total // size))
@@ -225,10 +231,12 @@ def _col_letter(idx: int) -> str:
     return s
 
 
-def export_day(dt: str, sort: str | None, order: str, q: str | None, mall: str | None) -> bytes:
-    df = _filter_sort(load_day(dt), q, mall, sort, order)
+def export_day(dt: str, sort: str | None, order: str, q: str | None, mall: str | None,
+               min_rate: float | None = None, max_rate: float | None = None, cols: list[str] | None = None) -> bytes:
+    df = _filter_sort(load_day(dt), q, mall, sort, order, min_rate, max_rate)
     df = df.astype(object).where(df.notna(), None)
-    return write_xlsx(f"온라인가격_{dt}", COLUMNS, df.to_dict("records"))
+    columns = [c for c in COLUMNS if not cols or c[0] in cols] or COLUMNS
+    return write_xlsx(f"온라인가격_{dt}", columns, df.to_dict("records"))
 
 
 # ----------------------------------------------------------------------------

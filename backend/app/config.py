@@ -22,3 +22,11 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5
 
 # 대시보드 최대 조회 기간(일)
 MAX_RANGE_DAYS = 31
+
+# 최고 관리자 ID (항상 ADMIN, 권한 변경/비활성화 불가)
+SUPER_ADMIN_ID = os.getenv("SUPER_ADMIN_ID", "250016")
+# HTTPS 로 서비스할 때만 true (쿠키 Secure 속성)
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+# 원본/업무 테이블 소유 스키마 (SS10DEV 에 시노님이 없는 객체는 이 스키마로 접근)
+DB_OWNER_SCHEMA = os.getenv("DB_OWNER_SCHEMA", "SS10")

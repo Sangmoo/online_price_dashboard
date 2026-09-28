@@ -1,73 +1,127 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Check,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Columns3,
   Download,
   ExternalLink,
+  Link2,
   Loader2,
+  Percent,
   Search,
   X,
 } from 'lucide-react'
-import { api, downloadFile, type DateInfo, type RowsResponse } from '../api'
+import { api, downloadFile, type Column, type DateInfo, type RowsResponse } from '../api'
 import { dtLabel, fmtNum, fmtPct, insDay } from '../format'
 import { RateBadge } from './DashboardView'
 
+export type DetailState = {
+  dt: string
+  q: string
+  mall: string
+  sort?: string
+  order: 'asc' | 'desc'
+  minRate?: number
+  maxRate?: number
+}
+
 type Props = {
+  userId: string
   dates: DateInfo[]
-  initialDt: string
-  initialQuery?: string
-  onDtChange: (dt: string) => void
+  initial: DetailState
+  onStateChange: (s: DetailState) => void
 }
 
 type Sort = { key: string; order: 'asc' | 'desc' } | null
 
 const NUMERIC = new Set(['ONLINE_ID', 'PRICE', 'DC_PRICE', 'DC_RATE'])
+const PREF_KEY = 'detail.columns'
 
-export default function DetailView({ dates, initialDt, initialQuery, onDtChange }: Props) {
-  const [dt, setDt] = useState(initialDt)
-  const [qInput, setQInput] = useState(initialQuery ?? '')
-  const [q, setQ] = useState(initialQuery ?? '')
-  const [mall, setMall] = useState('')
-  const [sort, setSort] = useState<Sort>(null)
+const toNum = (s: string) => (s.trim() === '' || isNaN(Number(s)) ? undefined : Number(s))
+
+export default function DetailView({ userId, dates, initial, onStateChange }: Props) {
+  const [dt, setDt] = useState(initial.dt)
+  const [qInput, setQInput] = useState(initial.q)
+  const [q, setQ] = useState(initial.q)
+  const [mall, setMall] = useState(initial.mall)
+  const [sort, setSort] = useState<Sort>(initial.sort ? { key: initial.sort, order: initial.order } : null)
+  const [minInput, setMinInput] = useState(initial.minRate?.toString() ?? '')
+  const [maxInput, setMaxInput] = useState(initial.maxRate?.toString() ?? '')
+  const [rate, setRate] = useState<{ min?: number; max?: number }>({ min: initial.minRate, max: initial.maxRate })
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(100)
   const [data, setData] = useState<RowsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [hidden, setHidden] = useState<string[]>([])
+  const [colMenu, setColMenu] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const colMenuRef = useRef<HTMLDivElement>(null)
 
-  // 검색어 디바운스
+  // 사용자별 컬럼 표시 설정 불러오기
+  useEffect(() => {
+    api
+      .getPref<string[]>(PREF_KEY)
+      .then(({ value }) => Array.isArray(value) && setHidden(value))
+      .catch(() => undefined)
+  }, [userId])
+
+  const saveHidden = (next: string[]) => {
+    setHidden(next)
+    api.setPref(PREF_KEY, next).catch(() => undefined)
+  }
+
+  useEffect(() => {
+    if (!colMenu) return
+    const close = (e: MouseEvent) => {
+      if (colMenuRef.current && !colMenuRef.current.contains(e.target as Node)) setColMenu(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [colMenu])
+
+  // 검색어 · 할인율 입력 디바운스
   useEffect(() => {
     const t = setTimeout(() => {
       setQ(qInput.trim())
+      setRate({ min: toNum(minInput), max: toNum(maxInput) })
       setPage(1)
-    }, 350)
+    }, 400)
     return () => clearTimeout(t)
-  }, [qInput])
+  }, [qInput, minInput, maxInput])
+
+  // 상위(App)에 현재 조건 전달 → URL 공유
+  useEffect(() => {
+    onStateChange({ dt, q, mall, sort: sort?.key, order: sort?.order ?? 'asc', minRate: rate.min, maxRate: rate.max })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dt, q, mall, sort, rate])
 
   useEffect(() => {
     const ctl = new AbortController()
     setLoading(true)
     setError(null)
     api
-      .rows({ dt, page, size, sort: sort?.key, order: sort?.order ?? 'asc', q, mall }, ctl.signal)
+      .rows({ dt, page, size, sort: sort?.key, order: sort?.order ?? 'asc', q, mall, minRate: rate.min, maxRate: rate.max }, ctl.signal)
       .then(setData)
       .catch((e) => e.name !== 'AbortError' && setError(e.message))
       .finally(() => !ctl.signal.aborted && setLoading(false))
     return () => ctl.abort()
-  }, [dt, page, size, sort, q, mall])
+  }, [dt, page, size, sort, q, mall, rate])
+
+  const visibleCols: Column[] = useMemo(() => (data?.columns ?? []).filter((c) => !hidden.includes(c.key)), [data, hidden])
 
   const dtIndex = dates.findIndex((d) => d.dt === dt)
   const changeDt = (next: string) => {
     setDt(next)
     setPage(1)
     setMall('')
-    onDtChange(next)
   }
 
   const toggleSort = (key: string) => {
@@ -79,7 +133,16 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
     setExporting(true)
     try {
       await downloadFile(
-        api.rowsExportUrl({ dt, sort: sort?.key, order: sort?.order ?? 'asc', q, mall }),
+        api.rowsExportUrl({
+          dt,
+          sort: sort?.key,
+          order: sort?.order ?? 'asc',
+          q,
+          mall,
+          minRate: rate.min,
+          maxRate: rate.max,
+          cols: hidden.length ? visibleCols.map((c) => c.key).join(',') : undefined,
+        }),
         undefined,
         `온라인가격수집_${dt}.xlsx`,
       )
@@ -90,6 +153,24 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
     }
   }
 
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+    } catch {
+      window.prompt('아래 링크를 복사하세요', window.location.href)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+
+  const resetFilters = () => {
+    setQInput('')
+    setMinInput('')
+    setMaxInput('')
+    setMall('')
+    setSort(null)
+  }
+
   const pageNumbers = useMemo(() => {
     if (!data) return []
     const total = data.pages
@@ -97,7 +178,7 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
     return Array.from({ length: Math.min(5, total) }, (_, i) => from + i)
   }, [data, page])
 
-  const filtered = !!(q || mall)
+  const filtered = !!(q || mall || rate.min !== undefined || rate.max !== undefined)
 
   return (
     <div className="stack">
@@ -137,10 +218,50 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
           ))}
         </select>
 
-        <button className="btn success" onClick={exportXlsx} disabled={exporting || !data || data.total === 0}>
-          {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
-          엑셀 다운로드{data ? ` (${fmtNum(data.total)}건)` : ''}
-        </button>
+        <div className="rate-range" title="할인율(%) 범위">
+          <Percent size={14} />
+          <input inputMode="decimal" placeholder="최소" value={minInput} onChange={(e) => setMinInput(e.target.value)} />
+          <span>~</span>
+          <input inputMode="decimal" placeholder="최대" value={maxInput} onChange={(e) => setMaxInput(e.target.value)} />
+        </div>
+
+        <div className="toolbar-actions">
+          <div className="col-menu-wrap" ref={colMenuRef}>
+            <button className={`btn ghost ${hidden.length ? 'on' : ''}`} onClick={() => setColMenu((o) => !o)}>
+              <Columns3 size={15} /> 컬럼{hidden.length ? ` (${(data?.columns.length ?? 12) - hidden.length})` : ''}
+            </button>
+            {colMenu && data && (
+              <div className="col-menu">
+                <div className="col-menu-head">
+                  표시할 컬럼
+                  <button className="btn-link" onClick={() => saveHidden([])}>전체 표시</button>
+                </div>
+                {data.columns.map((c) => {
+                  const on = !hidden.includes(c.key)
+                  return (
+                    <button
+                      key={c.key}
+                      className={`col-opt ${on ? 'on' : ''}`}
+                      disabled={on && visibleCols.length <= 1}
+                      onClick={() => saveHidden(on ? [...hidden, c.key] : hidden.filter((k) => k !== c.key))}
+                    >
+                      <span className="check">{on && <Check size={12} />}</span>
+                      {c.label}
+                    </button>
+                  )
+                })}
+                <div className="col-menu-foot">설정은 내 계정에 저장되며 엑셀에도 적용됩니다.</div>
+              </div>
+            )}
+          </div>
+          <button className="btn ghost" onClick={copyLink} title="현재 날짜·검색·정렬 조건이 담긴 링크 복사">
+            {copied ? <Check size={15} /> : <Link2 size={15} />} {copied ? '복사됨' : '링크 복사'}
+          </button>
+          <button className="btn success" onClick={exportXlsx} disabled={exporting || !data || data.total === 0}>
+            {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+            엑셀 다운로드{data ? ` (${fmtNum(data.total)}건)` : ''}
+          </button>
+        </div>
       </section>
 
       <section className="summary-pills">
@@ -152,6 +273,11 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
         {sort && (
           <button className="pill sort-pill" onClick={() => setSort(null)} title="정렬 해제">
             정렬: {data?.columns.find((c) => c.key === sort.key)?.label} {sort.order === 'asc' ? '오름차순' : '내림차순'} <X size={12} />
+          </button>
+        )}
+        {(filtered || sort) && (
+          <button className="pill sort-pill" onClick={resetFilters}>
+            조건 초기화 <X size={12} />
           </button>
         )}
       </section>
@@ -168,7 +294,7 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
           <table className="table data">
             <thead>
               <tr>
-                {data?.columns.map((c) => {
+                {visibleCols.map((c) => {
                   const active = sort?.key === c.key
                   return (
                     <th key={c.key} className={`sortable ${NUMERIC.has(c.key) ? 'num' : ''} ${active ? 'active' : ''} col-${c.key}`} onClick={() => toggleSort(c.key)} title="클릭하여 정렬">
@@ -184,7 +310,7 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
             <tbody>
               {data?.rows.map((r, i) => (
                 <tr key={`${data.page}-${i}`}>
-                  {data.columns.map((c) => (
+                  {visibleCols.map((c) => (
                     <td key={c.key} className={`${NUMERIC.has(c.key) ? 'num' : ''} col-${c.key}`}>
                       <CellValue k={c.key} v={r[c.key]} />
                     </td>
@@ -193,7 +319,7 @@ export default function DetailView({ dates, initialDt, initialQuery, onDtChange 
               ))}
               {data && data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={data.columns.length} className="empty">
+                  <td colSpan={visibleCols.length} className="empty">
                     조건에 맞는 데이터가 없습니다.
                   </td>
                 </tr>

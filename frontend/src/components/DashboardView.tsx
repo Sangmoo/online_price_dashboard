@@ -23,9 +23,10 @@ type Props = {
   range: { start: string; end: string }
   onRangeChange: (r: { start: string; end: string }) => void
   onOpenDetail: (dt: string, q?: string) => void
+  canOpenDetail?: boolean
 }
 
-export default function DashboardView({ dates, range, onRangeChange, onOpenDetail }: Props) {
+export default function DashboardView({ dates, range, onRangeChange, onOpenDetail, canOpenDetail = true }: Props) {
   const [start, setStart] = useState(range.start)
   const [end, setEnd] = useState(range.end)
   const [data, setData] = useState<Dashboard | null>(null)
@@ -126,7 +127,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
       </section>
 
       <section className="grid-2-1">
-        <Panel title="일자별 수집 추이" hint="막대: 수집 건수 · 선: 평균 할인율 — 막대를 누르면 해당 일자 상세로 이동" loading={loading && !data}>
+        <Panel title="일자별 수집 추이" hint={`막대: 수집 건수 · 선: 평균 할인율${canOpenDetail ? ' — 막대를 누르면 해당 일자 상세로 이동' : ''}`} loading={loading && !data}>
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid stroke={C.grid} vertical={false} />
@@ -134,7 +135,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
               <YAxis yAxisId="l" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={compact} width={48} />
               <YAxis yAxisId="r" orientation="right" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} width={44} domain={['auto', 'auto']} />
               <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(99,102,241,.08)' }} />
-              <Bar yAxisId="l" dataKey="ROW_CNT" name="수집 건수" fill={C.primary} radius={[6, 6, 0, 0]} maxBarSize={34} cursor="pointer" onClick={(d) => onOpenDetail((d as unknown as { DT: string }).DT)} />
+              <Bar yAxisId="l" dataKey="ROW_CNT" name="수집 건수" fill={C.primary} radius={[6, 6, 0, 0]} maxBarSize={34} cursor={canOpenDetail ? 'pointer' : undefined} onClick={(d) => onOpenDetail((d as unknown as { DT: string }).DT)} />
               <Line yAxisId="r" dataKey="AVG_DC_RATE" name="평균 할인율(%)" stroke={C.amber} strokeWidth={2.5} dot={{ r: 3 }} type="monotone" />
             </ComposedChart>
           </ResponsiveContainer>
@@ -181,7 +182,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
         </Panel>
       </section>
 
-      <Panel title="할인율 상위 상품 Top 20" hint="행을 누르면 최저가 수집일의 상세 내역으로 이동" loading={loading && !data}>
+      <Panel title="할인율 상위 상품 Top 20" hint={canOpenDetail ? '행을 누르면 최저가 수집일의 상세 내역으로 이동' : undefined} loading={loading && !data}>
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -199,7 +200,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
             </thead>
             <tbody>
               {(data?.topProducts ?? []).map((p, i) => (
-                <tr key={p.PRDT_CD} className="clickable" onClick={() => onOpenDetail(p.MIN_DT, p.PRDT_CD)}>
+                <tr key={p.PRDT_CD} className={canOpenDetail ? 'clickable' : ''} onClick={() => onOpenDetail(p.MIN_DT, p.PRDT_CD)}>
                   <td className="muted">{i + 1}</td>
                   <td className="mono">{p.PRDT_CD}</td>
                   <td className="ellipsis" title={p.TITLE}>{p.TITLE}</td>

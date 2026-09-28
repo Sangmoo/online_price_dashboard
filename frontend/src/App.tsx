@@ -1,91 +1,287 @@
-import { useEffect, useState } from 'react'
-import { Home, Moon, PanelLeftClose, PanelLeftOpen, Sun, Table2, TrendingDown } from 'lucide-react'
-import { api, type DateInfo } from './api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  ClipboardList,
+  Clock,
+  Home,
+  Loader2,
+  LogOut,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
+  Sun,
+  Table2,
+  TrendingDown,
+} from 'lucide-react'
+import { api, SESSION_EXPIRED_EVENT, SESSION_EXTENDED_EVENT, type DateInfo, type PageKey, type User } from './api'
 import { addDays } from './format'
 import DashboardView from './components/DashboardView'
-import DetailView from './components/DetailView'
+import DetailView, { type DetailState } from './components/DetailView'
 import ChatWidget from './components/ChatWidget'
+import LoginView from './components/LoginView'
+import AdminView from './components/AdminView'
+import InvtPlanView from './components/InvtPlanView'
 
-type View = 'dashboard' | 'detail'
 type Theme = 'light' | 'dark'
 
-function initialTheme(): Theme {
+const TOUCH_INTERVAL_MS = 5 * 60 * 1000 // 화면 조작 시 세션 연장 호출 최소 간격
+const WARN_BEFORE_SEC = 5 * 60 // 만료 5분 전 경고
+
+function readStorage(key: string) {
   try {
-    const saved = localStorage.getItem('theme')
-    if (saved === 'light' || saved === 'dark') return saved
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+function writeStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
   } catch {
     /* storage 사용 불가 */
   }
+}
+
+function initialTheme(): Theme {
+  const saved = readStorage('theme')
+  if (saved === 'light' || saved === 'dark') return saved
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 function initialCollapsed(): boolean {
   if (window.innerWidth < 800) return true
-  try {
-    return localStorage.getItem('sidebar') === 'collapsed'
-  } catch {
-    return false
+  return readStorage('sidebar') === 'collapsed'
+}
+
+type MenuGroup = 'view' | 'data' | 'admin'
+const MENU: { key: PageKey; label: string; desc: string; icon: typeof Home; group: MenuGroup }[] = [
+  { key: 'dashboard', label: '대시보드', desc: '기간별 수집 현황', icon: Home, group: 'view' },
+  { key: 'detail', label: '일자별 상세', desc: '일자별 원본 · 엑셀', icon: Table2, group: 'view' },
+  { key: 'invt_plan', label: '매장 재고 실사계획', desc: '실사 일정 · 예상 비용', icon: ClipboardList, group: 'data' },
+  { key: 'admin', label: '관리자', desc: '사용자 · 권한 · AI 설정', icon: ShieldCheck, group: 'admin' },
+]
+const GROUP_LABELS: Record<MenuGroup, string> = { view: '온라인 가격', data: '데이터 관리', admin: '시스템' }
+
+// ----------------------------------------------------------------------------
+// URL 상태 (링크 공유)
+// ----------------------------------------------------------------------------
+type UrlState = { view?: PageKey; start?: string; end?: string; detail: Partial<DetailState> }
+
+function readUrl(): UrlState {
+  const p = new URLSearchParams(window.location.search)
+  const num = (k: string) => {
+    const v = p.get(k)
+    return v !== null && v !== '' && !isNaN(Number(v)) ? Number(v) : undefined
+  }
+  const view = p.get('view') as PageKey | null
+  const order = p.get('order')
+  return {
+    view: view && MENU.some((m) => m.key === view) ? view : undefined,
+    start: p.get('start') || undefined,
+    end: p.get('end') || undefined,
+    detail: {
+      dt: p.get('dt') || undefined,
+      q: p.get('q') || undefined,
+      mall: p.get('mall') || undefined,
+      sort: p.get('sort') || undefined,
+      order: order === 'desc' || order === 'asc' ? order : undefined,
+      minRate: num('minRate'),
+      maxRate: num('maxRate'),
+    },
   }
 }
 
-const MENU: { key: View; label: string; desc: string; icon: typeof Home }[] = [
-  { key: 'dashboard', label: '대시보드', desc: '기간별 수집 현황', icon: Home },
-  { key: 'detail', label: '일자별 상세', desc: '일자별 원본 · 엑셀', icon: Table2 },
-]
+function writeUrl(params: Record<string, string | number | undefined | null>) {
+  const s = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') s.set(k, String(v))
+  const next = `${window.location.pathname}${s.toString() ? `?${s}` : ''}`
+  if (next !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, '', next)
+}
+
+const fmtRemain = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
 
 export default function App() {
-  const [view, setView] = useState<View>('dashboard')
   const [theme, setTheme] = useState<Theme>(initialTheme)
+  const [user, setUser] = useState<User | null>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [loginNotice, setLoginNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    writeStorage('theme', theme)
+  }, [theme])
+
+  // 최초 로그인 상태 확인
+  useEffect(() => {
+    api
+      .me()
+      .then(({ user }) => setUser(user))
+      .catch(() => setUser(null))
+      .finally(() => setAuthChecked(true))
+  }, [])
+
+  // 어느 API 에서든 401 → 로그인 화면
+  useEffect(() => {
+    const onExpired = (e: Event) => {
+      setLoginNotice((e as CustomEvent<string>).detail || '로그인이 필요합니다.')
+      setUser(null)
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
+  }, [])
+
+  const handleLogout = useCallback((notice?: string) => {
+    setLoginNotice(notice ?? null)
+    setUser(null)
+  }, [])
+
+  if (!authChecked) {
+    return (
+      <div className="boot">
+        <Loader2 className="spin" size={28} />
+      </div>
+    )
+  }
+  if (!user) {
+    return (
+      <LoginView
+        notice={loginNotice === '로그인이 필요합니다.' ? null : loginNotice}
+        onLogin={(u) => {
+          setLoginNotice(null)
+          setUser(u)
+        }}
+      />
+    )
+  }
+  return (
+    <Shell
+      key={user.id}
+      user={user}
+      theme={theme}
+      onTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      onLogout={handleLogout}
+    />
+  )
+}
+
+// ----------------------------------------------------------------------------
+// 로그인 후 화면
+// ----------------------------------------------------------------------------
+type ShellProps = { user: User; theme: Theme; onTheme: () => void; onLogout: (notice?: string) => void }
+
+function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
+  const [initialUrl] = useState(readUrl)
+  const allowed = MENU.filter((m) => user.pages.includes(m.key))
+  const [view, setView] = useState<PageKey | null>(() =>
+    initialUrl.view && user.pages.includes(initialUrl.view) ? initialUrl.view : (allowed[0]?.key ?? null),
+  )
   const [collapsed, setCollapsed] = useState(initialCollapsed)
   const [dates, setDates] = useState<DateInfo[]>([])
   const [datesError, setDatesError] = useState<string | null>(null)
   const [range, setRange] = useState<{ start: string; end: string } | null>(null)
-  const [detail, setDetail] = useState<{ dt: string; q?: string; nonce: number } | null>(null)
+  const [detail, setDetail] = useState<{ state: DetailState; nonce: number } | null>(null)
+  const [invtCtx, setInvtCtx] = useState<Record<string, string>>({})
+  const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
+  const lastTouch = useRef(0)
+
+  useEffect(() => writeStorage('sidebar', collapsed ? 'collapsed' : 'expanded'), [collapsed])
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    try {
-      localStorage.setItem('theme', theme)
-    } catch {
-      /* ignore */
-    }
-  }, [theme])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('sidebar', collapsed ? 'collapsed' : 'expanded')
-    } catch {
-      /* ignore */
-    }
-  }, [collapsed])
-
-  useEffect(() => {
+    lastTouch.current = Date.now()
     api
       .dates()
       .then(({ dates }) => {
         setDates(dates)
-        if (dates.length) {
-          const latest = dates[0].dt
-          setRange({ start: addDays(latest, -6), end: latest })
-          setDetail({ dt: latest, nonce: 0 })
-        }
+        if (!dates.length) return
+        const latest = dates[0].dt
+        setRange({ start: initialUrl.start ?? addDays(latest, -6), end: initialUrl.end ?? latest })
+        const d = initialUrl.detail
+        setDetail({
+          state: {
+            dt: d.dt && dates.some((x) => x.dt === d.dt) ? d.dt : latest,
+            q: d.q ?? '',
+            mall: d.mall ?? '',
+            sort: d.sort,
+            order: d.order ?? 'asc',
+            minRate: d.minRate,
+            maxRate: d.maxRate,
+          },
+          nonce: 0,
+        })
       })
       .catch((e) => setDatesError(e.message))
+  }, [initialUrl])
+
+  // ---- 세션 타이머 (서비스 이용 시 1시간 연장) ----
+  useEffect(() => {
+    const onExtended = (e: Event) => {
+      setExpiresAt((e as CustomEvent<number>).detail)
+      lastTouch.current = Date.now()
+    }
+    window.addEventListener(SESSION_EXTENDED_EVENT, onExtended)
+    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000)
+    return () => {
+      window.removeEventListener(SESSION_EXTENDED_EVENT, onExtended)
+      clearInterval(t)
+    }
   }, [])
 
+  const touch = useCallback(() => {
+    lastTouch.current = Date.now()
+    api.touch().catch(() => undefined)
+  }, [])
+
+  // 클릭·키 입력 등 화면 조작도 서비스 이용으로 보고 세션 연장 (최대 5분에 1회 호출)
+  useEffect(() => {
+    const onActivity = () => {
+      if (Date.now() - lastTouch.current > TOUCH_INTERVAL_MS) touch()
+    }
+    window.addEventListener('pointerdown', onActivity)
+    window.addEventListener('keydown', onActivity)
+    return () => {
+      window.removeEventListener('pointerdown', onActivity)
+      window.removeEventListener('keydown', onActivity)
+    }
+  }, [touch])
+
+  const remain = Math.max(0, expiresAt - nowSec)
+  useEffect(() => {
+    if (remain <= 0) {
+      api.logout().catch(() => undefined)
+      onLogout('1시간 동안 사용하지 않아 로그아웃되었습니다.')
+    }
+  }, [remain, onLogout])
+
+  // ---- URL 동기화 (현재 화면/조건을 링크로 공유) ----
+  useEffect(() => {
+    if (view === 'dashboard' && range) writeUrl({ view, start: range.start, end: range.end })
+    else if (view === 'detail' && detail) {
+      const s = detail.state
+      writeUrl({ view, dt: s.dt, q: s.q, mall: s.mall, sort: s.sort, order: s.sort ? s.order : undefined, minRate: s.minRate, maxRate: s.maxRate })
+    } else if (view) writeUrl({ view })
+  }, [view, range, detail])
+
   const openDetail = (dt: string, q?: string) => {
-    setDetail({ dt, q, nonce: Date.now() })
+    if (!user.pages.includes('detail')) return
+    setDetail({ state: { dt, q: q ?? '', mall: '', order: 'asc' }, nonce: Date.now() })
     setView('detail')
   }
 
+  const logout = async () => {
+    await api.logout().catch(() => undefined)
+    onLogout('로그아웃되었습니다.')
+  }
+
+  const current = MENU.find((m) => m.key === view)
   const chatContext: Record<string, string> =
     view === 'dashboard' && range
       ? { view, start: range.start, end: range.end }
       : view === 'detail' && detail
-        ? { view, dt: detail.dt }
-        : { view }
-
-  const current = MENU.find((m) => m.key === view)!
+        ? { view, dt: detail.state.dt }
+        : view === 'invt_plan'
+          ? { view, ...invtCtx }
+          : { view: view ?? '' }
 
   return (
     <div className={`app ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -95,16 +291,22 @@ export default function App() {
             <TrendingDown size={18} strokeWidth={2.6} />
           </div>
           <div className="sidebar-brand-text">
-            <div className="brand-title">온라인 가격 모니터</div>
-            <div className="brand-sub">가격 수집 현황</div>
+            <div className="brand-title">ERP 영업 관리</div>
+            <div className="brand-sub">영업 데이터 · 분석 서비스</div>
           </div>
         </div>
 
         <nav className="side-nav">
-          {MENU.map(({ key, label, desc, icon: Icon }) => (
+          {allowed.map(({ key, label, desc, icon: Icon, group }, i) => (
+            <div key={key} className="side-entry">
+            {(i === 0 || allowed[i - 1].group !== group) && (
+              <div className="side-group">
+                <span className="side-group-label">{GROUP_LABELS[group]}</span>
+              </div>
+            )}
             <button
               key={key}
-              className={`side-item ${view === key ? 'active' : ''}`}
+              className={`side-item ${view === key ? 'active' : ''} ${key === 'admin' ? 'admin-item' : ''}`}
               onClick={() => setView(key)}
               title={collapsed ? label : undefined}
               aria-current={view === key ? 'page' : undefined}
@@ -118,30 +320,38 @@ export default function App() {
               </span>
               {collapsed && <span className="side-tooltip">{label}</span>}
             </button>
+            </div>
           ))}
         </nav>
 
         <div className="sidebar-foot">
-          <button
-            className="side-item small"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={collapsed ? (theme === 'dark' ? '라이트 모드' : '다크 모드') : undefined}
-          >
+          <button className="side-item small" onClick={onTheme} title={collapsed ? (theme === 'dark' ? '라이트 모드' : '다크 모드') : undefined}>
             <span className="side-icon">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</span>
             <span className="side-text">
               <span className="side-label">{theme === 'dark' ? '라이트 모드' : '다크 모드'}</span>
             </span>
           </button>
-          <button
-            className="side-item small"
-            onClick={() => setCollapsed((c) => !c)}
-            title={collapsed ? '메뉴 펼치기' : '메뉴 접기'}
-          >
+          <button className="side-item small" onClick={() => setCollapsed((c) => !c)} title={collapsed ? '메뉴 펼치기' : '메뉴 접기'}>
             <span className="side-icon">{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</span>
             <span className="side-text">
               <span className="side-label">메뉴 접기</span>
             </span>
           </button>
+
+          <div className="user-card" title={collapsed ? `${user.name} (${user.id}) · 세션 ${fmtRemain(remain)}` : undefined}>
+            <div className={`avatar ${user.role === 'ADMIN' ? 'admin' : ''}`}>{user.name.slice(0, 1)}</div>
+            <div className="side-text user-text">
+              <span className="side-label">
+                {user.name} <span className={`role-badge ${user.role === 'ADMIN' ? 'admin' : ''}`}>{user.role === 'ADMIN' ? '관리자' : '일반'}</span>
+              </span>
+              <span className={`session-left ${remain <= WARN_BEFORE_SEC ? 'warn' : ''}`}>
+                <Clock size={11} /> 세션 {fmtRemain(remain)}
+              </span>
+            </div>
+            <button className="icon-btn logout-btn" title="로그아웃" onClick={logout}>
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -152,35 +362,53 @@ export default function App() {
               {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
             <div>
-              <div className="page-title">{current.label}</div>
-              <div className="brand-sub">T_SELECT_ONLINE_MNG_R · {current.desc}</div>
+              <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
+              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
           </div>
         </header>
 
+        {remain > 0 && remain <= WARN_BEFORE_SEC && (
+          <div className="session-warn">
+            <Clock size={15} /> 사용이 없어 {fmtRemain(remain)} 후 자동 로그아웃됩니다.
+            <button className="btn-link" onClick={touch}>
+              세션 연장
+            </button>
+          </div>
+        )}
+
         <main className="container">
-          {datesError && (
-            <div className="alert error">
-              수집일 목록을 불러오지 못했습니다: {datesError}
-              <br />
-              백엔드(포트 8000)가 실행 중인지, DB 접속 정보가 올바른지 확인하세요.
-            </div>
-          )}
-          {range && (
+          {datesError && <div className="alert error">수집일 목록을 불러오지 못했습니다: {datesError}</div>}
+          {!view && <div className="empty-state">접근 가능한 페이지가 없습니다. 관리자에게 권한을 요청하세요.</div>}
+          {range && user.pages.includes('dashboard') && (
             <div hidden={view !== 'dashboard'}>
-              <DashboardView dates={dates} range={range} onRangeChange={setRange} onOpenDetail={openDetail} />
+              <DashboardView
+                dates={dates}
+                range={range}
+                onRangeChange={setRange}
+                onOpenDetail={openDetail}
+                canOpenDetail={user.pages.includes('detail')}
+              />
             </div>
           )}
-          {detail && (
+          {detail && user.pages.includes('detail') && (
             <div hidden={view !== 'detail'}>
-              <DetailView key={detail.nonce} dates={dates} initialDt={detail.dt} initialQuery={detail.q} onDtChange={(dt) => setDetail((d) => (d ? { ...d, dt } : d))} />
+              <DetailView
+                key={detail.nonce}
+                userId={user.id}
+                dates={dates}
+                initial={detail.state}
+                onStateChange={(state) => setDetail((d) => (d ? { ...d, state } : d))}
+              />
             </div>
           )}
-          {!range && !datesError && <div className="skeleton-page" />}
+          {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
+          {view === 'admin' && user.pages.includes('admin') && <AdminView me={user} />}
+          {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
         </main>
       </div>
 
-      <ChatWidget context={chatContext} />
+      {user.ai.enabled && <ChatWidget user={user} context={chatContext} />}
     </div>
   )
 }

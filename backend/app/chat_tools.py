@@ -2,6 +2,7 @@
 
 모델이 SQL 을 직접 작성하지 않도록, 화이트리스트된 컬럼/연산만 허용하는
 파라미터 기반 쿼리 빌더로 T_SELECT_ONLINE_MNG_R 만 조회한다.
+재고 실사계획 도구는 chat_tools_invt 에 있고, 사용자 메뉴 권한에 따라 제공 여부가 결정된다(tools_for/run_tool).
 """
 from __future__ import annotations
 
@@ -197,8 +198,8 @@ def _clean(rows: list[dict]) -> list[dict]:
     return [{k: (v if isinstance(v, str) or v is None else ds._num(v)) for k, v in r.items()} for r in rows]
 
 
-def run_tool(name: str, inp: Any) -> dict:
-    """도구 실행. 반환: {"result": 모델에 전달할 dict, "table": 화면 표시용 표(옵션)}"""
+def _run_price_tool(name: str, inp: Any) -> dict:
+    """온라인 가격 도구 실행. 반환: {"result": 모델에 전달할 dict, "table": 화면 표시용 표(옵션)}"""
     if not isinstance(inp, dict):
         raise ToolInputError("입력은 JSON 객체여야 합니다.")
 
@@ -268,4 +269,46 @@ def run_tool(name: str, inp: Any) -> dict:
             },
         }
 
+    raise ToolInputError(f"알 수 없는 도구: {name}")
+
+
+# ----------------------------------------------------------------------------
+# 도구 레지스트리 (메뉴 권한 연동)
+# ----------------------------------------------------------------------------
+from . import chat_tools_invt as invt  # noqa: E402
+
+PRICE_PAGES = {"dashboard", "detail"}   # 온라인 가격 데이터 메뉴
+INVT_PAGES = {"invt_plan"}              # 매장 재고 실사계획 메뉴
+TOOL_LABELS.update(invt.TOOL_LABELS)
+_PRICE_TOOL_NAMES = {t["name"] for t in TOOLS}
+_INVT_TOOL_NAMES = {t["name"] for t in invt.TOOLS}
+
+
+def data_scopes(me: dict) -> dict[str, bool]:
+    pages = set(me.get("pages") or [])
+    return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES)}
+
+
+def tools_for(me: dict) -> list[dict]:
+    """사용자가 권한을 가진 메뉴의 데이터 도구만 모델에 제공."""
+    sc = data_scopes(me)
+    return (TOOLS if sc["price"] else []) + (invt.TOOLS if sc["invt"] else [])
+
+
+def run_tool(name: str, inp: Any, me: dict) -> dict:
+    """도구 실행. 모델에 제공하지 않은 도구라도 여기서 한 번 더 권한을 확인한다."""
+    if not isinstance(inp, dict):
+        raise ToolInputError("입력은 JSON 객체여야 합니다.")
+    sc = data_scopes(me)
+    if name in _PRICE_TOOL_NAMES:
+        if not sc["price"]:
+            raise ToolInputError("이 사용자는 온라인 가격 메뉴 권한이 없어 조회할 수 없습니다.")
+        return _run_price_tool(name, inp)
+    if name in _INVT_TOOL_NAMES:
+        if not sc["invt"]:
+            raise ToolInputError("이 사용자는 매장 재고 실사계획 메뉴 권한이 없어 조회할 수 없습니다.")
+        try:
+            return invt.run(name, inp)
+        except invt.InvtToolError as ex:
+            raise ToolInputError(str(ex))
     raise ToolInputError(f"알 수 없는 도구: {name}")

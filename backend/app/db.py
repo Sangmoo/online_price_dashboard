@@ -37,6 +37,16 @@ def query(sql: str, params: dict | None = None, arraysize: int = 5000) -> tuple[
             return cols, cur.fetchall()
 
 
+def execute(sql: str, params: dict | None = None) -> int:
+    """INSERT/UPDATE 실행 후 커밋. 영향받은 행 수 반환."""
+    with get_pool().acquire() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params or {})
+            n = cur.rowcount
+        conn.commit()
+        return n
+
+
 def query_dicts(sql: str, params: dict | None = None) -> list[dict]:
     cols, rows = query(sql, params)
     return [dict(zip(cols, r)) for r in rows]

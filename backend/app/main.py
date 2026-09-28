@@ -3,29 +3,49 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, data_service as ds
-from .chat_service import sessions, stream_chat
+from . import admin, auth, chat_service, config, data_service as ds, invt_plan, store, usage
+from .auth import current_user, require_admin, require_page
 
-app = FastAPI(title="Online Price Dashboard API")
+store.init()
+
+app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-Session-Expires"],
 )
+
+
+@app.middleware("http")
+async def session_header(request: Request, call_next):
+    """인증된 요청이면 연장된 세션 만료시각을 헤더로 알려준다 (프론트 세션 타이머 동기화)."""
+    response = await call_next(request)
+    exp = getattr(request.state, "session_expires", None)
+    if exp:
+        response.headers["X-Session-Expires"] = str(exp)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_error(_: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail), "code": "ERROR"}
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail}, headers=exc.headers)
+
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _bad_request(ex: ValueError):
-    raise HTTPException(status_code=400, detail=str(ex))
+    raise HTTPException(status_code=400, detail={"message": str(ex), "code": "BAD_REQUEST"})
 
 
 def _xlsx_response(content: bytes, filename: str) -> Response:
@@ -41,13 +61,76 @@ def health():
     return {"ok": True}
 
 
+# ----------------------------------------------------------------------------
+# 인증
+# ----------------------------------------------------------------------------
+class LoginBody(BaseModel):
+    id: str
+    password: str
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+@app.post("/api/auth/login")
+def login(body: LoginBody, request: Request, response: Response):
+    token, me = auth.login(body.id, body.password, _client_ip(request), request.headers.get("user-agent"))
+    response.set_cookie(
+        auth.SESSION_COOKIE, token, httponly=True, samesite="lax", secure=config.COOKIE_SECURE, path="/",
+    )
+    return {"user": me, "sessionTtl": auth.SESSION_TTL}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    auth.logout(request.cookies.get(auth.SESSION_COOKIE))
+    response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(current_user)):
+    return {"user": user, "usage": usage.usage_summary(user), "sessionTtl": auth.SESSION_TTL}
+
+
+@app.post("/api/auth/touch")
+def touch(user: dict = Depends(current_user)):
+    """화면 조작(클릭/입력)만 있고 API 호출이 없을 때 세션을 연장하기 위한 호출."""
+    return {"sessionExpiresAt": user["sessionExpiresAt"]}
+
+
+# ----------------------------------------------------------------------------
+# 개인 환경설정
+# ----------------------------------------------------------------------------
+PREF_KEYS = {"detail.columns"}
+
+
+@app.get("/api/prefs/{key}")
+def get_pref(key: str, user: dict = Depends(current_user)):
+    if key not in PREF_KEYS:
+        raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
+    return {"value": store.get_pref(user["id"], key)}
+
+
+@app.put("/api/prefs/{key}")
+def put_pref(key: str, body: dict, user: dict = Depends(current_user)):
+    if key not in PREF_KEYS:
+        raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
+    store.set_pref(user["id"], key, body.get("value"))
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# 데이터 (페이지 권한 필요)
+# ----------------------------------------------------------------------------
 @app.get("/api/dates")
-def dates():
+def dates(_: dict = Depends(current_user)):
     return {"dates": ds.available_dates()}
 
 
 @app.get("/api/dashboard")
-def dashboard(start: str, end: str):
+def dashboard(start: str, end: str, _: dict = Depends(require_page("dashboard"))):
     try:
         return ds.dashboard(start, end)
     except ValueError as ex:
@@ -63,9 +146,12 @@ def rows(
     order: str = Query("asc", pattern="^(asc|desc)$"),
     q: str | None = None,
     mall: str | None = None,
+    minRate: float | None = None,
+    maxRate: float | None = None,
+    _: dict = Depends(require_page("detail")),
 ):
     try:
-        return ds.day_rows(dt, page, size, sort, order, q, mall)
+        return ds.day_rows(dt, page, size, sort, order, q, mall, minRate, maxRate)
     except ValueError as ex:
         _bad_request(ex)
 
@@ -77,9 +163,13 @@ def rows_export(
     order: str = Query("asc", pattern="^(asc|desc)$"),
     q: str | None = None,
     mall: str | None = None,
+    minRate: float | None = None,
+    maxRate: float | None = None,
+    cols: str | None = None,
+    _: dict = Depends(require_page("detail")),
 ):
     try:
-        content = ds.export_day(dt, sort, order, q, mall)
+        content = ds.export_day(dt, sort, order, q, mall, minRate, maxRate, cols.split(",") if cols else None)
     except ValueError as ex:
         _bad_request(ex)
     return _xlsx_response(content, f"온라인가격수집_{dt}.xlsx")
@@ -92,34 +182,209 @@ class TableExport(BaseModel):
 
 
 @app.post("/api/export/table")
-def export_table(body: TableExport):
+def export_table(body: TableExport, _: dict = Depends(current_user)):
     cols = [(c["key"], c.get("label", c["key"])) for c in body.columns if "key" in c]
     content = ds.write_xlsx("조회결과", cols, body.rows)
     safe = "".join(ch for ch in body.title if ch not in '\\/:*?"<>|').strip() or "조회결과"
     return _xlsx_response(content, f"{safe}.xlsx")
 
 
+# ----------------------------------------------------------------------------
+# AI 대화 (사용자별 기록 / 한도)
+# ----------------------------------------------------------------------------
 class ChatRequest(BaseModel):
     message: str
-    sessionId: str | None = None
+    conversationId: str | None = None
     context: dict | None = None
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="메시지가 비어 있습니다.")
+def chat(req: ChatRequest, request: Request, user: dict = Depends(current_user)):
+    msg = req.message.strip()
+    if not msg:
+        raise HTTPException(400, {"message": "메시지가 비어 있습니다.", "code": "BAD_REQUEST"})
+    if len(msg) > 2000:
+        raise HTTPException(400, {"message": "질문은 2,000자 이내로 입력하세요.", "code": "BAD_REQUEST"})
     return StreamingResponse(
-        stream_chat(req.sessionId, req.message.strip(), req.context),
+        chat_service.stream_chat(user, req.conversationId, msg, req.context),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "X-Session-Expires": str(request.state.session_expires)},
     )
 
 
-@app.delete("/api/chat/{session_id}")
-def chat_reset(session_id: str):
-    sessions.reset(session_id)
+@app.get("/api/chat/usage")
+def chat_usage(user: dict = Depends(current_user)):
+    return usage.usage_summary(user)
+
+
+@app.get("/api/chat/conversations")
+def conversations(user: dict = Depends(current_user)):
+    return {"conversations": chat_service.list_conversations(user["id"])}
+
+
+@app.get("/api/chat/conversations/{conv_id}")
+def conversation(conv_id: str, user: dict = Depends(current_user)):
+    c = chat_service.get_conversation(user["id"], conv_id)
+    if not c:
+        raise HTTPException(404, {"message": "대화를 찾을 수 없습니다.", "code": "NOT_FOUND"})
+    return c
+
+
+class RenameBody(BaseModel):
+    title: str
+
+
+@app.patch("/api/chat/conversations/{conv_id}")
+def rename_conversation(conv_id: str, body: RenameBody, user: dict = Depends(current_user)):
+    chat_service.rename_conversation(user["id"], conv_id, body.title)
     return {"ok": True}
+
+
+@app.delete("/api/chat/conversations/{conv_id}")
+def delete_conversation(conv_id: str, user: dict = Depends(current_user)):
+    chat_service.delete_conversation(user["id"], conv_id)
+    return {"ok": True}
+
+
+class FavoriteBody(BaseModel):
+    text: str
+
+
+@app.get("/api/chat/favorites")
+def favorites(user: dict = Depends(current_user)):
+    return {"favorites": store.rows("SELECT id, text, created_at AS createdAt FROM favorites WHERE usr_id=? ORDER BY id DESC",
+                                    (user["id"],))}
+
+
+@app.post("/api/chat/favorites")
+def add_favorite(body: FavoriteBody, user: dict = Depends(current_user)):
+    text = " ".join(body.text.split())[:500]
+    if not text:
+        raise HTTPException(400, {"message": "내용이 비어 있습니다.", "code": "BAD_REQUEST"})
+    store.execute("INSERT OR IGNORE INTO favorites(usr_id, text) VALUES(?,?)", (user["id"], text))
+    return favorites(user)
+
+
+@app.delete("/api/chat/favorites/{fav_id}")
+def delete_favorite(fav_id: int, user: dict = Depends(current_user)):
+    store.execute("DELETE FROM favorites WHERE id=? AND usr_id=?", (fav_id, user["id"]))
+    return favorites(user)
+
+
+# ----------------------------------------------------------------------------
+# 관리자
+# ----------------------------------------------------------------------------
+@app.get("/api/admin/users")
+def admin_users(q: str | None = None, _: dict = Depends(require_admin)):
+    return {"users": admin.list_users(q), "pages": [{"key": p, "label": auth.PAGE_LABELS[p]} for p in auth.PAGES],
+            "superAdminId": config.SUPER_ADMIN_ID}
+
+
+@app.get("/api/admin/directory")
+def admin_directory(q: str, _: dict = Depends(require_admin)):
+    return {"users": admin.directory_search(q)}
+
+
+@app.put("/api/admin/users/{usr_id}")
+def admin_save_user(usr_id: str, body: dict, me: dict = Depends(require_admin)):
+    return {"user": admin.save_user(me, usr_id, body)}
+
+
+@app.get("/api/admin/settings")
+def admin_get_settings(_: dict = Depends(require_admin)):
+    return admin.get_settings()
+
+
+@app.put("/api/admin/settings")
+def admin_put_settings(body: dict, _: dict = Depends(require_admin)):
+    return admin.save_settings(body)
+
+
+@app.get("/api/admin/usage")
+def admin_usage(days: int = 30, _: dict = Depends(require_admin)):
+    return admin.usage_report(days)
+
+
+@app.get("/api/admin/logins")
+def admin_logins(limit: int = 200, q: str | None = None, _: dict = Depends(require_admin)):
+    return {"logins": admin.login_log(limit, q), "locks": admin.locks()}
+
+
+@app.delete("/api/admin/locks/{usr_id}")
+def admin_unlock(usr_id: str, _: dict = Depends(require_admin)):
+    admin.unlock(usr_id)
+    return {"ok": True}
+
+
+@app.get("/api/admin/sessions")
+def admin_sessions(_: dict = Depends(require_admin)):
+    return {"sessions": admin.sessions()}
+
+
+@app.delete("/api/admin/sessions/{sid}")
+def admin_kill_session(sid: str, _: dict = Depends(require_admin)):
+    admin.kill_session(sid)
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# 데이터 관리 > 매장 재고 실사계획
+# ----------------------------------------------------------------------------
+invt_page = require_page("invt_plan")
+
+
+@app.get("/api/invt-plans/options")
+def invt_options(_: dict = Depends(invt_page)):
+    return invt_plan.options()
+
+
+@app.get("/api/invt-plans")
+def invt_list(_: dict = Depends(invt_page)):
+    return {"plans": invt_plan.list_plans()}
+
+
+@app.get("/api/invt-plans/export")
+def invt_export(ids: str | None = None, _: dict = Depends(invt_page)):
+    plans = invt_plan.list_plans()
+    if ids:  # 화면에서 필터·정렬된 순서 그대로 내보내기
+        order = {int(x): i for i, x in enumerate(ids.split(",")) if x.strip().isdigit()}
+        plans = sorted((p for p in plans if p["planId"] in order), key=lambda p: order[p["planId"]])
+    return _xlsx_response(invt_plan.export_xlsx(plans), "매장재고실사계획.xlsx")
+
+
+@app.get("/api/invt-plans/shops")
+def invt_shops(q: str, _: dict = Depends(invt_page)):
+    return {"shops": invt_plan.search_shops(q)}
+
+
+@app.get("/api/invt-plans/shops/{shop_id}")
+def invt_shop_detail(shop_id: str, _: dict = Depends(invt_page)):
+    return invt_plan.shop_detail(shop_id)
+
+
+@app.get("/api/invt-plans/shops/{shop_id}/managers")
+def invt_shop_managers(shop_id: str, _: dict = Depends(invt_page)):
+    return {"managers": invt_plan.shop_managers(shop_id)}
+
+
+@app.post("/api/invt-plans")
+def invt_create(body: dict, user: dict = Depends(invt_page)):
+    return {"plan": invt_plan.create_plan(user["id"], body)}
+
+
+@app.put("/api/invt-plans/{plan_id}")
+def invt_update(plan_id: int, body: dict, user: dict = Depends(invt_page)):
+    return {"plan": invt_plan.update_plan(user["id"], plan_id, body)}
+
+
+class DeleteIds(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/invt-plans/delete")
+def invt_delete(body: DeleteIds, user: dict = Depends(invt_page)):
+    return {"deleted": invt_plan.delete_plans(user["id"], body.ids)}
 
 
 # 프론트 빌드 결과(frontend/dist)가 있으면 같은 포트에서 함께 서비스 (로컬 배포용)
@@ -129,6 +394,8 @@ if DIST.exists():
 
     @app.get("/{path:path}")
     def spa(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(404, {"message": "Not Found", "code": "NOT_FOUND"})
         target = DIST / path
         if path and target.is_file() and DIST in target.resolve().parents:
             return FileResponse(target)
