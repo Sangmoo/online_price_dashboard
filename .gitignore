@@ -1,0 +1,34 @@
+# ===== 민감정보 (절대 커밋 금지) =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ===== Python =====
+backend/.venv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ===== Node / 프론트엔드 =====
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# ===== 산출물 / 로그 =====
+*.xlsx
+*.log
+logs/
+
+# ===== 로컬 도구 / OS =====
+.claude/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
