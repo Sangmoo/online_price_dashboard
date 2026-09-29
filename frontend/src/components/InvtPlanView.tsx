@@ -10,7 +10,6 @@ import {
   Loader2,
   Pencil,
   Plus,
-  RefreshCw,
   Search,
   Trash2,
   TrendingUp,
@@ -63,16 +62,37 @@ const COLS: Col[] = [
 type Sort = { key: keyof InvtPlan; order: 'asc' | 'desc' } | null
 type PlanFilter = 'all' | 'set' | 'unset'
 
+// 메뉴를 열 때 최종실사일 기본 조건: 이번 달 1일 ~ 오늘 (브라우저 로컬 날짜, YYYY-MM-DD)
+const localIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const thisMonthRange = () => {
+  const today = new Date()
+  return { from: localIso(new Date(today.getFullYear(), today.getMonth(), 1)), to: localIso(today) }
+}
+
+// 조회 조건: 입력 중인 값(draft)과 [조회]로 적용된 값(applied)을 나눈다
+type Cond = { q: string; lastFrom: string; lastTo: string; planFilter: PlanFilter; twiceOnly: boolean }
+const defaultCond = (): Cond => {
+  const r = thisMonthRange()
+  return { q: '', lastFrom: r.from, lastTo: r.to, planFilter: 'all', twiceOnly: false }
+}
+const sameCond = (a: Cond, b: Cond) =>
+  a.q.trim() === b.q.trim() && a.lastFrom === b.lastFrom && a.lastTo === b.lastTo && a.planFilter === b.planFilter && a.twiceOnly === b.twiceOnly
+
 export default function InvtPlanView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
   const [plans, setPlans] = useState<InvtPlan[]>([])
   const [options, setOptions] = useState<InvtOptions | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 입력 중인 조건 (최종실사일 기본: 이번 달 1일 ~ 오늘)
   const [q, setQ] = useState('')
-  const [lastFrom, setLastFrom] = useState('') // 최종실사일 FROM (YYYY-MM-DD)
-  const [lastTo, setLastTo] = useState('') // 최종실사일 TO
+  const [lastFrom, setLastFrom] = useState(() => thisMonthRange().from)
+  const [lastTo, setLastTo] = useState(() => thisMonthRange().to)
   const [planFilter, setPlanFilter] = useState<PlanFilter>('all')
   const [twiceOnly, setTwiceOnly] = useState(false)
+  // [조회]로 적용된 조건 — 목록·요약·엑셀·AI 는 이 값을 따른다 (메뉴를 열면 기본 조건으로 바로 조회)
+  const [applied, setApplied] = useState<Cond>(defaultCond)
+  const draft: Cond = { q, lastFrom, lastTo, planFilter, twiceOnly }
+  const dirty = !sameCond(draft, applied)
   const [sort, setSort] = useState<Sort>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [editor, setEditor] = useState<{ plan: InvtPlan | null } | null>(null)
@@ -104,8 +124,15 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
     invtApi.options().then(setOptions).catch(() => undefined)
   }, [load])
 
+  // [조회]: 입력한 조건을 적용하고 서버에서 최신 목록을 다시 불러온다
+  const search = () => {
+    setApplied({ ...draft, q: draft.q.trim() })
+    load()
+  }
+
   const rows = useMemo(() => {
-    const kw = q.trim().toLowerCase()
+    const { lastFrom, lastTo, planFilter, twiceOnly } = applied
+    const kw = applied.q.trim().toLowerCase()
     let list = plans.filter((p) => {
       if (lastFrom || lastTo) {
         const d = p.lastInvtDt ?? ''
@@ -132,23 +159,24 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
       })
     }
     return list
-  }, [plans, q, lastFrom, lastTo, planFilter, twiceOnly, sort])
+  }, [plans, applied, sort])
 
-  // AI 대화에 현재 화면 조건 전달
+  // AI 대화에 현재 화면(적용된) 조건 전달
   useEffect(() => {
     onContextChange?.({
-      lastFrom: isoToYmd(lastFrom),
-      lastTo: isoToYmd(lastTo),
-      planFilter,
-      twiceOnly: twiceOnly ? 'Y' : '',
-      q: q.trim(),
+      lastFrom: isoToYmd(applied.lastFrom),
+      lastTo: isoToYmd(applied.lastTo),
+      planFilter: applied.planFilter,
+      twiceOnly: applied.twiceOnly ? 'Y' : '',
+      q: applied.q,
     })
-  }, [onContextChange, lastFrom, lastTo, planFilter, twiceOnly, q])
+  }, [onContextChange, applied])
 
+  // 요약: 모두 조회 결과 기준 (전체 등록 건수는 참고로만 표시)
   const summary = useMemo(() => {
-    const set = plans.filter((p) => p.invtPlanDt).length
+    const set = rows.filter((p) => p.invtPlanDt).length
     const cost = rows.reduce((acc, p) => acc + (p.baseFee ?? 0) + (p.expectAmt ?? 0), 0)
-    return { total: plans.length, set, unset: plans.length - set, twice: plans.filter((p) => p.twiceYearYn === 'Y').length, cost }
+    return { total: rows.length, all: plans.length, set, unset: rows.length - set, twice: rows.filter((p) => p.twiceYearYn === 'Y').length, cost }
   }, [plans, rows])
 
   const toggleSort = (key: keyof InvtPlan) =>
@@ -224,7 +252,12 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
         </div>
         <div className="search">
           <Search size={16} />
-          <input placeholder="매장코드 · 매장명 · 주소 · 매니저 · 비고 검색" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input
+            placeholder="매장코드 · 매장명 · 주소 · 매니저 · 비고 검색"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && search()}
+          />
           {q && (
             <button className="clear" onClick={() => setQ('')}>
               <X size={14} />
@@ -237,11 +270,24 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
           <span className="muted">~</span>
           <input type="date" value={lastTo} min={lastFrom || undefined} onChange={(e) => setLastTo(e.target.value)} aria-label="최종실사일 TO" />
           {(lastFrom || lastTo) && (
-            <button className="clear" title="기간 지우기" onClick={() => { setLastFrom(''); setLastTo('') }}>
+            <button className="clear" title="기간 지우기 (전체 보기)" onClick={() => { setLastFrom(''); setLastTo('') }}>
               <X size={13} />
             </button>
           )}
         </div>
+        {(lastFrom !== thisMonthRange().from || lastTo !== thisMonthRange().to) && (
+          <button
+            className="btn ghost sm"
+            title="최종실사일을 이번 달 1일 ~ 오늘로"
+            onClick={() => {
+              const r = thisMonthRange()
+              setLastFrom(r.from)
+              setLastTo(r.to)
+            }}
+          >
+            이번 달
+          </button>
+        )}
         <div className="seg big">
           {(['all', 'set', 'unset'] as PlanFilter[]).map((f) => (
             <button key={f} className={planFilter === f ? 'on' : ''} onClick={() => setPlanFilter(f)}>
@@ -252,10 +298,15 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
         <label className="check-label">
           <input type="checkbox" checked={twiceOnly} onChange={(e) => setTwiceOnly(e.target.checked)} /> 연2회만
         </label>
+        <button
+          className={`btn primary ${dirty ? 'pulse' : ''}`}
+          onClick={search}
+          disabled={loading}
+          title={dirty ? '바꾼 조건이 아직 적용되지 않았습니다. 조회를 누르세요.' : '조건으로 다시 조회 (최신 데이터)'}
+        >
+          {loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 조회{dirty ? ' *' : ''}
+        </button>
         <div className="toolbar-actions">
-          <button className="icon-btn bordered" title="새로고침" onClick={load}>
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
-          </button>
           <button className="btn ghost danger" disabled={!selected.size} onClick={removeSelected}>
             <Trash2 size={15} /> 삭제{selected.size ? ` (${selected.size})` : ''}
           </button>
@@ -269,11 +320,12 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
       </section>
 
       <section className="summary-pills">
-        <div className="pill strong"><span>전체</span><b>{fmtNum(summary.total)}건</b></div>
+        <div className="pill strong"><span>조회 결과</span><b>{fmtNum(summary.total)}건</b><span className="muted">/ 전체 {fmtNum(summary.all)}건</span></div>
         <div className="pill"><span>예정일 확정</span><b>{fmtNum(summary.set)}</b></div>
         <div className="pill"><span>미정</span><b>{fmtNum(summary.unset)}</b></div>
         <div className="pill"><span>연2회 매장</span><b>{fmtNum(summary.twice)}</b></div>
-        <div className="pill"><span>업체 예상 비용 합계(조회 결과)</span><b>{fmtNum(summary.cost)}원</b></div>
+        <div className="pill"><span>업체 예상 비용 합계</span><b>{fmtNum(summary.cost)}원</b></div>
+        {dirty && <div className="pill hint-pill warn-pill">조건을 바꿨습니다 · [조회]를 누르면 적용됩니다</div>}
         <div className="pill hint-pill">실사예정일 셀 더블클릭 → 날짜 지정 · 그 외 행 더블클릭 → 수정</div>
       </section>
 

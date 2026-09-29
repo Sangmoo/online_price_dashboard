@@ -102,6 +102,9 @@ def _where(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, se
     if shop_list:
         if any(len(s) > 6 for s in shop_list):
             _bad("매장코드가 올바르지 않습니다.")
+        # 기간(BETWEEN)만 있으면 기간 안의 모든 매장 인덱스를 훑은 뒤 매장을 거른다(수 초).
+        # 월 목록(IN)을 함께 주면 (판매년월, 매장코드) 조합을 인덱스에서 바로 찾는다(수십 ms). 결과는 같다.
+        _in("MAKE_YYMM", "ym", _month_list(ym_from, ym_to), MAX_MONTHS)
         _in("SHOP_ID", "shop", shop_list, 500)
     yy_list = _split(plan_yys)
     if yy_list:
@@ -299,10 +302,12 @@ def shop_trend(shop_id: str, months: int = 12) -> dict:
         _bad("매장코드가 올바르지 않습니다.")
     last = _shift_ym(date.today().strftime("%Y%m"), -1)
     first = _shift_ym(last, -(months - 1))
+    # 기간을 BETWEEN 으로 주면 24개월치 모든 매장 인덱스를 훑어 약 2초, 월 목록(IN)으로 주면 월별로 바로 찾아 수십 ms
+    binds = {f"m{i}": ym for i, ym in enumerate(_month_list(_shift_ym(first, -12), last))}
     rows = db.query(
         "SELECT MAKE_YYMM, NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0) FROM T_CLOSE_SALE_BASE "
-        "WHERE MAKE_YYMM BETWEEN :f AND :t AND SHOP_ID = :shop GROUP BY MAKE_YYMM",
-        {"f": _shift_ym(first, -12), "t": last, "shop": shop_id})[1]
+        f"WHERE MAKE_YYMM IN ({', '.join(':' + k for k in binds)}) AND SHOP_ID = :shop GROUP BY MAKE_YYMM",
+        {**binds, "shop": shop_id})[1]
     by = {ym: (int(q), int(a)) for ym, q, a in rows}
     out, ym = [], first
     for _ in range(months):

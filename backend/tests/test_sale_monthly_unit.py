@@ -180,3 +180,26 @@ def test_index_expressions_match_ddl():
     assert sm.SESS_EXPR in ddl and sm.PRDT_GRP_EXPR in ddl
     assert sm.SUMMARY_DIMS["season"][0] == sm.SESS_EXPR and sm.SUMMARY_DIMS["prdt_grp"][0] == sm.PRDT_GRP_EXPR
     assert cts.GROUP_COLS["SESS_NM"] == sm.SESS_EXPR and cts.GROUP_COLS["PRDT_GRP_NM"] == sm.PRDT_GRP_EXPR
+
+
+def test_shop_filter_adds_month_list_for_index_lookup():
+    where, p = sm._where("2026-06", "2026-08", "A11001", None, None)
+    assert "MAKE_YYMM IN (:ym0, :ym1, :ym2)" in where and [p["ym0"], p["ym2"]] == ["202606", "202608"]
+    assert "MAKE_YYMM BETWEEN :ym_from AND :ym_to" in where  # 기간 값은 다른 계산(전년·월 목록)에서 계속 사용
+    where2, _ = sm._where("2026-06", "2026-08", None, None, None)
+    assert "MAKE_YYMM IN" not in where2  # 매장 조건이 없으면 기간 조건만
+
+
+def test_shop_trend_uses_month_list(monkeypatch):
+    seen = {}
+
+    def query(sql, params=None, arraysize=5000):
+        seen.setdefault("sql", sql)
+        seen.setdefault("params", params)
+        return [], []
+
+    monkeypatch.setattr(sm.db, "query", query)
+    monkeypatch.setattr(sm, "shop_names", lambda ids: {})
+    t = sm.shop_trend("A11001")
+    assert len(t["months"]) == 12 and "BETWEEN" not in seen["sql"]
+    assert len([k for k in seen["params"] if k.startswith("m")]) == 24  # 최근 12개월 + 전년 같은 12개월

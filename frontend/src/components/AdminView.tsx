@@ -5,11 +5,13 @@ import {
   Bot,
   Check,
   KeyRound,
+  LayoutGrid,
   Loader2,
   LogOut,
   MonitorSmartphone,
   RefreshCw,
   ScrollText,
+  Wrench,
   Search,
   ShieldCheck,
   Unlock,
@@ -26,17 +28,22 @@ import {
   type LockInfo,
   type LoginLog,
   type PageKey,
+  type PageMeta,
   type ServerLog,
   type SessionInfo,
   type User,
 } from '../api'
 import { fmtNum } from '../format'
+import AiToolsTab from './admin/AiToolsTab'
+import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
 
-type Tab = 'users' | 'ai' | 'usage' | 'logins' | 'sessions' | 'serverlogs'
+type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
+  { key: 'menus', label: '메뉴 권한', icon: LayoutGrid },
   { key: 'ai', label: 'AI 사용 설정', icon: Bot },
+  { key: 'aitools', label: 'AI 도구', icon: Wrench },
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
@@ -62,7 +69,9 @@ export default function AdminView({ me }: { me: User }) {
         ))}
       </div>
       {tab === 'users' && <UsersTab me={me} notify={notify} />}
+      {tab === 'menus' && <MenuPermTab notify={notify} />}
       {tab === 'ai' && <AiTab notify={notify} />}
+      {tab === 'aitools' && <AiToolsTab notify={notify} />}
       {tab === 'usage' && <UsageTab />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
@@ -79,7 +88,8 @@ type Notify = (text: string, error?: boolean) => void
 // ----------------------------------------------------------------------------
 function UsersTab({ me, notify }: { me: User; notify: Notify }) {
   const [users, setUsers] = useState<AdminUser[]>([])
-  const [pages, setPages] = useState<{ key: PageKey; label: string }[]>([])
+  const [pages, setPages] = useState<PageMeta[]>([])
+  const [permFor, setPermFor] = useState<AdminUser | null>(null)
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -174,24 +184,14 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
                     </select>
                   </td>
                   <td>
-                    <div className="page-chips">
-                      {pages.map((p) => {
-                        const on = u.pages.includes(p.key)
-                        return (
-                          <button
-                            key={p.key}
-                            className={`page-chip ${on ? 'on' : ''}`}
-                            disabled={locked || saving === u.id}
-                            onClick={() => {
-                              const cur = u.pages.filter((x) => x !== 'admin')
-                              save(u, { pages: on ? cur.filter((x) => x !== p.key) : [...cur, p.key] })
-                            }}
-                          >
-                            {on && <Check size={11} />} {p.label}
-                          </button>
-                        )
-                      })}
-                      {u.role === 'ADMIN' && <span className="page-chip on fixed"><ShieldCheck size={11} /> 관리자</span>}
+                    <div className="perm-summary">
+                      <span className="muted small" title={pages.filter((p) => u.pages.includes(p.key)).map((p) => p.label).join(', ')}>
+                        {u.superAdmin ? '전체 메뉴' : `${pages.filter((p) => u.pages.includes(p.key)).length} / ${pages.length}개`}
+                        {u.role === 'ADMIN' && ' + 관리자'}
+                      </span>
+                      <button className="btn ghost sm" disabled={saving === u.id} onClick={() => setPermFor(u)}>
+                        <ShieldCheck size={12} /> 설정
+                      </button>
                     </div>
                   </td>
                   <td>
@@ -225,6 +225,18 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
         </table>
       </div>
 
+      {permFor && (
+        <MenuPermModal
+          user={permFor}
+          pages={pages}
+          onClose={() => setPermFor(null)}
+          onSaved={(user) => {
+            setUsers((list) => list.map((x) => (x.id === user.id ? user : x)))
+            setPermFor(null)
+            notify(`${user.name} 메뉴 권한을 저장했습니다.`)
+          }}
+        />
+      )}
       {adding && (
         <AddUserModal
           pages={pages}
@@ -279,7 +291,7 @@ function LimitInput({ value, placeholder, step, onSave }: { value: number | null
 }
 
 function AddUserModal({ pages, onClose, onAdded, notify }: {
-  pages: { key: PageKey; label: string }[]
+  pages: PageMeta[]
   onClose: () => void
   onAdded: (name: string) => void
   notify: Notify

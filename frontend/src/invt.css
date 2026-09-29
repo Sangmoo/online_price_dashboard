@@ -122,3 +122,8 @@
 .date-range .clear { border: 0; background: var(--surface-3); border-radius: 999px; width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-2); }
 
 .picker-list tr.current-mgr td { background: rgba(20, 184, 166, 0.07); }
+
+/* 조회 조건을 바꾸고 아직 [조회]를 누르지 않았을 때 */
+.btn.pulse { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 35%, transparent); }
+.pill.warn-pill { color: #b45309; border-color: color-mix(in srgb, #f59e0b 45%, transparent); }
+:root[data-theme='dark'] .pill.warn-pill { color: #fbbf24; }

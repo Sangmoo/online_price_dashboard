@@ -179,6 +179,14 @@ export const api = {
     directory: (q: string) => getJson<{ users: { id: string; name: string; registered: boolean }[] }>(`/api/admin/directory?${qs({ q })}`),
     createUser: (body: AdminUserUpdate & { id: string }) => sendJson<{ user: AdminUser }>('POST', '/api/admin/users', body),
     saveUser: (id: string, body: Partial<AdminUserUpdate>) => sendJson<{ user: AdminUser }>('PUT', `/api/admin/users/${encodeURIComponent(id)}`, body),
+    savePermissions: (changes: { id: string; pages: PageKey[] }[]) => sendJson<{ users: AdminUser[] }>('PUT', '/api/admin/permissions', { changes }),
+    aiTools: () => getJson<AiToolsOverview>('/api/admin/ai-tools'),
+    saveBuiltinTool: (name: string, body: { enabled: boolean; extraDesc: string }) =>
+      sendJson<AiToolsOverview>('PUT', `/api/admin/ai-tools/builtin/${encodeURIComponent(name)}`, body),
+    createTool: (tool: CustomToolDef) => sendJson<AiToolsOverview>('POST', '/api/admin/ai-tools', tool),
+    updateTool: (tool: CustomToolDef) => sendJson<AiToolsOverview>('PUT', `/api/admin/ai-tools/${encodeURIComponent(tool.name)}`, tool),
+    deleteTool: (name: string) => sendJson<AiToolsOverview>('DELETE', `/api/admin/ai-tools/${encodeURIComponent(name)}`),
+    testTool: (tool: CustomToolDef, args: Record<string, string>) => sendJson<AiToolTestResult>('POST', '/api/admin/ai-tools/test', { tool, args }),
     settings: () => getJson<AdminSettings>('/api/admin/settings'),
     saveSettings: (body: Partial<AdminSettings>) => sendJson<AdminSettings>('PUT', '/api/admin/settings', body),
     usage: (days: number) => getJson<AdminUsage>(`/api/admin/usage?${qs({ days })}`),
@@ -216,7 +224,43 @@ export type AdminUserUpdate = {
   dailyCostUsd: number | null
   active: boolean
 }
-export type AdminUsersResponse = { users: AdminUser[]; pages: { key: PageKey; label: string }[]; superAdminId: string }
+export type PageMeta = { key: PageKey; label: string; group: string }
+export type AdminUsersResponse = { users: AdminUser[]; pages: PageMeta[]; superAdminId: string }
+export type ToolParam = { name: string; type: string; required: boolean; description: string; enum?: string[]; default?: string | number | null }
+export type CustomToolDef = {
+  name: string
+  label: string
+  description: string
+  page: PageKey | ''
+  sql: string
+  params: ToolParam[]
+  maxRows: number
+  enabled: boolean
+}
+export type CustomTool = CustomToolDef & { updatedAt: string | null; updatedBy: string | null }
+export type BuiltinTool = {
+  name: string
+  label: string
+  group: string
+  pages: { key: PageKey; label: string }[]
+  description: string
+  params: string[]
+  enabled: boolean
+  extraDesc: string
+  updatedAt: string | null
+  updatedBy: string | null
+}
+export type AiToolsOverview = {
+  storage: 'oracle' | 'sqlite'
+  builtin: BuiltinTool[]
+  custom: CustomTool[]
+  pages: PageMeta[]
+  paramTypes: { key: string; label: string }[]
+  maxRowsLimit: number
+}
+export type AiToolTestResult =
+  | { ok: true; elapsedMs: number; columns: Column[]; rows: Row[]; truncated: boolean; schema: unknown }
+  | { ok: false; stage: 'definition' | 'args' | 'sql'; message: string }
 export type AdminSettings = {
   aiEnabled: boolean
   defaultDailyQuestions: number

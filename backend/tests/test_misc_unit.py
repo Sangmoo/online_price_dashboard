@@ -17,9 +17,9 @@ def _names(pages):
 def test_tools_follow_menu_permissions():
     assert _names([]) == set()
     assert _names(["dashboard"]) == {"list_collection_dates", "aggregate_prices", "search_price_rows"}
-    assert _names(["sale_monthly"]) == {"aggregate_sales", "search_sales"}
+    assert _names(["sale_monthly"]) == {"sum_sales_shop_month", "aggregate_sales", "search_sales"}
     assert _names(["invt_plan"]) == {"aggregate_invt_plans", "search_invt_plans"}
-    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 7
+    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 8
 
 
 @pytest.mark.parametrize("name,inp", [
@@ -135,3 +135,99 @@ def test_log_tail_groups_multiline_and_filters(tmp_path, monkeypatch):
 def test_sql_text_is_compact_and_truncated():
     assert logs.sql_text("SELECT  *\n  FROM   T") == "SELECT * FROM T"
     assert logs.sql_text("X" * 500, limit=10).endswith("…")
+
+
+# ----------------------------------------------------------------------------
+# 매장 매출 누계 구간 (월 목록으로 조회 — BETWEEN 대비 100배 이상 빠름)
+# ----------------------------------------------------------------------------
+def test_ytd_months():
+    from datetime import date
+
+    cur, prev = ip._ytd_months(date(2026, 9, 29))
+    assert cur == [f"2026{m:02d}" for m in range(1, 9)] and prev == [f"2025{m:02d}" for m in range(1, 9)]
+    assert ip._ytd_months(date(2026, 2, 3)) == (["202601"], ["202501"])
+    assert ip._ytd_months(date(2026, 1, 15)) == ([], [])  # 1월에는 당년 누계 구간이 없음 (기존 SQL 과 동일)
+
+
+def test_sales_ytd_uses_month_list(monkeypatch):
+    seen = {}
+
+    def query(sql, params=None, arraysize=5000):
+        seen["sql"], seen["params"] = sql, params
+        return [], [("202601", 100), ("202501", 40), ("202502", None)]
+
+    monkeypatch.setattr(ip, "_ytd_months", lambda: (["202601", "202602"], ["202501", "202502"]))
+    monkeypatch.setattr(ip.db, "query", query)
+    assert ip._sales_ytd("A11001") == [{"CURR_SALE": 100, "PREV_SALE": 40}]
+    assert "MAKE_YYMM IN (:m0, :m1, :m2, :m3)" in seen["sql"] and "BETWEEN" not in seen["sql"]
+
+
+# ----------------------------------------------------------------------------
+# 월×매장 사전 집계 뷰 도구: 뷰/원본 선택, 입력 검증
+# ----------------------------------------------------------------------------
+@pytest.fixture
+def mv(monkeypatch):
+    from app import chat_tools_sale as cts
+
+    state = {"usable": True, "staleness": "FRESH", "last_refresh": None, "mv_max": "202608", "base_max": "202608"}
+    seen = {}
+
+    def query_dicts(sql, params=None):
+        seen["sql"], seen["params"] = sql, params
+        return [{"MAKE_YYMM": "202608", "REAL_SALE_AMT_SUM": 10}]
+
+    monkeypatch.setattr(cts, "mv_state", lambda: state)
+    monkeypatch.setattr(cts.db, "query_dicts", query_dicts)
+    return cts, state, seen
+
+
+def _mv_run(inp):
+    return ct.run_tool("sum_sales_shop_month", {"ym_from": "202601", "ym_to": "202608", **inp}, {"pages": ["sale_monthly"]})
+
+
+def test_mv_tool_uses_view_when_fresh(mv):
+    cts, _, seen = mv
+    r = _mv_run({"group_by": ["MAKE_YYMM"], "metrics": ["REAL_SALE_AMT_SUM"]})
+    assert cts.MV_NAME in seen["sql"] and "SUM(TOTAL_SALE_AMT)" in seen["sql"]
+    assert r["result"]["source"].startswith("사전 집계 뷰")
+
+
+@pytest.mark.parametrize("change", [{"usable": False}, {"mv_max": "202607"}])
+def test_mv_tool_falls_back_to_base_table(mv, change):
+    cts, state, seen = mv
+    state.update(change)  # 뷰가 오래됐거나(STALE) 요청 기간의 최근 월이 아직 뷰에 없음
+    r = _mv_run({"group_by": ["MAKE_YYMM"], "metrics": ["REAL_SALE_AMT_SUM"]})
+    assert "FROM T_CLOSE_SALE_BASE" in seen["sql"] and "SUM(REAL_SALE_AMT)" in seen["sql"]
+    assert r["result"]["source"].startswith("원본 테이블")
+
+
+def test_mv_tool_period_before_view_max_still_uses_view(mv):
+    cts, state, seen = mv
+    state.update({"mv_max": "202607", "base_max": "202608"})
+    ct.run_tool("sum_sales_shop_month", {"ym_from": "202601", "ym_to": "202606"}, {"pages": ["sale_monthly"]})
+    assert cts.MV_NAME in seen["sql"]  # 요청 기간이 뷰 범위 안이면 뷰 사용
+
+
+@pytest.mark.parametrize("inp,msg", [
+    ({"group_by": ["SESS_NM"]}, "aggregate_sales"),
+    ({"metrics": ["PRDT_CNT"]}, "metrics"),  # 상품 수는 뷰로 계산 불가 → aggregate_sales
+    ({"ym_from": "201601"}, "120개월"),
+    ({"order_by": "DSCT_AMT_SUM", "metrics": ["QTY_SUM"]}, "order_by"),
+])
+def test_mv_tool_validation(mv, inp, msg):
+    with pytest.raises(ct.ToolInputError, match=msg):
+        _mv_run(inp)
+
+
+def test_mv_tool_listed_first_for_simple_totals():
+    assert ct.tools_for({"pages": ["sale_monthly"]})[0]["name"] == "sum_sales_shop_month"
+
+
+def test_mv_cost_metric_uses_view_only_with_cost_column(mv):
+    cts, state, seen = mv
+    _mv_run({"metrics": ["COST_AMT_SUM"]})
+    assert "FROM T_CLOSE_SALE_BASE" in seen["sql"] and "SUM(PRODUCT_COST2 * QTY)" in seen["sql"]  # 뷰에 컬럼 없음 → 원본
+    state["columns"] = {"TOTAL_COST_AMT"}
+    _mv_run({"metrics": ["COST_AMT_SUM"]})
+    assert cts.MV_NAME in seen["sql"] and "SUM(TOTAL_COST_AMT)" in seen["sql"]
+    assert "TOTAL_PRODUCT_COST2" not in seen["sql"]  # 단가 단순 합은 쓰지 않음

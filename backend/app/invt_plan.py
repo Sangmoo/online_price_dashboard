@@ -293,6 +293,29 @@ def invt_rank(shop_id: str, invt_dt: str | None) -> str | None:
     return str(rows[0][0]) if rows and rows[0][0] is not None else None
 
 
+def _ytd_months(today: date | None = None) -> tuple[list[str], list[str]]:
+    """당년: 올해 1월~지난달, 전년: 작년 1월~작년 같은 달(지난달-12). 1월에는 당년 구간이 비어 있다."""
+    today = today or date.today()
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)  # 지난달
+    curr = [f"{today.year:04d}{i:02d}" for i in range(1, m + 1)] if y == today.year else []
+    prev = [f"{today.year - 1:04d}{i:02d}" for i in range(1, m + 1)] if y == today.year else []
+    return curr, prev
+
+
+def _sales_ytd(shop_id: str) -> list[dict]:
+    """당년·전년 누계 매출. 월 목록(IN)으로 (판매년월, 매장코드) 인덱스를 바로 찾는다 (BETWEEN 이면 약 2초)."""
+    curr, prev = _ytd_months()
+    if not curr:
+        return [{"CURR_SALE": None, "PREV_SALE": None}]
+    binds = {f"m{i}": ym for i, ym in enumerate(curr + prev)}
+    by = dict(db.query(
+        f"SELECT MAKE_YYMM, SUM(REAL_SALE_AMT) FROM {SALE_TABLE} "
+        f"WHERE MAKE_YYMM IN ({', '.join(':' + k for k in binds)}) AND SHOP_ID = :id GROUP BY MAKE_YYMM",
+        {**binds, "id": shop_id})[1])
+    total = lambda ms: sum(by[m] for m in ms if by.get(m) is not None) if any(by.get(m) is not None for m in ms) else None  # noqa: E731
+    return [{"CURR_SALE": total(curr), "PREV_SALE": total(prev)}]
+
+
 def shop_detail(shop_id: str) -> dict:
     """매장 선택 시 자동 세팅 값. 조회되지 않은 항목은 missing 에 담아 수기 입력을 안내한다."""
     p = {"id": shop_id}
@@ -364,20 +387,7 @@ def shop_detail(shop_id: str) -> dict:
     if err:
         errors["rank"] = err
 
-    sales, err = _safe(lambda: db.query_dicts(
-        f"""
-        SELECT SUM(CASE WHEN MAKE_YYMM BETWEEN TO_CHAR(SYSDATE, 'YYYY') || '01'
-                                          AND TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')
-                        THEN REAL_SALE_AMT END) AS CURR_SALE,
-               SUM(CASE WHEN MAKE_YYMM BETWEEN TO_CHAR(ADD_MONTHS(SYSDATE, -12), 'YYYY') || '01'
-                                          AND TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM')
-                        THEN REAL_SALE_AMT END) AS PREV_SALE
-          FROM {SALE_TABLE}
-         WHERE SHOP_ID = :id
-           AND (MAKE_YYMM BETWEEN TO_CHAR(SYSDATE, 'YYYY') || '01' AND TO_CHAR(ADD_MONTHS(SYSDATE, -1), 'YYYYMM')
-                OR MAKE_YYMM BETWEEN TO_CHAR(ADD_MONTHS(SYSDATE, -12), 'YYYY') || '01'
-                                 AND TO_CHAR(ADD_MONTHS(SYSDATE, -13), 'YYYYMM'))
-        """, p))
+    sales, err = _safe(lambda: _sales_ytd(shop_id))
     if err:
         errors["sales"] = err
     s = sales[0] if sales else {}

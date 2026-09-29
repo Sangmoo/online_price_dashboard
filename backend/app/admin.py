@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from . import auth, config, db, store, usage, userdb
+from . import ai_tools, auth, config, db, store, usage, userdb
 
 MODELS = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -142,6 +142,109 @@ def _validate(usr_id: str, body: dict) -> dict:
             _bad("최고 관리자는 비활성화할 수 없습니다.")
         updates["active"] = bool(body["active"])
     return updates
+
+
+def page_meta() -> list[dict]:
+    return [{"key": p, "label": auth.PAGE_LABELS[p], "group": auth.PAGE_GROUPS.get(p, "기타")} for p in auth.PAGES]
+
+
+def save_permissions(admin: dict, changes: list) -> list[dict]:
+    """메뉴 권한 일괄 저장. changes = [{id, pages}]. 하나라도 검증에 실패하면 아무것도 저장하지 않는다."""
+    if not isinstance(changes, list) or not changes:
+        _bad("변경할 사용자가 없습니다.")
+    if len(changes) > 500:
+        _bad("한 번에 500명까지 저장할 수 있습니다.")
+    plan = []
+    for ch in changes:
+        usr_id = str((ch or {}).get("id") or "")
+        if userdb.get_user(usr_id, fresh=True) is None:
+            _bad(f"등록되지 않은 사용자입니다: {usr_id}")
+        if auth.is_super_admin(usr_id):
+            continue  # 최고 관리자는 항상 전체 메뉴
+        plan.append((usr_id, _validate(usr_id, {"pages": ch.get("pages")})))
+    for usr_id, updates in plan:
+        userdb.update_user(usr_id, updates, by=admin["id"])
+    changed = {u for u, _ in plan}
+    return [x for x in list_users() if x["id"] in changed]
+
+
+# ----------------------------------------------------------------------------
+# AI 도구 관리
+# ----------------------------------------------------------------------------
+def _tool_bad(ex: Exception):
+    _bad(str(ex))
+
+
+def ai_tools_overview() -> dict:
+    from . import chat_tools as ct
+
+    cfg = ai_tools.snapshot()
+    builtin = []
+    for tools, group, pages in ct.BUILTIN_GROUPS:
+        for t in tools:
+            c = cfg["builtin"].get(t["name"], {})
+            builtin.append({
+                "name": t["name"], "label": ct.TOOL_LABELS.get(t["name"], t["name"]), "group": group,
+                "pages": [{"key": p, "label": auth.PAGE_LABELS[p]} for p in pages],
+                "description": t["description"], "params": list(t["input_schema"].get("properties", {})),
+                "enabled": c.get("enabled", True), "extraDesc": c.get("extraDesc", ""),
+                "updatedAt": c.get("updatedAt"), "updatedBy": c.get("updatedBy"),
+            })
+    return {"storage": ai_tools.backend_name(), "builtin": builtin, "custom": cfg["custom"], "pages": page_meta(),
+            "paramTypes": [{"key": k, "label": v} for k, v in ai_tools.PARAM_TYPES.items()],
+            "maxRowsLimit": ai_tools.MAX_ROWS_LIMIT}
+
+
+def save_builtin_tool(admin: dict, name: str, body: dict) -> dict:
+    from . import chat_tools as ct
+
+    if name not in ct.BUILTIN_NAMES:
+        _bad("기본 도구가 아닙니다.")
+    try:
+        ai_tools.save_builtin(name, bool(body.get("enabled", True)), str(body.get("extraDesc") or ""), admin["id"])
+    except ai_tools.ToolDefError as ex:
+        _tool_bad(ex)
+    return ai_tools_overview()
+
+
+def save_custom_tool(admin: dict, body: dict, name: str | None = None) -> dict:
+    from . import chat_tools as ct
+
+    if name is not None and str(body.get("name") or "").lower() != name:
+        _bad("도구 이름은 바꿀 수 없습니다. 새 이름으로 추가한 뒤 기존 도구를 삭제하세요.")
+    try:
+        spec = ai_tools.validate_def(body, ct.BUILTIN_NAMES, auth.PAGES, existing=name)
+        ai_tools.save_custom(spec, admin["id"], is_new=name is None)
+    except ai_tools.ToolDefError as ex:
+        _tool_bad(ex)
+    return ai_tools_overview()
+
+
+def delete_custom_tool(admin: dict, name: str) -> dict:
+    try:
+        ai_tools.delete_custom(name, admin["id"])
+    except ai_tools.ToolDefError as ex:
+        _tool_bad(ex)
+    return ai_tools_overview()
+
+
+def test_custom_tool(body: dict) -> dict:
+    """저장 전 시험 실행 (최대 20행). 정의 검증과 실행 오류를 그대로 돌려준다."""
+    from . import chat_tools as ct
+
+    spec_in = body.get("tool") or {}
+    try:
+        spec = ai_tools.validate_def(spec_in, ct.BUILTIN_NAMES, auth.PAGES, existing=str(spec_in.get("name") or "").lower())
+    except ai_tools.ToolDefError as ex:
+        return {"ok": False, "stage": "definition", "message": str(ex)}
+    try:
+        out = ai_tools.run_custom(spec, body.get("args") or {}, max_rows=20)
+        return {"ok": True, "elapsedMs": out["elapsedMs"], "columns": out["table"]["columns"], "rows": out["table"]["rows"],
+                "truncated": out["result"]["truncated"], "schema": ai_tools.tool_schema(spec)}
+    except ai_tools.ToolArgError as ex:
+        return {"ok": False, "stage": "args", "message": str(ex)}
+    except Exception as ex:  # noqa: BLE001 - SQL 오류 메시지를 관리자에게 보여 준다
+        return {"ok": False, "stage": "sql", "message": str(ex).splitlines()[0]}
 
 
 # ----------------------------------------------------------------------------

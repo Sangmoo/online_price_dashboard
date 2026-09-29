@@ -302,7 +302,7 @@ def delete_favorite(fav_id: int, user: dict = Depends(current_user)):
 # ----------------------------------------------------------------------------
 @app.get("/api/admin/users")
 def admin_users(q: str | None = None, _: dict = Depends(require_admin)):
-    return {"users": admin.list_users(q), "pages": [{"key": p, "label": auth.PAGE_LABELS[p]} for p in auth.PAGES],
+    return {"users": admin.list_users(q), "pages": admin.page_meta(),
             "superAdminId": config.SUPER_ADMIN_ID}
 
 
@@ -319,6 +319,41 @@ def admin_create_user(body: dict, me: dict = Depends(require_admin)):
 @app.put("/api/admin/users/{usr_id}")
 def admin_save_user(usr_id: str, body: dict, me: dict = Depends(require_admin)):
     return {"user": admin.save_user(me, usr_id, body)}
+
+
+@app.put("/api/admin/permissions")
+def admin_save_permissions(body: dict, me: dict = Depends(require_admin)):
+    return {"users": admin.save_permissions(me, body.get("changes"))}
+
+
+@app.get("/api/admin/ai-tools")
+def admin_ai_tools(_: dict = Depends(require_admin)):
+    return admin.ai_tools_overview()
+
+
+@app.put("/api/admin/ai-tools/builtin/{name}")
+def admin_ai_tool_builtin(name: str, body: dict, me: dict = Depends(require_admin)):
+    return admin.save_builtin_tool(me, name, body)
+
+
+@app.post("/api/admin/ai-tools/test")
+def admin_ai_tool_test(body: dict, _: dict = Depends(require_admin)):
+    return admin.test_custom_tool(body)
+
+
+@app.post("/api/admin/ai-tools")
+def admin_ai_tool_create(body: dict, me: dict = Depends(require_admin)):
+    return admin.save_custom_tool(me, body)
+
+
+@app.put("/api/admin/ai-tools/{name}")
+def admin_ai_tool_update(name: str, body: dict, me: dict = Depends(require_admin)):
+    return admin.save_custom_tool(me, body, name)
+
+
+@app.delete("/api/admin/ai-tools/{name}")
+def admin_ai_tool_delete(name: str, me: dict = Depends(require_admin)):
+    return admin.delete_custom_tool(me, name)
 
 
 @app.get("/api/admin/settings")

@@ -6,9 +6,11 @@ chat_tools 와 같은 원칙: 모델은 SQL 을 쓰지 않고, 화이트리스�
 from __future__ import annotations
 
 import re
+import threading
+import time
 from typing import Any
 
-from . import db
+from . import config, db
 from . import sale_monthly as sm
 
 TABLE = "T_CLOSE_SALE_BASE"
@@ -131,7 +133,149 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# ----------------------------------------------------------------------------
+# 월별·매장별 합계 전용: 사전 집계 뷰 MV_CLOSE_SALE_SHOP_YM (판매년월 × 매장 1행, 원본과 합계 동일)
+# 원본 1,600만 행 대신 약 2.4만 행만 읽어 36개월 합계도 0.1초 안쪽. 시즌·기획년도 등 다른 조건은 원본 도구 사용.
+# ----------------------------------------------------------------------------
+MV_NAME = f"{config.DB_OWNER_SCHEMA}.MV_CLOSE_SALE_SHOP_YM"
+MV_MAX_MONTHS = 120
+MV_GROUP_COLS = {"MAKE_YYMM": "MAKE_YYMM", "MAKE_YY": "SUBSTR(MAKE_YYMM, 1, 4)", "SHOP_ID": "SHOP_ID", "TEAM_CD": "TEAM_CD"}
+# 지표: (뷰 식, 원본 식) — 뷰가 오래됐거나 최근 월이 없으면 같은 결과를 원본에서 계산
+MV_METRICS = {
+    "ROW_CNT": ("SUM(ROW_COUNT)", "COUNT(*)"),
+    "SHOP_CNT": ("COUNT(DISTINCT SHOP_ID)", "COUNT(DISTINCT SHOP_ID)"),
+    "QTY_SUM": ("SUM(TOTAL_QTY)", "SUM(QTY)"),
+    "REAL_SALE_AMT_SUM": ("SUM(TOTAL_SALE_AMT)", "SUM(REAL_SALE_AMT)"),
+    "DSCT_AMT_SUM": ("SUM(TOTAL_DSCT_AMT)", "SUM(DSCT_AMT)"),
+    # 원가 금액 = 제조원가(V+) × 수량. 뷰에 TOTAL_COST_AMT 컬럼(db/create_mv_close_sale_shop_ym.sql)이 있을 때만 뷰에서 읽는다.
+    # 뷰의 TOTAL_PRODUCT_COST2(단가 단순 합)와 TOTAL_QTY 로는 행별 곱의 합을 되살릴 수 없어 쓰지 않는다.
+    "COST_AMT_SUM": ("SUM(TOTAL_COST_AMT)", "SUM(PRODUCT_COST2 * QTY)"),
+}
+MV_OPTIONAL_METRICS = {"COST_AMT_SUM": "TOTAL_COST_AMT"}  # 지표 → 필요한 뷰 컬럼
+MV_TOOL = {
+    "name": "sum_sales_shop_month",
+    "description": (
+        "월별·매장별·팀별 판매 합계 전용 빠른 도구 (월×매장 사전 집계 뷰). 판매년월 기간(필수), 매장코드·매장명·팀 조건과 "
+        "판매년월/판매년도/매장/팀 묶음만 지원하며, 수량·실판금액·할인금액·원가 금액(제조원가×수량) 합계, 매장 수, 원본 행 수를 반환합니다. "
+        "원가율 = 원가 금액 / 실판금액 으로 계산하세요. "
+        "예: 월별 실판금액 추이, 매장별 매출 순위, 팀별 합계, 특정 매장의 월별 매출. "
+        "이런 단순 합계에는 aggregate_sales 대신 이 도구를 먼저 쓰세요. 시즌·기획년도·품군·아이템·판매형태·수수료구분 등 "
+        "다른 조건이나 묶음, 상품 수·최초가 금액이 필요하면 aggregate_sales 를 쓰세요. 최대 120개월."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ym_from": {"type": "string", "description": "판매년월 시작 YYYYMM (필수)"},
+            "ym_to": {"type": "string", "description": f"판매년월 종료 YYYYMM (필수, 최대 {MV_MAX_MONTHS}개월)"},
+            "shop_ids": {"type": "array", "items": {"type": "string"}, "description": "매장코드 목록 (최대 500개)"},
+            "shop_nm": {"type": "string", "description": "매장명 부분 일치"},
+            "team_cd": {"type": "string", "description": "팀 부분 일치 (예: 쉬즈1팀, 리스트, 시스티나)"},
+            "group_by": {"type": "array", "items": {"type": "string", "enum": list(MV_GROUP_COLS)},
+                         "description": "묶음 (0~3개). 비우면 전체 합계 1행. SHOP_ID 로 묶으면 매장명(SHOP_NM)도 반환"},
+            "metrics": {"type": "array", "items": {"type": "string", "enum": list(MV_METRICS)},
+                        "description": "생략하면 원가를 뺀 전부. ROW_CNT=원본 판매 행 수, COST_AMT_SUM=원가 금액(제조원가×수량)"},
+            "order_by": {"type": "string", "enum": list(MV_GROUP_COLS) + list(MV_METRICS)},
+            "order_dir": {"type": "string", "enum": ["asc", "desc"]},
+            "limit": {"type": "integer", "description": f"최대 반환 행 수 (1~{MAX_LIMIT}, 기본 50)"},
+        },
+        "required": ["ym_from", "ym_to"],
+        "additionalProperties": False,
+    },
+    "eager_input_streaming": True,
+}
+TOOLS.insert(0, MV_TOOL)  # 단순 합계는 이 도구가 먼저 보이도록
+
+_mv_state: tuple[float, dict] | None = None
+_mv_lock = threading.Lock()
+MV_STATE_TTL = 60
+
+
+def mv_state() -> dict:
+    """뷰 상태: 사용 가능 여부, 신선도(STALENESS), 마지막 갱신, 뷰/원본 최신 판매년월. 60초 캐시."""
+    global _mv_state
+    now = time.time()
+    with _mv_lock:
+        if _mv_state and _mv_state[0] > now:
+            return _mv_state[1]
+    st = {"usable": False, "staleness": None, "last_refresh": None, "mv_max": None, "base_max": None, "columns": set()}
+    try:
+        info = db.query("SELECT STALENESS, LAST_REFRESH_DATE FROM ALL_MVIEWS WHERE OWNER = :o AND MVIEW_NAME = 'MV_CLOSE_SALE_SHOP_YM'",
+                        {"o": config.DB_OWNER_SCHEMA})[1]
+        if info:
+            st["staleness"], st["last_refresh"] = info[0][0], info[0][1]
+        st["columns"] = {r[0] for r in db.query(
+            "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :o AND TABLE_NAME = 'MV_CLOSE_SALE_SHOP_YM'",
+            {"o": config.DB_OWNER_SCHEMA})[1]}
+        st["mv_max"] = db.query(f"SELECT MAX(MAKE_YYMM) FROM {MV_NAME}")[1][0][0]
+        st["base_max"] = db.query(f"SELECT MAX(MAKE_YYMM) FROM {TABLE}")[1][0][0]  # 인덱스 최대값 조회
+        st["usable"] = st["mv_max"] is not None and st["staleness"] in (None, "FRESH")
+    except Exception:  # noqa: BLE001 - 뷰가 없거나 권한이 없으면 원본으로 계산
+        st["usable"] = False
+    with _mv_lock:
+        _mv_state = (now + MV_STATE_TTL, st)
+    return st
+
+
+def _run_mv(inp: dict) -> dict:
+    f, t = _ym(inp, "ym_from"), _ym(inp, "ym_to")
+    if f > t:
+        raise SaleToolError("ym_from 이 ym_to 보다 늦습니다.")
+    if sm._months(f, t) > MV_MAX_MONTHS:
+        raise SaleToolError(f"판매년월은 최대 {MV_MAX_MONTHS}개월까지 조회할 수 있습니다.")
+    group_by = inp.get("group_by") or []
+    if not isinstance(group_by, list) or any(g not in MV_GROUP_COLS for g in group_by) or len(group_by) > 3:
+        raise SaleToolError(f"group_by 는 {list(MV_GROUP_COLS)} 중 최대 3개입니다. 다른 묶음은 aggregate_sales 를 쓰세요.")
+    group_by = list(dict.fromkeys(group_by))
+    metrics = inp.get("metrics") or [m for m in MV_METRICS if m not in MV_OPTIONAL_METRICS]
+    if not isinstance(metrics, list) or any(m not in MV_METRICS for m in metrics):
+        raise SaleToolError(f"metrics 는 {list(MV_METRICS)} 중에서 선택합니다.")
+    metrics = [m for m in MV_METRICS if m in metrics]
+    order_by = inp.get("order_by") or (("REAL_SALE_AMT_SUM" if "REAL_SALE_AMT_SUM" in metrics else metrics[0]) if group_by else None)
+    if order_by is not None and order_by not in metrics and order_by not in group_by:
+        raise SaleToolError("order_by 는 요청한 지표이거나 group_by 에 포함된 컬럼이어야 합니다.")
+    limit = _limit(inp, 50)
+
+    conds, p = ["MAKE_YYMM BETWEEN :ym_from AND :ym_to"], {"ym_from": f, "ym_to": t}
+    if shops := _list(inp, "shop_ids", 500):
+        binds = {f"shop{i}": s.upper() for i, s in enumerate(shops)}
+        conds.append(f"SHOP_ID IN ({', '.join(':' + k for k in binds)})")
+        p.update(binds)
+    for key, col in (("shop_nm", "SHOP_NM"), ("team_cd", "TEAM_CD")):
+        if (v := _text(inp, key)) is not None:
+            conds.append(f"INSTR({col}, :{key}) > 0")
+            p[key] = v
+
+    # 뷰가 최신이고 요청 기간이 뷰에 모두 들어 있으면 뷰, 아니면 원본에서 같은 합계를 계산
+    st = mv_state()
+    missing_cols = [c for m, c in MV_OPTIONAL_METRICS.items() if m in metrics and c not in st.get("columns", set())]
+    use_mv = (st["usable"] and not missing_cols
+              and not (st["base_max"] and st["mv_max"] and t > st["mv_max"] and st["base_max"] > st["mv_max"]))
+    src, idx = (MV_NAME, 0) if use_mv else (TABLE, 1)
+    select = [f"{MV_GROUP_COLS[g]} AS {g}" for g in group_by]
+    if "SHOP_ID" in group_by:
+        select.append("MAX(SHOP_NM) AS SHOP_NM")
+    select += [f"{MV_METRICS[m][idx]} AS {m}" for m in metrics]
+    sql = f"SELECT {', '.join(select)} FROM {src} WHERE {' AND '.join(conds)}"
+    if group_by:
+        sql += " GROUP BY " + ", ".join(MV_GROUP_COLS[g] for g in group_by)
+    if order_by:
+        sql += f" ORDER BY {order_by} {_dir(inp, 'desc')} NULLS LAST"
+    rows = _clean(db.query_dicts(f"SELECT * FROM ({sql}) WHERE ROWNUM <= {limit + 1}", p))
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+    cols = group_by + (["SHOP_NM"] if "SHOP_ID" in group_by else []) + metrics
+    refreshed = st["last_refresh"].strftime("%Y-%m-%d %H:%M") if st["last_refresh"] else None
+    source = (f"사전 집계 뷰(마지막 갱신 {refreshed})" if use_mv else
+              "원본 테이블(집계 뷰에 원가 금액 컬럼이 없어 원본에서 정확히 계산)" if missing_cols and st["usable"] else
+              "원본 테이블(집계 뷰가 최신이 아니거나 요청 기간의 최근 월이 아직 뷰에 없어 원본에서 계산)")
+    return {
+        "result": {"row_count": len(rows), "truncated": truncated, "rows": rows, "period": f"{f}~{t}", "source": source},
+        "table": {"columns": [{"key": c, "label": LABELS.get(c, c)} for c in cols], "rows": rows},
+    }
+
+
 TOOL_LABELS = {
+    "sum_sales_shop_month": "월·매장 판매 합계",
     "aggregate_sales": "판매 집계",
     "search_sales": "판매 행 검색",
 }
@@ -233,6 +377,9 @@ def _clean(rows: list[dict]) -> list[dict]:
 
 
 def run(name: str, inp: dict) -> dict:
+    if name == "sum_sales_shop_month":
+        return _run_mv(inp)
+
     if name == "aggregate_sales":
         where, p = _where(inp)
         group_by = inp.get("group_by") or []

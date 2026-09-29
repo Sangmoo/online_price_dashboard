@@ -20,6 +20,7 @@ LOCK_SECONDS = 60
 
 PAGES = ["dashboard", "detail", "sale_monthly", "invt_plan"]   # 권한 부여 가능한 일반 페이지
 EMP_NO_RE = re.compile(r"^\d{6}$")             # 사번 형식 (6자리 숫자)
+PAGE_GROUPS = {"dashboard": "온라인 가격", "detail": "온라인 가격", "sale_monthly": "판매 분석", "invt_plan": "데이터 관리"}
 PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "sale_monthly": "월별 매장별 판매 집계", "invt_plan": "매장 재고 실사계획",
                "admin": "관리자"}
 

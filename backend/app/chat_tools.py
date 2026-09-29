@@ -288,21 +288,57 @@ _INVT_TOOL_NAMES = {t["name"] for t in invt.TOOLS}
 _SALE_TOOL_NAMES = {t["name"] for t in sale.TOOLS}
 
 
+# 기본 도구 목록 (관리자 화면 표시용): (도구, 데이터 이름, 필요한 메뉴)
+BUILTIN_GROUPS = [
+    (TOOLS, "온라인 가격", sorted(PRICE_PAGES)),
+    (sale.TOOLS, "월별 매장별 판매 집계", sorted(SALE_PAGES)),
+    (invt.TOOLS, "매장 재고 실사계획", sorted(INVT_PAGES)),
+]
+BUILTIN_NAMES = _PRICE_TOOL_NAMES | _SALE_TOOL_NAMES | _INVT_TOOL_NAMES
+
+
 def data_scopes(me: dict) -> dict[str, bool]:
     pages = set(me.get("pages") or [])
     return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES), "sale": bool(pages & SALE_PAGES)}
 
 
+def _with_admin_note(tool: dict, cfg: dict | None) -> dict:
+    extra = (cfg or {}).get("extraDesc")
+    return {**tool, "description": f"{tool['description']}\n[관리자 안내] {extra}"} if extra else tool
+
+
 def tools_for(me: dict) -> list[dict]:
-    """사용자가 권한을 가진 메뉴의 데이터 도구만 모델에 제공."""
+    """사용자가 권한을 가진 메뉴의 데이터 도구만 모델에 제공. 관리자가 끈 기본 도구는 빼고, 관리자 정의 도구를 더한다."""
+    from . import ai_tools
+
+    cfg = ai_tools.snapshot()
     sc = data_scopes(me)
-    return (TOOLS if sc["price"] else []) + (sale.TOOLS if sc["sale"] else []) + (invt.TOOLS if sc["invt"] else [])
+    base = (TOOLS if sc["price"] else []) + (sale.TOOLS if sc["sale"] else []) + (invt.TOOLS if sc["invt"] else [])
+    out = [_with_admin_note(t, cfg["builtin"].get(t["name"])) for t in base
+           if cfg["builtin"].get(t["name"], {}).get("enabled", True)]
+    pages = set(me.get("pages") or [])
+    out += [ai_tools.tool_schema(c) for c in cfg["custom"] if c["enabled"] and c["page"] in pages]
+    return out
+
+
+def tool_label(name: str) -> str:
+    if name in TOOL_LABELS:
+        return TOOL_LABELS[name]
+    from . import ai_tools
+
+    c = next((c for c in ai_tools.snapshot()["custom"] if c["name"] == name), None)
+    return c["label"] if c else name
 
 
 def run_tool(name: str, inp: Any, me: dict) -> dict:
-    """도구 실행. 모델에 제공하지 않은 도구라도 여기서 한 번 더 권한을 확인한다."""
+    """도구 실행. 모델에 제공하지 않은 도구라도 여기서 한 번 더 권한·사용 여부를 확인한다."""
+    from . import ai_tools
+
     if not isinstance(inp, dict):
         raise ToolInputError("입력은 JSON 객체여야 합니다.")
+    cfg = ai_tools.snapshot()
+    if name in BUILTIN_NAMES and not cfg["builtin"].get(name, {}).get("enabled", True):
+        raise ToolInputError("관리자가 사용 중지한 도구입니다.")
     sc = data_scopes(me)
     if name in _PRICE_TOOL_NAMES:
         if not sc["price"]:
@@ -321,5 +357,15 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
         try:
             return sale.run(name, inp)
         except sale.SaleToolError as ex:
+            raise ToolInputError(str(ex))
+    custom = next((c for c in cfg["custom"] if c["name"] == name), None)
+    if custom:
+        if not custom["enabled"]:
+            raise ToolInputError("관리자가 사용 중지한 도구입니다.")
+        if custom["page"] not in set(me.get("pages") or []):
+            raise ToolInputError("이 사용자는 이 도구에 연결된 메뉴 권한이 없어 조회할 수 없습니다.")
+        try:
+            return ai_tools.run_custom(custom, inp)
+        except ai_tools.ToolArgError as ex:
             raise ToolInputError(str(ex))
     raise ToolInputError(f"알 수 없는 도구: {name}")

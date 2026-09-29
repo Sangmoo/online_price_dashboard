@@ -102,3 +102,20 @@ def test_api_sale_endpoints(client):
     assert c.get("/api/sale-monthly/summary", params={**q, "dim": "season"}).status_code == 200
     r = c.get("/api/admin/logs", params={"level": "WARNING"})
     assert r.status_code == 200 and "logs" in r.json()
+
+
+def test_mv_tool_matches_base_table(oracle):
+    """사전 집계 뷰 도구 결과 = 원본 테이블 직접 집계 (NO_REWRITE 로 뷰 자동 재작성 없이 계산)."""
+    from app import chat_tools as ct
+    from app import chat_tools_sale as cts
+
+    if not cts.mv_state()["usable"]:
+        pytest.skip("집계 뷰가 없거나 최신이 아님")
+    out = ct.run_tool("sum_sales_shop_month", {"ym_from": "202601", "ym_to": "202608", "group_by": ["TEAM_CD"],
+                                               "order_by": "TEAM_CD", "order_dir": "asc", "limit": 200},
+                      {"pages": ["sale_monthly"]})
+    assert out["result"]["source"].startswith("사전 집계 뷰")
+    base = oracle.query(
+        "SELECT /*+ NO_REWRITE */ TEAM_CD, COUNT(*), COUNT(DISTINCT SHOP_ID), SUM(QTY), SUM(REAL_SALE_AMT), SUM(DSCT_AMT) "
+        "FROM T_CLOSE_SALE_BASE WHERE MAKE_YYMM BETWEEN '202601' AND '202608' GROUP BY TEAM_CD ORDER BY TEAM_CD")[1]
+    assert [tuple(r.values()) for r in out["result"]["rows"]] == [tuple(int(x) if not isinstance(x, str) else x for x in r) for r in base]

@@ -12,14 +12,14 @@ import anthropic
 from . import config, logs, store, usage, userdb
 
 _log = logs.get("ai")
-from .chat_tools import TOOL_LABELS, ToolInputError, data_scopes, run_tool, tools_for
+from .chat_tools import BUILTIN_NAMES, ToolInputError, data_scopes, run_tool, tool_label, tools_for
 
 MAX_TOOL_ROUNDS = 10
 MAX_ATTEMPTS = 3  # 서버 혼잡(overloaded) 등 일시 오류 재시도 횟수
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이터 분석 어시스턴트입니다.
-이 서비스의 세 가지 데이터만 다루며, 각 데이터는 전용 조회 도구로만 조회할 수 있습니다.
+이 서비스의 데이터만 다루며, 각 데이터는 전용 조회 도구로만 조회할 수 있습니다.
 
 [A] 온라인 가격 (메뉴: 대시보드, 일자별 상세) — 도구: list_collection_dates, aggregate_prices, search_price_rows
 원천: T_SELECT_ONLINE_MNG_R (온라인 쇼핑몰별 상품 가격 수집 결과)
@@ -35,17 +35,22 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - 실사예정(메모), 업체 예상 비용(기본료·실사예상액, 원), 실사예정일(비어 있으면 '미정'), 비고, 연2회 실사 매장 여부
 - 관리등급, 정산 팀구분(1팀/2팀/미지정), 매니저 성함·전화번호, 매장번호
 
-[C] 월별 매장별 판매 집계 (메뉴: 판매 분석 > 월별 매장별 판매 집계) — 도구: aggregate_sales, search_sales
+[C] 월별 매장별 판매 집계 (메뉴: 판매 분석 > 월별 매장별 판매 집계) — 도구: sum_sales_shop_month, aggregate_sales, search_sales
 원천: T_CLOSE_SALE_BASE (마감 매출 기초 데이터. 한 행 = 판매년월·매장·상품·색상·사이즈 단위 판매)
 - MAKE_YYMM(판매년월), 팀, 매장코드·매장명, 기획년도, 시즌(봄/봄기획/여름/여름기획/가을/가을기획/겨울/겨울기획)
 - 품군, 아이템, 수수료구분, 판매형태(정상/세일 등), 상품·색상·사이즈, 생산형태, 상품구분, 악세사리·온라인 판매 구분
 - 수량, 최초가, 판매단가, 실판단가, 실판금액(원), 할인금액(원), 제조원가(V+, 단가)
 - 판매년월 기간(ym_from~ym_to)은 반드시 지정하며 최대 36개월입니다. 반품은 수량·금액이 음수로 들어 있을 수 있습니다.
+- 월별·매장별·팀별 수량/실판금액/할인금액 합계처럼 판매년월·매장·팀만 쓰는 질문은 sum_sales_shop_month(사전 집계, 매우 빠름)를 먼저 씁니다.
+  시즌·기획년도·품군·아이템·판매형태 등이 조건이나 묶음에 들어가거나 상품 수·원가가 필요할 때만 aggregate_sales 를 씁니다.
 - 매출은 '실판금액 합계'를 기준으로 합니다. 할인율·원가율처럼 도구에 없는 비율은 반환된 합계로 계산하고 계산식을 밝힙니다.
+
+[D] 관리자 정의 조회 도구 — 설명 끝에 '(관리자 정의 조회 도구 …)' 가 붙은 도구
+- 관리자가 이 서비스 데이터 조회용으로 추가한 도구입니다. 도구 설명에 적힌 범위의 질문에 사용하고, 결과 컬럼명 그대로 해석하되 모호하면 그렇다고 밝힙니다.
 
 답변 원칙:
 1. 반드시 도구로 조회한 결과만 근거로 답합니다. 일반 지식, 추측, 외부 정보로 수치를 만들지 않습니다.
-2. 이 서비스의 데이터(A, B, C)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
+2. 이 서비스의 데이터(A, B, C, D)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
 3. 대화마다 [화면 컨텍스트]로 오늘 날짜, 사용자가 보고 있는 화면, 사용자가 조회 권한을 가진 데이터가 주어집니다.
    권한이 없는 데이터는 조회할 수 없으며, 요청받으면 해당 메뉴 권한이 필요하다고 안내합니다.
 4. 질문이 어느 데이터에 관한 것인지 불분명하면 사용자가 보고 있는 화면의 데이터를 우선합니다.
@@ -298,7 +303,7 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                 if block.type != "tool_use":
                     continue
                 yield emit({"type": "tool", "id": block.id, "name": block.name,
-                            "label": TOOL_LABELS.get(block.name, block.name), "input": block.input})
+                            "label": tool_label(block.name), "input": block.input})
                 t0 = time.perf_counter()
                 try:
                     out = run_tool(block.name, block.input, me)
@@ -360,15 +365,18 @@ def _table_title(name: str, inp: dict) -> str:
             gb = ", ".join(inp.get("group_by") or []) or "전체"
             return f"실사계획 집계 ({gb}){cond_s}"
         return f"실사계획 검색{cond_s}"
-    if name in ("aggregate_sales", "search_sales"):
+    if name in ("sum_sales_shop_month", "aggregate_sales", "search_sales"):
         cond = [f"{k}={','.join(v) if isinstance(v, list) else v}" for k, v in inp.items()
                 if k not in ("ym_from", "ym_to", "group_by", "order_by", "order_dir", "limit") and v not in (None, "", [])]
         cond_s = f" · {', '.join(cond)}" if cond else ""
         rng = f"{inp.get('ym_from', '')}~{inp.get('ym_to', '')}"
-        if name == "aggregate_sales":
+        if name in ("aggregate_sales", "sum_sales_shop_month"):
             gb = ", ".join(inp.get("group_by") or []) or "전체"
-            return f"판매 집계 ({gb}) · {rng}{cond_s}"
+            return f"{'판매 합계' if name == 'sum_sales_shop_month' else '판매 집계'} ({gb}) · {rng}{cond_s}"
         return f"판매 행 검색 · {rng}{cond_s}"
+    if name not in BUILTIN_NAMES:  # 관리자 정의 도구
+        args = ", ".join(f"{k}={v}" for k, v in inp.items() if v not in (None, ""))
+        return f"{tool_label(name)}{' · ' + args if args else ''}"
     rng = f"{inp.get('date_from', '')}~{inp.get('date_to', '')}"
     if name == "aggregate_prices":
         gb = ", ".join(inp.get("group_by") or []) or "전체"
