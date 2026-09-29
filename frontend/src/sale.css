@@ -33,3 +33,12 @@
 .export-job .progress { height: 8px; border-radius: 999px; background: rgba(148,163,184,.2); overflow: hidden; }
 .export-job .progress > div { height: 100%; background: var(--primary); border-radius: inherit; transition: width .6s ease; }
 .export-job.done .progress > div { background: #10b981; }
+
+/* 원본 행 / 요약 전환, 요약 화면, 매장 판매 추이 */
+.mode-seg { align-self: flex-start; }
+.mode-seg button { display: inline-flex; align-items: center; gap: 6px; }
+.sale-summary-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; }
+.sale-summary-head .grow { flex: 1; }
+.trend-loading { display: flex; align-items: center; gap: 8px; padding: 18px; color: var(--primary); flex-wrap: wrap; }
+.trend-modal { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.trend-table { max-height: 300px; }

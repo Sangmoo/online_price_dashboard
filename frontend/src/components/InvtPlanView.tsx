@@ -13,10 +13,12 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  TrendingUp,
   X,
 } from 'lucide-react'
 import { invtApi, isoToYmd, ymdToIso, type InvtOptions, type InvtPlan } from '../invtApi'
 import { fmtNum } from '../format'
+import ShopTrendModal from './ShopTrendModal'
 import InvtPlanEditor from './InvtPlanEditor'
 
 type Col = {
@@ -75,6 +77,7 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [editor, setEditor] = useState<{ plan: InvtPlan | null } | null>(null)
   const [datePop, setDatePop] = useState<{ plan: InvtPlan; x: number; y: number } | null>(null)
+  const [trend, setTrend] = useState<InvtPlan | null>(null)
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
   const [exporting, setExporting] = useState(false)
 
@@ -328,10 +331,17 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
                           : undefined
                       }
                     >
-                      <Cell col={c} plan={p} />
+                      {c.key === 'shopId' && p.shopId ? (
+                        <button className="btn-link mono" title="최근 12개월 판매 추이" onClick={() => setTrend(p)}>{p.shopId}</button>
+                      ) : (
+                        <Cell col={c} plan={p} />
+                      )}
                     </td>
                   ))}
                   <td className="center" onDoubleClick={(e) => e.stopPropagation()}>
+                    <button className="icon-btn tiny-visible" title="판매 추이" onClick={() => setTrend(p)}>
+                      <TrendingUp size={14} />
+                    </button>
                     <button className="icon-btn tiny-visible" title="수정" onClick={() => setEditor({ plan: p })}>
                       <Pencil size={14} />
                     </button>
@@ -351,6 +361,14 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
           </table>
         </div>
       </section>
+
+      {trend && (
+        <ShopTrendModal
+          url={`/api/invt-plans/shops/${encodeURIComponent(trend.shopId)}/sales-trend`}
+          title={trend.shopNm ?? trend.shopId}
+          onClose={() => setTrend(null)}
+        />
+      )}
 
       {datePop && <DatePopover pop={datePop} onClose={() => setDatePop(null)} onSave={saveDate} />}
 

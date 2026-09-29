@@ -9,6 +9,7 @@ import {
   LogOut,
   MonitorSmartphone,
   RefreshCw,
+  ScrollText,
   Search,
   ShieldCheck,
   Unlock,
@@ -25,12 +26,13 @@ import {
   type LockInfo,
   type LoginLog,
   type PageKey,
+  type ServerLog,
   type SessionInfo,
   type User,
 } from '../api'
 import { fmtNum } from '../format'
 
-type Tab = 'users' | 'ai' | 'usage' | 'logins' | 'sessions'
+type Tab = 'users' | 'ai' | 'usage' | 'logins' | 'sessions' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -38,6 +40,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
+  { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
 
 export default function AdminView({ me }: { me: User }) {
@@ -63,6 +66,7 @@ export default function AdminView({ me }: { me: User }) {
       {tab === 'usage' && <UsageTab />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
+      {tab === 'serverlogs' && <ServerLogsTab notify={notify} />}
       {toast && <div className={`toast ${toast.error ? 'error' : ''}`}>{toast.error ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
     </div>
   )
@@ -714,6 +718,102 @@ function SessionsTab({ notify }: { notify: Notify }) {
               </tr>
             ))}
             {list.length === 0 && <tr><td colSpan={7} className="empty">접속 중인 세션이 없습니다.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+// ----------------------------------------------------------------------------
+// 서버 로그 (backend/logs/app.log)
+// ----------------------------------------------------------------------------
+const LOG_CATEGORIES: { key: string; label: string }[] = [
+  { key: '', label: '전체' },
+  { key: 'request', label: '요청' },
+  { key: 'sql', label: '느린 쿼리·SQL 오류' },
+  { key: 'export', label: '엑셀 작업' },
+  { key: 'auth', label: '로그인' },
+  { key: 'ai', label: 'AI' },
+  { key: 'app', label: '서버' },
+]
+const LOG_LEVELS = [
+  { key: 'INFO', label: '전체' },
+  { key: 'WARNING', label: '경고 이상' },
+  { key: 'ERROR', label: '오류만' },
+]
+
+function ServerLogsTab({ notify }: { notify: Notify }) {
+  const [level, setLevel] = useState('INFO')
+  const [category, setCategory] = useState('')
+  const [q, setQ] = useState('')
+  const [list, setList] = useState<ServerLog[]>([])
+  const [slowSec, setSlowSec] = useState<number | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState<number | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.admin
+      .logs({ level, category: category || undefined, q: q || undefined })
+      .then((r) => {
+        setList(r.logs)
+        setSlowSec(r.slowSqlSec)
+      })
+      .catch((e) => notify(e.message, true))
+      .finally(() => setLoading(false))
+  }, [level, category, q, notify])
+
+  useEffect(() => {
+    const t = setTimeout(load, 250)
+    return () => clearTimeout(t)
+  }, [load])
+
+  return (
+    <section className="card panel">
+      <div className="panel-head row">
+        <h3>서버 로그</h3>
+        <span className="panel-hint">최근 300건 · 느린 쿼리 기준 {slowSec ?? '-'}초 · 비밀번호·바인드 값은 기록하지 않음</span>
+        <div className="grow" />
+        <div className="search compact">
+          <Search size={15} />
+          <input placeholder="내용 검색 (사용자ID, 경로 등)" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <button className="icon-btn bordered" onClick={load} title="새로고침"><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
+      </div>
+      <div className="log-filters">
+        <div className="chips wrap">
+          {LOG_CATEGORIES.map((c) => (
+            <button key={c.key} className={`chip ${category === c.key ? 'active' : ''}`} onClick={() => setCategory(c.key)}>{c.label}</button>
+          ))}
+        </div>
+        <div className="seg">
+          {LOG_LEVELS.map((l) => (
+            <button key={l.key} className={level === l.key ? 'on' : ''} onClick={() => setLevel(l.key)}>{l.label}</button>
+          ))}
+        </div>
+      </div>
+      <div className="table-wrap tall-ish">
+        <table className="table log-table">
+          <thead>
+            <tr><th>일시</th><th>수준</th><th>분류</th><th>내용</th></tr>
+          </thead>
+          <tbody>
+            {list.map((l, i) => {
+              const multi = l.message.includes('\n')
+              return (
+                <tr key={i} className={`log-${l.level.toLowerCase()} ${multi ? 'clickable' : ''}`} onClick={() => multi && setOpen(open === i ? null : i)}>
+                  <td className="muted mono nowrap">{l.ts}</td>
+                  <td><span className={`status ${l.level === 'ERROR' || l.level === 'CRITICAL' ? 'fail' : l.level === 'WARNING' ? 'warn' : 'ok'}`}>{l.level}</span></td>
+                  <td className="muted">{LOG_CATEGORIES.find((c) => c.key === l.category)?.label ?? l.category}</td>
+                  <td className="log-msg">
+                    {open === i ? <pre>{l.message}</pre> : l.message.split('\n')[0]}
+                    {multi && open !== i && <span className="muted"> (상세 보기)</span>}
+                  </td>
+                </tr>
+              )
+            })}
+            {!loading && list.length === 0 && <tr><td colSpan={4} className="empty">조건에 맞는 기록이 없습니다.</td></tr>}
           </tbody>
         </table>
       </div>

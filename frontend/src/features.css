@@ -225,3 +225,13 @@
 .add-user-form .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
 .add-user-form .form-row > span:first-child { font-weight: 600; font-size: 13px; }
 .add-user-form .form-row .limit-input { max-width: 160px; }
+
+/* 관리자 > 서버 로그 */
+.log-filters { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.log-table td { vertical-align: top; }
+.log-table .nowrap { white-space: nowrap; }
+.log-table .log-msg { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; word-break: break-all; }
+.log-table .log-msg pre { margin: 0; white-space: pre-wrap; font: inherit; }
+.log-table tr.log-error td { background: color-mix(in srgb, #ef4444 7%, transparent); }
+.log-table tr.log-warning td { background: color-mix(in srgb, #f59e0b 7%, transparent); }
+.status.warn { background: color-mix(in srgb, #f59e0b 18%, transparent); color: #b45309; }

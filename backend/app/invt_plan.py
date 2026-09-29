@@ -31,7 +31,7 @@ AREA_REGION = {
     "대전광역시": "충청권", "세종특별자치시": "충청권", "충청북도": "충청권", "충청남도": "충청권",
     "강원특별자치도": "기타", "제주특별자치도": "기타",
 }
-INVT_TYPES = ["교체", "정기", "오픈"]
+INVT_TYPES = ["교체", "정기", "오픈", "폐점"]
 STLM_TEAMS = ["1팀", "2팀"]
 RMK_MAX_BYTES = 200
 
@@ -356,7 +356,7 @@ def shop_detail(shop_id: str) -> dict:
     prev_result = _num(li.get("PREV_INVT_RESULT")) if last_dt_s else None
     notes: list[str] = []
     if prev_type and prev_type not in INVT_TYPES:
-        # 테이블 CHECK 제약(교체/정기/오픈)에 없는 유형(예: 폐점)은 저장할 수 없어 비워 두고 안내
+        # 테이블 CHECK 제약(교체/정기/오픈/폐점)에 없는 유형은 저장할 수 없어 비워 두고 안내
         notes.append(f"전실사유형 '{prev_type}'은(는) 선택 목록({'/'.join(INVT_TYPES)})에 없어 비워 두었습니다.")
         prev_type = None
 

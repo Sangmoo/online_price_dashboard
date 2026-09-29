@@ -1,6 +1,7 @@
 """FastAPI 엔트리포인트."""
 from __future__ import annotations
 
+import time
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
@@ -9,14 +10,21 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import admin, auth, chat_service, config, data_service as ds, invt_plan, sale_monthly, store, usage, userdb
-from .auth import current_user, require_admin, require_page
+from . import logs
+
+logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
+
+from . import admin, auth, chat_service, config, data_service as ds, invt_plan, sale_monthly, store, usage, userdb  # noqa: E402
+from .auth import current_user, require_admin, require_page  # noqa: E402
+
+_log = logs.get("request")
+logs.get("app").info("서버 시작 (port=%s)", config.API_PORT)
 
 store.init()
 sale_monthly.cleanup_exports()  # 재시작 전 남은 엑셀 임시 파일 정리
 _moved = userdb.migrate_from_sqlite(store)  # 1회: 이전 SQLite 사용자/설정 → Oracle
 if _moved:
-    print(f"[migration] 사용자 권한을 Oracle 로 이전했습니다: {', '.join(_moved)}")
+    logs.get("app").info("사용자 권한을 Oracle 로 이전했습니다: %s", ", ".join(_moved))
 
 app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
@@ -31,11 +39,24 @@ app.add_middleware(
 
 @app.middleware("http")
 async def session_header(request: Request, call_next):
-    """인증된 요청이면 연장된 세션 만료시각을 헤더로 알려준다 (프론트 세션 타이머 동기화)."""
-    response = await call_next(request)
+    """인증된 요청이면 연장된 세션 만료시각을 헤더로 알려준다 (프론트 세션 타이머 동기화). API 요청은 1줄씩 로그."""
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        _log.exception("처리 실패 user=%s %s %s", getattr(request.state, "usr_id", "-"), request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": {"message": "서버 오류가 발생했습니다. 잠시 후 다시 시도하세요.",
+                                                                  "code": "SERVER_ERROR"}})
     exp = getattr(request.state, "session_expires", None)
     if exp:
         response.headers["X-Session-Expires"] = str(exp)
+    path = request.url.path
+    if path.startswith("/api/") and path not in ("/api/health", "/api/auth/touch"):
+        sec = time.perf_counter() - start
+        level = 40 if response.status_code >= 500 else 30 if sec >= logs.SLOW_REQUEST_SEC else 20
+        qs = f"?{request.url.query}" if request.url.query else ""
+        _log.log(level, "user=%s %s %s%s %s %.0fms", getattr(request.state, "usr_id", "-"), request.method, path,
+                 qs[:300], response.status_code, sec * 1000)
     return response
 
 
@@ -331,6 +352,12 @@ def admin_sessions(_: dict = Depends(require_admin)):
     return {"sessions": admin.sessions()}
 
 
+@app.get("/api/admin/logs")
+def admin_logs(level: str = "INFO", q: str | None = None, category: str | None = None, limit: int = 300,
+               _: dict = Depends(require_admin)):
+    return {"logs": logs.tail(level, q, category, limit), "slowSqlSec": logs.SLOW_SQL_SEC}
+
+
 @app.delete("/api/admin/sessions/{sid}")
 def admin_kill_session(sid: str, _: dict = Depends(require_admin)):
     admin.kill_session(sid)
@@ -358,6 +385,17 @@ def sale_options(_: dict = Depends(sale_page)):
 def sale_search(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
                 seasons: str | None = None, page: int = 1, total: bool = True, _: dict = Depends(sale_page)):
     return sale_monthly.search(ymFrom, ymTo, shops, planYys, seasons, page, total)
+
+
+@app.get("/api/sale-monthly/summary")
+def sale_summary(ymFrom: str, ymTo: str, dim: str = "month", shops: str | None = None, planYys: str | None = None,
+                 seasons: str | None = None, _: dict = Depends(sale_page)):
+    return sale_monthly.summary(ymFrom, ymTo, shops, planYys, seasons, dim)
+
+
+@app.get("/api/sale-monthly/shops/{shop_id}/trend")
+def sale_shop_trend(shop_id: str, _: dict = Depends(sale_page)):
+    return sale_monthly.shop_trend(shop_id)
 
 
 @app.get("/api/sale-monthly/dsct")
@@ -433,6 +471,12 @@ def invt_shops(q: str, _: dict = Depends(invt_page)):
 @app.get("/api/invt-plans/shops/{shop_id}")
 def invt_shop_detail(shop_id: str, _: dict = Depends(invt_page)):
     return invt_plan.shop_detail(shop_id)
+
+
+@app.get("/api/invt-plans/shops/{shop_id}/sales-trend")
+def invt_shop_trend(shop_id: str, _: dict = Depends(invt_page)):
+    """실사계획 화면의 매장 판매 추이 (실사계획 메뉴 권한으로 해당 매장 월별 합계만 제공)."""
+    return sale_monthly.shop_trend(shop_id)
 
 
 @app.get("/api/invt-plans/shops/{shop_id}/managers")

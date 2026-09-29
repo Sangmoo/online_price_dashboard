@@ -21,8 +21,8 @@ GROUP_COLS = {
     "TEAM_CD": "TEAM_CD",
     "SHOP_ID": "SHOP_ID",
     "PLAN_YY": "PLAN_YY",
-    "SESS_NM": "SESS_NM",
-    "PRDT_GRP_NM": "PRDT_GRP_NM",
+    "SESS_NM": sm.SESS_EXPR,           # 인덱스(IX_04)와 같은 식이어야 인덱스를 쓴다
+    "PRDT_GRP_NM": sm.PRDT_GRP_EXPR,
     "ITEM_NM": "ITEM_NM",
     "CHARGE_CLSBY_NM": "CHARGE_CLSBY_NM",
     "DSCT_CLSBY_NM": "DSCT_CLSBY_NM",
@@ -76,7 +76,7 @@ _FILTER_PROPS: dict[str, Any] = {
     "acc_yn": {"type": "string", "enum": ["Y", "N"], "description": "악세사리 구분"},
     "prdt_cd": {"type": "string", "description": "상품코드 앞부분 일치"},
 }
-_EXACT = {"prdt_grp_nm": "PRDT_GRP_NM", "charge_clsby_nm": "CHARGE_CLSBY_NM", "dsct_clsby_nm": "DSCT_CLSBY_NM",
+_EXACT = {"prdt_grp_nm": sm.PRDT_GRP_EXPR, "charge_clsby_nm": "CHARGE_CLSBY_NM", "dsct_clsby_nm": "DSCT_CLSBY_NM",
           "prdt_clsby_nm": "PRDT_CLSBY_NM", "goods_clsby_nm": "GOODS_CLSBY_NM", "online_sale": "ONLINE_SALE",
           "acc_yn": "ACC_YN"}
 _REQUIRED = ["ym_from", "ym_to"]
@@ -191,7 +191,7 @@ def _where(inp: dict) -> tuple[str, dict]:
     if seasons := _list(inp, "seasons", len(sm.SEASONS)):
         if any(s not in sm.SEASONS for s in seasons):
             raise SaleToolError(f"seasons 는 {sm.SEASONS} 중에서 선택합니다.")
-        _in("SESS_NM", "sess", seasons)
+        _in(sm.SESS_EXPR, "sess", seasons)
     for key, col in (("shop_nm", "SHOP_NM"), ("team_cd", "TEAM_CD"), ("item_nm", "ITEM_NM")):
         if (v := _text(inp, key)) is not None:
             conds.append(f"INSTR({col}, :{key}) > 0")
@@ -232,15 +232,6 @@ def _clean(rows: list[dict]) -> list[dict]:
     return [{k: num(v) for k, v in r.items()} for r in rows]
 
 
-def _shop_names(ids: list[str]) -> dict[str, str]:
-    ids = [i for i in dict.fromkeys(ids) if i]
-    if not ids:
-        return {}
-    binds = {f"s{i}": v for i, v in enumerate(ids)}
-    return dict(db.query(f"SELECT SHOP_ID, SHOP_NM FROM T_SHOP WHERE SHOP_ID IN ({', '.join(':' + k for k in binds)})",
-                         binds)[1])
-
-
 def run(name: str, inp: dict) -> dict:
     if name == "aggregate_sales":
         where, p = _where(inp)
@@ -267,7 +258,7 @@ def run(name: str, inp: dict) -> dict:
         truncated = len(rows) > limit
         rows = rows[:limit]
         if "SHOP_ID" in group_by and rows:  # 매장명은 반환 행만 T_SHOP 에서 붙인다 (집계는 인덱스만 읽도록)
-            names = _shop_names([r["SHOP_ID"] for r in rows])
+            names = sm.shop_names([r["SHOP_ID"] for r in rows])
             rows = [{**{k: v for k, v in r.items() if k in group_by},
                      "SHOP_NM": names.get(r["SHOP_ID"]),
                      **{k: v for k, v in r.items() if k not in group_by}} for r in rows]

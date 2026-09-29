@@ -6,13 +6,16 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
 from fastapi import HTTPException
 
-from . import db
+from . import db, logs
 from .xlsx_stream import XlsxStreamWriter
+
+_log = logs.get("export")
 
 PAGE_SIZE = 100
 MAX_MONTHS = 36                  # 조회 기간 최대 개월 수
@@ -21,6 +24,12 @@ EXPORT_DIR = Path(__file__).resolve().parents[1] / "data" / "exports"   # git �
 EXPORT_KEEP_SEC = 2 * 60 * 60    # 완료된 엑셀 파일 보관 시간 (다시 받기 가능)
 MAX_RUNNING_JOBS = 2             # 서버 전체 동시 생성 작업 수
 WIDTHS = [10, 12, 10, 22, 8, 9, 10, 12, 10, 10, 14, 7, 7, 8, 11, 11, 11, 13, 11, 10, 8, 10, 10, 12]
+
+# 시즌·품군 컬럼은 VARCHAR2(4000) 으로 선언돼 있어 그대로는 복합 인덱스에 넣을 수 없다(ORA-01450, 키 최대 6398바이트).
+# 인덱스 IX_T_CLOSE_SALE_BASE_04 는 아래 식(앞 100바이트)으로 만들어져 있고, Oracle 은 쿼리에 같은 식이 있어야
+# 그 인덱스를 쓰므로 조건·그룹핑에는 반드시 이 식을 사용한다. 실제 값은 최대 20바이트 수준이라 결과는 원래 컬럼과 같다.
+SESS_EXPR = "SUBSTRB(SESS_NM, 1, 100)"
+PRDT_GRP_EXPR = "SUBSTRB(PRDT_GRP_NM, 1, 100)"
 
 # 시즌: 계절 순서 (봄 → 여름 → 가을 → 겨울, 각 계절은 기본 → 기획)
 SEASONS = ["봄", "봄기획", "여름", "여름기획", "가을", "가을기획", "겨울", "겨울기획"]
@@ -103,7 +112,7 @@ def _where(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, se
     if sess_list:
         if any(s not in SEASONS for s in sess_list):
             _bad("시즌이 올바르지 않습니다.")
-        _in("SESS_NM", "sess", sess_list, len(SEASONS))
+        _in(SESS_EXPR, "sess", sess_list, len(SEASONS))
     return " AND ".join(conds), p
 
 
@@ -188,6 +197,127 @@ def dsct_total(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None
 
 
 # ----------------------------------------------------------------------------
+# 요약: 월·매장·기획년도·시즌·품군별 합계 + 전년 동기 비교
+# ----------------------------------------------------------------------------
+SUMMARY_DIMS = {
+    "month": ("MAKE_YYMM", "판매년월"),
+    "shop": ("SHOP_ID", "매장"),
+    "plan_yy": ("PLAN_YY", "기획년도"),
+    "season": (SESS_EXPR, "시즌"),
+    "prdt_grp": (PRDT_GRP_EXPR, "품군"),
+}
+
+
+def _shift_ym(ym: str, months: int) -> str:
+    y, m = divmod(int(ym[:4]) * 12 + int(ym[4:6]) - 1 + months, 12)
+    return f"{y:04d}{m + 1:02d}"
+
+
+def shop_names(ids: list[str]) -> dict[str, str]:
+    ids = [i for i in dict.fromkeys(ids) if i]
+    out: dict[str, str] = {}
+    for i in range(0, len(ids), 500):
+        binds = {f"s{j}": v for j, v in enumerate(ids[i:i + 500])}
+        out.update(db.query(f"SELECT SHOP_ID, SHOP_NM FROM T_SHOP WHERE SHOP_ID IN ({', '.join(':' + k for k in binds)})",
+                            binds)[1])
+    return out
+
+
+def _group(where: str, p: dict, col: str) -> dict:
+    sql = (f"SELECT {col} AS K, COUNT(DISTINCT SHOP_ID), NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0), NVL(SUM(DSCT_AMT), 0) "
+           f"FROM T_CLOSE_SALE_BASE WHERE {where} GROUP BY {col}")
+    return _cached(f"group:{col}", where, p, lambda: {
+        k: (int(s), int(q), int(a), int(d)) for k, s, q, a, d in db.query(sql, p)[1]
+    })
+
+
+def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None, dim: str) -> dict:
+    """전년 동기 = 판매년월을 12개월 앞당기고, 기획년도 조건이 있으면 기획년도도 1년 앞당긴 같은 조건.
+    (예: 2026-01~08 · 2026 기획 ↔ 2025-01~08 · 2025 기획)"""
+    if dim not in SUMMARY_DIMS:
+        _bad(f"요약 기준은 {list(SUMMARY_DIMS)} 중 하나입니다.")
+    col, label = SUMMARY_DIMS[dim]
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+    prev_from, prev_to = _shift_ym(p["ym_from"], -12), _shift_ym(p["ym_to"], -12)
+    prev_yys = ",".join(str(int(y) - 1) for y in _split(plan_yys)) or None
+    pwhere, pp = _where(prev_from, prev_to, shops, prev_yys, seasons)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        cur_f, prev_f = ex.submit(_group, where, p, col), ex.submit(_group, pwhere, pp, col)
+        cur, prev = cur_f.result(), prev_f.result()
+
+    # 전년 행과 맞출 키: 월은 +12개월, 기획년도는 +1년, 나머지는 같은 값
+    def to_cur(k):
+        if k is None:
+            return None
+        if dim == "month":
+            return _shift_ym(k, 12)
+        if dim == "plan_yy" and str(k).isdigit():
+            return str(int(k) + 1)
+        return k
+
+    prev_by = {to_cur(k): v for k, v in prev.items()}
+    keys = list(dict.fromkeys(list(cur) + ([k for k in prev_by if k not in cur] if dim != "month" else [])))
+    if dim == "month":
+        keys = sorted(cur)
+    names = shop_names([k for k in keys if k]) if dim == "shop" else {}
+    total_amt = sum(v[2] for v in cur.values()) or 1
+    rows = []
+    for k in keys:
+        s, q, a, d = cur.get(k, (0, 0, 0, 0))
+        ps, pq, pa, pd = prev_by.get(k, (0, 0, 0, 0))
+        rows.append({
+            "key": k, "label": (f"{k[:4]}-{k[4:]}" if dim == "month" and k else names.get(k, k) if dim == "shop" else k) or "(없음)",
+            "shopNm": names.get(k) if dim == "shop" else None,
+            "shops": s, "qty": q, "amt": a, "dsct": d, "share": round(a * 100 / total_amt, 1),
+            "prevKey": (_shift_ym(k, -12) if dim == "month" and k else str(int(k) - 1) if dim == "plan_yy" and k and str(k).isdigit() else k),
+            "prevQty": pq, "prevAmt": pa,
+            "growth": round((a / pa - 1) * 100, 1) if pa else None,
+        })
+    if dim == "month":
+        rows.sort(key=lambda r: r["key"] or "")
+    elif dim == "season":
+        rows.sort(key=lambda r: SEASONS.index(r["key"]) if r["key"] in SEASONS else 99)
+    elif dim == "plan_yy":
+        rows.sort(key=lambda r: r["key"] or "", reverse=True)
+    else:
+        rows.sort(key=lambda r: r["amt"], reverse=True)
+    tot = lambda src, i: sum(v[i] for v in src.values())  # noqa: E731
+    return {
+        "dim": dim, "dimLabel": label, "rows": rows,
+        "period": {"from": p["ym_from"], "to": p["ym_to"], "prevFrom": prev_from, "prevTo": prev_to,
+                   "planYys": _split(plan_yys), "prevPlanYys": _split(prev_yys)},
+        "total": {"qty": tot(cur, 1), "amt": tot(cur, 2), "dsct": tot(cur, 3),
+                  "prevQty": tot(prev, 1), "prevAmt": tot(prev, 2),
+                  "growth": round((tot(cur, 2) / tot(prev, 2) - 1) * 100, 1) if tot(prev, 2) else None},
+    }
+
+
+def shop_trend(shop_id: str, months: int = 12) -> dict:
+    """매장 최근 N개월(지난달까지) 월별 판매와 전년 같은 달 비교. (판매년월, 매장코드) 인덱스로 빠르게 조회."""
+    shop_id = (shop_id or "").strip().upper()
+    if not shop_id or len(shop_id) > 6:
+        _bad("매장코드가 올바르지 않습니다.")
+    last = _shift_ym(date.today().strftime("%Y%m"), -1)
+    first = _shift_ym(last, -(months - 1))
+    rows = db.query(
+        "SELECT MAKE_YYMM, NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0) FROM T_CLOSE_SALE_BASE "
+        "WHERE MAKE_YYMM BETWEEN :f AND :t AND SHOP_ID = :shop GROUP BY MAKE_YYMM",
+        {"f": _shift_ym(first, -12), "t": last, "shop": shop_id})[1]
+    by = {ym: (int(q), int(a)) for ym, q, a in rows}
+    out, ym = [], first
+    for _ in range(months):
+        q, a = by.get(ym, (0, 0))
+        pq, pa = by.get(_shift_ym(ym, -12), (0, 0))
+        out.append({"ym": ym, "qty": q, "amt": a, "prevQty": pq, "prevAmt": pa,
+                    "growth": round((a / pa - 1) * 100, 1) if pa else None})
+        ym = _shift_ym(ym, 1)
+    amt, pamt = sum(r["amt"] for r in out), sum(r["prevAmt"] for r in out)
+    return {"shopId": shop_id, "shopNm": shop_names([shop_id]).get(shop_id), "from": first, "to": last, "months": out,
+            "total": {"qty": sum(r["qty"] for r in out), "amt": amt, "prevQty": sum(r["prevQty"] for r in out),
+                      "prevAmt": pamt, "growth": round((amt / pamt - 1) * 100, 1) if pamt else None}}
+
+
+# ----------------------------------------------------------------------------
 # 전체 엑셀: 백그라운드 작업 (행 수 제한 없음, 시트당 SHEET_ROWS 행)
 # 36개월이면 1,400만 행 이상이라 요청 하나로 기다릴 수 없으므로 작업을 만들고 진행률을 조회한다.
 # 월 단위로 나눠 조회해 DB 정렬 부담을 줄이고, 결과 순서는 판매년월 → 매장코드 순 그대로 유지된다.
@@ -257,6 +387,7 @@ def start_export(usr_id: str, ym_from: str, ym_to: str, shops: str | None, plan_
     }
     with _jobs_lock:
         _jobs[jid] = job
+    _log.info("엑셀 시작 job=%s user=%s rows=%d cond=%s", jid[:8], usr_id, total, job["cond"])
     threading.Thread(target=_run_export, args=(job, where, p), daemon=True, name=f"export-{jid[:8]}").start()
     return _public(job)
 
@@ -284,8 +415,11 @@ def _run_export(job: dict, where: str, p: dict) -> None:
     except Exception as ex:  # noqa: BLE001 - 작업 실패는 상태로 전달
         job["status"] = "error"
         job["error"] = f"엑셀 생성 중 오류가 발생했습니다: {ex}"
+        _log.exception("엑셀 실패 job=%s user=%s", job["id"][:8], job["usr_id"])
     finally:
         job["finished"] = time.time()
+        _log.info("엑셀 %s job=%s user=%s rows=%d/%d %.0fs size=%s", job["status"], job["id"][:8], job["usr_id"],
+                  job["written"], job["total"], job["finished"] - job["started"], job["file_size"])
         if job["status"] != "done":
             try:
                 os.remove(job["path"])
@@ -342,4 +476,5 @@ def options() -> dict:
         "pageSize": PAGE_SIZE,
         "maxMonths": MAX_MONTHS,
         "sheetRows": SHEET_ROWS,
+        "summaryDims": [{"key": k, "label": v[1]} for k, v in SUMMARY_DIMS.items()],
     }

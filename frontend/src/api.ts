@@ -186,6 +186,8 @@ export const api = {
     unlock: (id: string) => sendJson('DELETE', `/api/admin/locks/${encodeURIComponent(id)}`),
     sessions: () => getJson<{ sessions: SessionInfo[] }>('/api/admin/sessions'),
     killSession: (sid: string) => sendJson('DELETE', `/api/admin/sessions/${sid}`),
+    logs: (p: { level?: string; q?: string; category?: string }) =>
+      getJson<{ logs: ServerLog[]; slowSqlSec: number }>(`/api/admin/logs?${qs(p)}`),
   },
 }
 
@@ -205,6 +207,7 @@ export type AdminUser = Pick<User, 'id' | 'name' | 'role' | 'superAdmin' | 'acti
   todayCostUsd: number
   online: boolean
 }
+export type ServerLog = { ts: string; level: string; category: string; message: string }
 export type AdminUserUpdate = {
   role: 'ADMIN' | 'USER'
   pages: PageKey[]

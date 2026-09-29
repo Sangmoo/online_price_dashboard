@@ -9,7 +9,9 @@ from typing import Iterator
 
 import anthropic
 
-from . import config, store, usage, userdb
+from . import config, logs, store, usage, userdb
+
+_log = logs.get("ai")
 from .chat_tools import TOOL_LABELS, ToolInputError, data_scopes, run_tool, tools_for
 
 MAX_TOOL_ROUNDS = 10
@@ -29,7 +31,7 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 [B] 매장 재고 실사계획 (메뉴: 데이터 관리 > 매장 재고 실사계획) — 도구: aggregate_invt_plans, search_invt_plans
 원천: T_SHOP_INVT_PLAN (매장별 재고 실사 계획. 삭제된 계획은 제외됨)
 - 매장코드·브랜드·유통·매장명, 전년/당년 매출(백만원)·증감율, 주소·지역(시도)·권역
-- 최종실사일, 전실사유형(교체/정기/오픈)·전실사결과, 경과일(최종실사일부터 오늘까지 일수), 재고 수량(등록일 기준)
+- 최종실사일, 전실사유형(교체/정기/오픈/폐점)·전실사결과, 경과일(최종실사일부터 오늘까지 일수), 재고 수량(등록일 기준)
 - 실사예정(메모), 업체 예상 비용(기본료·실사예상액, 원), 실사예정일(비어 있으면 '미정'), 비고, 연2회 실사 매장 여부
 - 관리등급, 정산 팀구분(1팀/2팀/미지정), 매니저 성함·전화번호, 매장번호
 
@@ -223,6 +225,7 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
     if not blocked and not tools:
         blocked = "AI가 조회할 수 있는 메뉴 권한이 없습니다. 관리자에게 메뉴 권한을 요청하세요."
     if blocked:
+        _log.info("질문 차단 user=%s 사유=%s", usr_id, blocked)
         yield _sse({"type": "error", "message": blocked, "code": "LIMIT"})
         yield _sse({"type": "usage", **usage.usage_summary(me)})
         yield _sse({"type": "done"})
@@ -258,6 +261,10 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
     _save(conv_id, messages, display)  # 질문 즉시 기록 (중간에 연결이 끊겨도 남도록)
 
     client = _client()
+    started = time.perf_counter()
+    cost_before = usage.today_usage(usr_id)["costUsd"]
+    _log.info("질문 user=%s conv=%s model=%s effort=%s view=%s len=%d", usr_id, conv_id, model, effort,
+              (ctx or {}).get("view", "-"), len(text))
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             final = yield from _stream_round(client, dict(
@@ -292,17 +299,23 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                     continue
                 yield emit({"type": "tool", "id": block.id, "name": block.name,
                             "label": TOOL_LABELS.get(block.name, block.name), "input": block.input})
+                t0 = time.perf_counter()
                 try:
                     out = run_tool(block.name, block.input, me)
+                    _log.info("도구 %s user=%s %.1fs 입력=%s", block.name, usr_id, time.perf_counter() - t0,
+                              json.dumps(block.input, ensure_ascii=False, default=str)[:500])
                     content, is_error = json.dumps(out["result"], ensure_ascii=False, default=str), False
                     if out.get("table") and out["table"]["rows"]:
                         yield emit({"type": "table", "id": block.id,
                                     "title": _table_title(block.name, block.input), **out["table"]})
                     yield emit({"type": "tool_done", "id": block.id, "ok": True})
                 except ToolInputError as ex:
+                    _log.info("도구 입력 오류 %s user=%s: %s", block.name, usr_id, ex)
                     content, is_error = f"입력 오류: {ex}", True
                     yield emit({"type": "tool_done", "id": block.id, "ok": False})
                 except Exception as ex:  # DB 오류 등은 모델에 알려 재시도/안내하게 함
+                    _log.exception("도구 실패 %s user=%s 입력=%s", block.name, usr_id,
+                                   json.dumps(block.input, ensure_ascii=False, default=str)[:500])
                     content, is_error = f"조회 실패: {ex}", True
                     yield emit({"type": "tool_done", "id": block.id, "ok": False})
                 results.append({"type": "tool_result", "tool_use_id": block.id,
@@ -318,6 +331,7 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
         else:
             yield emit({"type": "notice", "message": "조회 단계가 너무 많아 중단했습니다. 질문을 나눠서 해 주세요."})
     except (anthropic.APIStatusError, anthropic.APIConnectionError) as ex:
+        _log.error("Claude API 오류 user=%s conv=%s answered=%s: %s", usr_id, conv_id, answered, str(ex)[:300])
         del messages[checkpoint:]
         if not answered:  # 답변을 전혀 받지 못한 질문은 일일 질문 수에서 제외
             usage.cancel_question(question_id)
@@ -330,6 +344,8 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
         ):
             messages.pop()
         _save(conv_id, messages, display)
+        _log.info("답변 완료 user=%s conv=%s %.1fs 비용=$%.4f answered=%s", usr_id, conv_id, time.perf_counter() - started,
+                  usage.today_usage(usr_id)["costUsd"] - cost_before, answered)
 
     yield _sse({"type": "usage", **usage.usage_summary(me)})
     yield _sse({"type": "done"})

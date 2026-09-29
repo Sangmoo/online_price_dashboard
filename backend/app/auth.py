@@ -9,7 +9,9 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from . import config, db, store, userdb
+from . import config, db, logs, store, userdb
+
+_log = logs.get("auth")
 
 SESSION_COOKIE = "opd_session"
 SESSION_TTL = 60 * 60          # 1시간 (사용 시마다 연장)
@@ -87,8 +89,9 @@ def _lock_state(usr_id: str) -> dict:
     return store.row("SELECT * FROM login_attempts WHERE usr_id=?", (usr_id,)) or {"fail_count": 0, "locked_until": 0}
 
 
-def _log(usr_id: str, success: bool, reason: str, ip: str | None):
+def _record(usr_id: str, success: bool, reason: str, ip: str | None):
     store.execute("INSERT INTO login_log(usr_id, success, reason, ip) VALUES(?,?,?,?)", (usr_id, int(success), reason, ip))
+    (_log.info if success else _log.warning)("로그인 %s user=%s ip=%s", reason, usr_id, ip)
 
 
 def _verify_oracle(usr_id: str, password: str) -> dict | None:
@@ -128,7 +131,7 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
                ON CONFLICT(usr_id) DO UPDATE SET fail_count=excluded.fail_count, locked_until=excluded.locked_until""",
             (usr_id, 0 if locked_until else fails, locked_until),
         )
-        _log(usr_id, False, "LOCKED" if locked_until else "BAD_CREDENTIALS", ip)
+        _record(usr_id, False, "LOCKED" if locked_until else "BAD_CREDENTIALS", ip)
         if locked_until:
             raise AuthError(429, f"{MSG_BAD_LOGIN} 로그인 {MAX_FAILS}회 실패로 1분간 로그인할 수 없습니다.",
                             "LOCKED", retryAfter=LOCK_SECONDS)
@@ -137,11 +140,11 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
     store.execute("DELETE FROM login_attempts WHERE usr_id=?", (usr_id,))
     u = registered_user(found["USR_ID"], found["USR_NM"])
     if u is None:
-        _log(usr_id, False, "NOT_REGISTERED", ip)
+        _record(usr_id, False, "NOT_REGISTERED", ip)
         raise AuthError(403, MSG_NOT_REGISTERED, "NOT_REGISTERED")
     me = effective(u)
     if not me["active"]:
-        _log(usr_id, False, "INACTIVE", ip)
+        _record(usr_id, False, "INACTIVE", ip)
         raise AuthError(403, "사용이 중지된 계정입니다. 관리자에게 문의하세요.", "INACTIVE")
 
     token = secrets.token_urlsafe(32)
@@ -151,7 +154,7 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
         (token, secrets.token_hex(8), usr_id, now, now, now + SESSION_TTL, ip, (user_agent or "")[:200]),
     )
     userdb.touch_login(usr_id)
-    _log(usr_id, True, "OK", ip)
+    _record(usr_id, True, "OK", ip)
     return token, me
 
 
@@ -182,6 +185,7 @@ def current_user(request: Request) -> dict:
     expires = now + SESSION_TTL
     store.execute("UPDATE sessions SET last_seen=?, expires_at=? WHERE token=?", (now, expires, token))
     request.state.session_expires = int(expires)
+    request.state.usr_id = me["id"]
     me["sessionExpiresAt"] = int(expires)
     return me
 

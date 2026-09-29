@@ -7,6 +7,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Download,
+  LayoutList,
+  PieChart,
   Loader2,
   RotateCcw,
   Search,
@@ -16,9 +18,18 @@ import {
 import { ApiError, apiFetch } from '../api'
 import type { ShopRow } from '../invtApi'
 import { fmtNum } from '../format'
+import SaleSummary from './SaleSummary'
 
 type Col = { key: string; label: string; type: 'text' | 'int' }
-type Options = { seasons: string[]; planYears: string[]; columns: Col[]; pageSize: number; maxMonths: number; sheetRows: number }
+type Options = {
+  seasons: string[]
+  planYears: string[]
+  columns: Col[]
+  pageSize: number
+  maxMonths: number
+  sheetRows: number
+  summaryDims: { key: string; label: string }[]
+}
 type ExportJob = {
   id: string
   status: 'running' | 'done' | 'error' | 'cancelled'
@@ -70,6 +81,7 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picker, setPicker] = useState(false)
+  const [mode, setMode] = useState<'rows' | 'summary'>('rows')
   const [job, setJob] = useState<ExportJob | null>(null)
   const [starting, setStarting] = useState(false)
   const downloaded = useRef<string | null>(null)
@@ -229,6 +241,17 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
 
   const reset = () => setCond({ ymFrom: lastMonth(), ymTo: lastMonth(), shops: [], planYys: [], seasons: [] })
   const cols = opts?.columns ?? []
+  const summaryCond = useMemo(
+    () =>
+      applied && {
+        ymFrom: applied.ymFrom,
+        ymTo: applied.ymTo,
+        shops: applied.shops.map((s) => s.id).join(','),
+        planYys: applied.planYys.join(','),
+        seasons: applied.seasons.join(','),
+      },
+    [applied],
+  )
 
   return (
     <div className="stack">
@@ -313,6 +336,13 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
         </section>
       )}
 
+      {applied && (
+        <div className="seg big mode-seg">
+          <button className={mode === 'rows' ? 'on' : ''} onClick={() => setMode('rows')}><LayoutList size={14} /> 원본 행</button>
+          <button className={mode === 'summary' ? 'on' : ''} onClick={() => setMode('summary')}><PieChart size={14} /> 요약 · 전년 비교</button>
+        </div>
+      )}
+
       {error && <div className="alert error">{error}</div>}
       {job && job.status !== 'cancelled' && job.status !== 'error' && (
         <section className={`card export-job ${job.status}`}>
@@ -336,7 +366,9 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
         </section>
       )}
 
-      <section className="card grid-card">
+      {mode === 'summary' && summaryCond && <SaleSummary cond={summaryCond} dims={opts?.summaryDims ?? []} />}
+
+      <section className="card grid-card" hidden={mode !== 'rows'}>
         <div className={`table-wrap tall sale-wrap ${loading ? 'is-loading' : ''}`}>
           <table className="table sale-table">
             <thead>
