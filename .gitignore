@@ -35,3 +35,7 @@ Thumbs.db
 
 # ===== 서비스 로컬 데이터 (세션/사용량/대화기록) =====
 backend/data/
+
+# ===== 화면 자동 테스트 결과 =====
+frontend/test-results/
+frontend/playwright-report/

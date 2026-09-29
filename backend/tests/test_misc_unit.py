@@ -17,9 +17,10 @@ def _names(pages):
 def test_tools_follow_menu_permissions():
     assert _names([]) == set()
     assert _names(["dashboard"]) == {"list_collection_dates", "aggregate_prices", "search_price_rows"}
-    assert _names(["sale_monthly"]) == {"sum_sales_shop_month", "aggregate_sales", "search_sales"}
+    assert _names(["sale_monthly"]) == {"get_sales_dashboard", "sum_sales_shop_month", "aggregate_sales", "search_sales"}
+    assert _names(["sale_dashboard"]) == {"get_sales_dashboard", "sum_sales_shop_month"}  # 판매 행 조회 도구는 없음
     assert _names(["invt_plan"]) == {"aggregate_invt_plans", "search_invt_plans"}
-    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 8
+    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 9
 
 
 @pytest.mark.parametrize("name,inp", [
@@ -220,7 +221,8 @@ def test_mv_tool_validation(mv, inp, msg):
 
 
 def test_mv_tool_listed_first_for_simple_totals():
-    assert ct.tools_for({"pages": ["sale_monthly"]})[0]["name"] == "sum_sales_shop_month"
+    names = [t["name"] for t in ct.tools_for({"pages": ["sale_monthly"]})]
+    assert names.index("get_sales_dashboard") < names.index("sum_sales_shop_month") < names.index("aggregate_sales")
 
 
 def test_mv_cost_metric_uses_view_only_with_cost_column(mv):

@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from . import ai_tools, appdb, audit, auth, config, db, mv_refresh, usage, userdb
+from . import ai_tools, appdb, audit, auth, config, db, logs, mv_refresh, usage, userdb
 
 MODELS = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -329,6 +329,7 @@ def get_settings() -> dict:
         "efforts": EFFORTS,
         "envModel": config.ANTHROPIC_MODEL,
         "envEffort": config.ANTHROPIC_EFFORT,
+        "logKeepDays": s.get("log_keep_days") or logs.DEFAULT_KEEP_DAYS,
     }
 
 
@@ -354,11 +355,18 @@ def save_settings(body: dict, admin: dict) -> dict:
         if body["effort"] not in EFFORTS:
             _bad("지원하지 않는 effort 입니다.")
         values["effort"] = body["effort"]
+    if "logKeepDays" in body:
+        v = body["logKeepDays"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 365:
+            _bad("로그 보관 기간은 1~365일입니다.")
+        values["log_keep_days"] = v
     before = userdb.get_settings()
     userdb.save_settings(values, by=admin["id"])
+    if "log_keep_days" in values:
+        logs.cleanup(values["log_keep_days"])
     after = userdb.get_settings()
     rename = {"ai_enabled": "ai_enabled_global"}
-    audit.record(admin, "SETTING_UPDATE", "AI 설정", {rename.get(k, k): before.get(k) for k in values},
+    audit.record(admin, "SETTING_UPDATE", "운영 설정" if set(values) == {"log_keep_days"} else "AI 설정", {rename.get(k, k): before.get(k) for k in values},
                  {rename.get(k, k): after.get(k) for k in values})
     return get_settings()
 

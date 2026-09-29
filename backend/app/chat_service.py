@@ -9,7 +9,7 @@ from typing import Iterator
 
 import anthropic
 
-from . import appdb, config, logs, usage, userdb
+from . import appdb, config, logs, tool_limits, usage, userdb
 
 _log = logs.get("ai")
 from .chat_tools import BUILTIN_NAMES, ToolInputError, data_scopes, run_tool, tool_label, tools_for
@@ -35,8 +35,14 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - 실사예정(메모), 업체 예상 비용(기본료·실사예상액, 원), 실사예정일(비어 있으면 '미정'), 비고, 연2회 실사 매장 여부
 - 관리등급, 정산 팀구분(1팀/2팀/미지정), 매니저 성함·전화번호, 매장번호
 
-[C] 월별 매장별 판매 집계 (메뉴: 판매 분석 > 월별 매장별 판매 집계) — 도구: sum_sales_shop_month, aggregate_sales, search_sales
+[C] 판매 (메뉴: 판매 분석 > 판매 현황, 월별 매장별 판매 집계) — 도구: get_sales_dashboard, sum_sales_shop_month, aggregate_sales, search_sales
 원천: T_CLOSE_SALE_BASE (마감 매출 기초 데이터. 한 행 = 판매년월·매장·상품·색상·사이즈 단위 판매)
+- '이번 달/지난달/특정 월·기간 판매 현황', 전년 동기·전월·직전 기간 대비, 연 누계, 목표 대비 달성률, 브랜드별·팀별 실적,
+  매출 상위·성장·하락·목표 미달 매장, 원가율 요약은 get_sales_dashboard 를 먼저 씁니다. 판매 현황 화면과 같은 계산이라 숫자가
+  화면과 일치합니다. 필요한 sections 만 요청하고, 기간(ym_from~ym)·비교 기준(compare)·브랜드(brand)는 질문에 맞게 줍니다.
+  브랜드는 팀 이름에서 나옵니다(팀 쉬즈N팀 = 브랜드 쉬즈미스, 리스트N팀 = 리스트, 시스티나N팀 = 시스티나, 각 1~5팀). 브랜드명은 '쉬즈미스'로 씁니다. 성장·하락 순위는 비교 기간 월평균 1천만원 이상·폐점 제외 기준,
+  목표는 매장별 판매목표(T_SHOP_SELL_MGOAL)를 매장의 판매 브랜드로 모은 값이고 달성률은 목표가 있는 매장 매출 기준임을 밝힙니다.
+- 판매 현황 메뉴만 있는 사용자는 get_sales_dashboard 와 sum_sales_shop_month 만 쓸 수 있습니다(판매 행 조회는 월별 매장별 판매 집계 권한 필요).
 - MAKE_YYMM(판매년월), 팀, 매장코드·매장명, 기획년도, 시즌(봄/봄기획/여름/여름기획/가을/가을기획/겨울/겨울기획)
 - 품군, 아이템, 수수료구분, 판매형태(정상/세일 등), 상품·색상·사이즈, 생산형태, 상품구분, 악세사리·온라인 판매 구분
 - 수량, 최초가, 판매단가, 실판단가, 실판금액(원), 할인금액(원), 제조원가(V+, 단가)
@@ -113,7 +119,8 @@ def _sse(event: dict) -> str:
 def _context_text(ctx: dict | None, me: dict) -> str:
     sc = data_scopes(me)
     allowed = [n for n, ok in (("온라인 가격(A)", sc["price"]), ("매장 재고 실사계획(B)", sc["invt"]),
-                               ("월별 매장별 판매 집계(C)", sc["sale"])) if ok]
+                               ("판매 현황(C)", sc["dash"] or sc["sale"]),
+                               ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"])) if ok]
     parts = [f"오늘 날짜: {date.today():%Y%m%d}", f"조회 권한이 있는 데이터: {', '.join(allowed) or '없음'}"]
     if ctx:
         view = ctx.get("view")
@@ -133,7 +140,10 @@ def _context_text(ctx: dict | None, me: dict) -> str:
                 cond.append(f"검색어 '{ctx['q']}'")
             parts.append("보고 있는 화면: 매장 재고 실사계획" + (f" (조건: {', '.join(cond)})" if cond else " (조건 없음)"))
         elif view == "sale_dashboard" and ctx.get("ym"):
-            parts.append(f"보고 있는 화면: 판매 현황 대시보드 ({ctx['ym']} 기준, 전년 동월·전월 비교)")
+            cond = [f"기간 {ctx.get('period') or ctx['ym']}", f"비교 {ctx.get('compare') or '전년 동기'}"]
+            if ctx.get("brand"):
+                cond.append(f"브랜드 {ctx['brand']}")
+            parts.append("보고 있는 화면: 판매 현황 대시보드 (" + ", ".join(cond) + ")")
         elif view == "sale_monthly" and ctx.get("ymFrom"):
             cond = [f"판매년월 {ctx['ymFrom'].replace('-', '')}~{ctx.get('ymTo', '').replace('-', '')}"]
             if ctx.get("shops"):
@@ -305,8 +315,11 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                               json.dumps(block.input, ensure_ascii=False, default=str)[:500])
                     content, is_error = json.dumps(out["result"], ensure_ascii=False, default=str), False
                     if out.get("table") and out["table"]["rows"]:
+                        extra = {}
+                        if block.name in FULL_EXPORT_TOOLS and _truncated(out):  # 잘린 표 → 화면에서 전체 결과 엑셀 가능
+                            extra = {"truncated": True, "source": {"tool": block.name, "input": block.input}}
                         yield emit({"type": "table", "id": block.id,
-                                    "title": _table_title(block.name, block.input), **out["table"]})
+                                    "title": _table_title(block.name, block.input), **out["table"], **extra})
                     yield emit({"type": "tool_done", "id": block.id, "ok": True})
                 except ToolInputError as ex:
                     _log.info("도구 입력 오류 %s user=%s: %s", block.name, usr_id, ex)
@@ -350,6 +363,30 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
     yield _sse({"type": "done"})
 
 
+# 행 수 제한(limit)이 있는 기본 조회 도구: AI 답변 표가 잘렸으면 같은 조건으로 전체(최대 10만 행)를 엑셀로 받을 수 있다
+FULL_EXPORT_TOOLS = {"aggregate_prices", "search_price_rows", "aggregate_sales", "search_sales", "sum_sales_shop_month",
+                     "aggregate_invt_plans", "search_invt_plans"}
+
+
+def _truncated(out: dict) -> bool:
+    t = out["table"]
+    return bool(out["result"].get("truncated")) or int(t.get("totalMatched") or 0) > len(t["rows"])
+
+
+def export_full(tool: str, inp: dict, me: dict) -> dict:
+    """AI 답변 표의 전체 결과: 같은 도구·같은 조건을 행 수 상한만 늘려 다시 조회한다 (권한 확인은 run_tool 이 동일하게).
+    반환: {"columns", "rows", "capped"(상한에 걸려 일부만인지)}"""
+    if tool not in FULL_EXPORT_TOOLS or not isinstance(inp, dict):
+        raise ToolInputError("전체 엑셀을 지원하지 않는 도구입니다.")
+    t0 = time.perf_counter()
+    with tool_limits.full_export() as n:
+        out = run_tool(tool, {**inp, "limit": n}, me)
+    table = out.get("table") or {"columns": [], "rows": []}
+    capped = _truncated(out) if table["rows"] else False
+    _log.info("AI 표 전체 엑셀 %s user=%s %d행 %.1fs", tool, me.get("id"), len(table["rows"]), time.perf_counter() - t0)
+    return {"columns": table["columns"], "rows": table["rows"], "capped": capped, "max": n}
+
+
 def _table_title(name: str, inp: dict) -> str:
     if name in ("aggregate_invt_plans", "search_invt_plans"):
         cond = [f"{k}={v}" for k, v in inp.items()
@@ -359,6 +396,13 @@ def _table_title(name: str, inp: dict) -> str:
             gb = ", ".join(inp.get("group_by") or []) or "전체"
             return f"실사계획 집계 ({gb}){cond_s}"
         return f"실사계획 검색{cond_s}"
+    if name == "get_sales_dashboard":
+        ym = inp.get("ym") or "최근 마감 월"
+        if inp.get("ym_from"):
+            ym = f"{inp['ym_from']}~{ym}"
+        secs = ", ".join(inp.get("sections") or []) or "요약"
+        extra = [v for v in (inp.get("brand"), {"prev": "직전 기간 대비", "custom": "직접 선택 비교"}.get(inp.get("compare") or "")) if v]
+        return f"판매 현황 · {ym}{' · ' + ', '.join(extra) if extra else ''} · {secs}"
     if name in ("sum_sales_shop_month", "aggregate_sales", "search_sales"):
         cond = [f"{k}={','.join(v) if isinstance(v, list) else v}" for k, v in inp.items()
                 if k not in ("ym_from", "ym_to", "group_by", "order_by", "order_dir", "limit") and v not in (None, "", [])]

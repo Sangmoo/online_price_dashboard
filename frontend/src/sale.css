@@ -50,7 +50,10 @@
 .sd-delta > span:first-child { display: inline-flex; align-items: center; gap: 1px; font-weight: 700; }
 .sd-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
 .sd-grid.three { grid-template-columns: repeat(3, 1fr); }
+.sd-grid.two { grid-template-columns: repeat(2, 1fr); }
+.sd-filter .filter-label { width: auto; margin-left: 6px; }
+.sd-filter .toolbar-title { margin-right: 6px; }
 .sd-grid > * { min-width: 0; }
 .sd-table { font-size: 13px; }
 .sd-table td, .sd-table th { padding: 6px 8px; }
-@media (max-width: 1100px) { .sd-grid, .sd-grid.three { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .sd-grid, .sd-grid.three, .sd-grid.two { grid-template-columns: 1fr; } }

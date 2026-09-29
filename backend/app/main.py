@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from urllib.parse import quote
 
@@ -15,7 +16,7 @@ from . import logs
 
 logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
 
-from . import admin, appdb, auth, chat_service, config, data_service as ds, invt_plan, sale_dashboard, sale_monthly, store, usage, userdb  # noqa: E402
+from . import admin, appdb, auth, chat_service, config, data_service as ds, invt_plan, mv_refresh, sale_dashboard, sale_monthly, server_status, store, usage, userdb  # noqa: E402
 from .auth import current_user, require_admin, require_page  # noqa: E402
 
 _log = logs.get("request")
@@ -34,6 +35,23 @@ try:  # 새 메뉴 '판매 현황' 을 판매 집계 메뉴가 있는 기존 사
         logs.get("app").info("판매 현황 메뉴를 부여했습니다: %s", ", ".join(_granted))
 except Exception:  # noqa: BLE001
     logs.get("app").exception("판매 현황 메뉴 1회 부여 실패")
+
+
+
+def _housekeeping() -> None:
+    """6시간마다: 보관 기간이 지난 로그 파일·엑셀 임시 파일 정리 (보관 일수는 관리자 설정, 기본 7일)"""
+    time.sleep(30)
+    while True:
+        try:
+            logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
+            sale_monthly.cleanup_exports()
+        except Exception:  # noqa: BLE001
+            logs.get("app").exception("정리 작업 실패")
+        time.sleep(6 * 3600)
+
+
+if os.getenv("ERP_NO_AUTO_MIGRATE") != "1":
+    threading.Thread(target=_housekeeping, daemon=True, name="housekeeping").start()
 
 app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
@@ -92,7 +110,7 @@ def _xlsx_response(content: bytes, filename: str) -> Response:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "started": server_status.STARTED_AT}  # deploy.bat 이 새로 뜬 서버인지 확인
 
 
 # ----------------------------------------------------------------------------
@@ -226,6 +244,26 @@ def export_table(body: TableExport, _: dict = Depends(current_user)):
     return _xlsx_response(content, f"{safe}.xlsx")
 
 
+class FullExport(BaseModel):
+    tool: str
+    input: dict
+    title: str = "AI 조회결과"
+
+
+@app.post("/api/chat/export-full")
+def chat_export_full(body: FullExport, user: dict = Depends(current_user)):
+    """AI 답변 표가 잘렸을 때 같은 조건의 전체 결과(최대 10만 행) 엑셀"""
+    try:
+        t = chat_service.export_full(body.tool, body.input, user)
+    except chat_service.ToolInputError as ex:
+        raise HTTPException(status_code=400, detail={"message": str(ex), "code": "BAD_REQUEST"})
+    cols = [(c["key"], c.get("label", c["key"])) for c in t["columns"] if "key" in c and c["key"] != "URL"]
+    content = ds.write_xlsx("조회결과", cols, t["rows"])
+    safe = "".join(ch for ch in body.title if ch not in '\\/:*?"<>|').strip()[:80] or "AI 조회결과"
+    suffix = f"_상위{t['max']:,}행" if t["capped"] else ""
+    return _xlsx_response(content, f"{safe}{suffix}.xlsx")
+
+
 # ----------------------------------------------------------------------------
 # AI 대화 (사용자별 기록 / 한도)
 # ----------------------------------------------------------------------------
@@ -347,6 +385,21 @@ def admin_data_status(_: dict = Depends(require_admin)):
     return admin.data_status()
 
 
+@app.get("/api/admin/server-status")
+def admin_server_status(days: int = 7, _: dict = Depends(require_admin)):
+    return server_status.status(days, userdb.get_settings().get("log_keep_days"))
+
+
+@app.post("/api/admin/logs/cleanup")
+def admin_logs_cleanup(_: dict = Depends(require_admin)):
+    return logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
+
+
+@app.get("/api/admin/data-freshness")
+def admin_data_freshness(_: dict = Depends(require_admin)):
+    return mv_refresh.freshness()
+
+
 @app.get("/api/admin/data-status/refresh")
 def admin_mv_refresh_state(_: dict = Depends(require_admin)):
     from . import mv_refresh
@@ -445,9 +498,22 @@ sale_page = require_page("sale_monthly")
 sale_dash_page = require_page("sale_dashboard")
 
 
+def _dash_args(ym: str | None = Query(None), from_: str | None = Query(None, alias="from"), cmp: str | None = None,
+               cmpFrom: str | None = None, cmpTo: str | None = None, brand: str | None = None) -> dict:  # noqa: N803
+    return {"ym": ym, "frm": from_, "cmp": cmp, "cmp_from": cmpFrom, "cmp_to": cmpTo, "brand": brand}
+
+
 @app.get("/api/sale-dashboard")
-def sale_dashboard_get(ym: str | None = None, _: dict = Depends(sale_dash_page)):
-    return sale_dashboard.dashboard(ym)
+def sale_dashboard_get(args: dict = Depends(_dash_args), _: dict = Depends(sale_dash_page)):
+    return sale_dashboard.dashboard(**args)
+
+
+@app.get("/api/sale-dashboard/export")
+def sale_dashboard_export(args: dict = Depends(_dash_args), _: dict = Depends(sale_dash_page)):
+    from . import sale_dashboard_report as rpt
+
+    d = sale_dashboard.dashboard(**args, full=True)
+    return _xlsx_response(rpt.build(d), rpt.filename(d))
 
 
 @app.get("/api/sale-dashboard/shops/{shop_id}/trend")

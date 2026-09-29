@@ -182,6 +182,9 @@ export const api = {
     savePermissions: (changes: { id: string; pages: PageKey[] }[]) => sendJson<{ users: AdminUser[] }>('PUT', '/api/admin/permissions', { changes }),
     aiTools: () => getJson<AiToolsOverview>('/api/admin/ai-tools'),
     dataStatus: () => getJson<DataStatus>('/api/admin/data-status'),
+    dataFreshness: () => getJson<DataFreshness>('/api/admin/data-freshness'),
+    serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
+    cleanupLogs: () => sendJson<{ deleted: string[]; freedBytes: number; keepDays: number }>('POST', '/api/admin/logs/cleanup'),
     refreshState: () => getJson<{ refresh: MvRefresh }>('/api/admin/data-status/refresh'),
     refreshMv: () => sendJson<{ refresh: MvRefresh }>('POST', '/api/admin/data-status/refresh'),
     saveBuiltinTool: (name: string, body: { enabled: boolean; extraDesc: string; description?: string }) =>
@@ -267,6 +270,7 @@ export type DataStatus = {
   behind: boolean
   refresh: MvRefresh
 }
+export type DataFreshness = { behind: boolean; mvMaxMonth: string | null; baseMaxMonth: string | null; lastRefresh: string | null; refreshing: boolean }
 export type MvRefresh = {
   status: 'idle' | 'running' | 'done' | 'error'
   started: string | null
@@ -296,6 +300,21 @@ export type AdminSettings = {
   efforts: string[]
   envModel: string
   envEffort: string
+  logKeepDays: number
+}
+export type ServerStatus = {
+  days: number
+  since: string
+  server: { startedAt: string; uptimeSec: number; pid: number }
+  pool: { opened: number; busy: number; max: number } | null
+  requests: { count: number; errors5xx: number; slow: number; avgMs: number | null; p95Ms: number | null; slowSec: number; slowPaths: { path: string; count: number; maxMs: number }[] }
+  slowSql: { count: number; thresholdSec: number; top: { sql: string; count: number; avgSec: number; maxSec: number; last: string }[] }
+  sqlErrors: { count: number; recent: { ts: string; error: string; sql: string }[] }
+  errors: { count: number; recent: { ts: string; category: string; message: string }[] }
+  daily: { day: string; requests: number; errors: number; slowSql: number }[]
+  supervisor: { running: boolean; crashRestarts: number; deployRestarts: number; events: { ts: string; kind: 'crash' | 'deploy' | 'service'; message: string }[] }
+  disk: { logsBytes: number; exportsBytes: number; freeBytes: number; totalBytes: number; logFiles: number; oldestLog: string | null }
+  keepDays: number | null
 }
 export type UsageRow = { questions: number; calls: number; input_tokens: number; output_tokens: number; cost: number }
 export type AdminUsage = {
@@ -345,13 +364,22 @@ export function exportTable(title: string, columns: Column[], rows: Row[]) {
   )
 }
 
+/** AI 답변 표가 잘렸을 때: 같은 도구·조건으로 전체 결과(최대 10만 행)를 서버에서 다시 조회해 엑셀로 */
+export function exportFullTable(title: string, source: { tool: string; input: Record<string, unknown> }) {
+  return downloadFile(
+    '/api/chat/export-full',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, ...source }) },
+    `${title}.xlsx`,
+  )
+}
+
 export type ChatEvent =
   | { type: 'conversation'; id: string; title: string }
   | { type: 'text_start' }
   | { type: 'text'; text: string }
   | { type: 'tool'; id: string; name: string; label: string; input: unknown }
   | { type: 'tool_done'; id: string; ok: boolean }
-  | { type: 'table'; id: string; title: string; columns: Column[]; rows: Row[]; totalMatched?: number }
+  | { type: 'table'; id: string; title: string; columns: Column[]; rows: Row[]; totalMatched?: number; truncated?: boolean; source?: { tool: string; input: Record<string, unknown> } }
   | { type: 'notice'; message: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'usage' } & Usage

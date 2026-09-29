@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import {
   BarChart3,
   ChartLine,
   ClipboardList,
   Clock,
+  DatabaseZap,
   Home,
   Loader2,
   LogOut,
@@ -15,20 +16,43 @@ import {
   Table2,
   TrendingDown,
 } from 'lucide-react'
-import { api, SESSION_EXPIRED_EVENT, SESSION_EXTENDED_EVENT, type DateInfo, type PageKey, type User } from './api'
+import { api, SESSION_EXPIRED_EVENT, SESSION_EXTENDED_EVENT, type DataFreshness, type DateInfo, type PageKey, type User } from './api'
 import { addDays } from './format'
-import DashboardView from './components/DashboardView'
-import DetailView, { type DetailState } from './components/DetailView'
-import ChatWidget from './components/ChatWidget'
+import type { DetailState } from './components/DetailView'
 import LoginView from './components/LoginView'
-import AdminView from './components/AdminView'
-import InvtPlanView from './components/InvtPlanView'
-import SaleMonthlyView from './components/SaleMonthlyView'
-import SaleDashboardView from './components/SaleDashboardView'
+import type { Tab as AdminTab } from './components/AdminView'
+
+// 메뉴별 화면은 처음 열 때 내려받는다 (첫 접속 파일 크기 축소). 로그인 화면만 기본 파일에 포함.
+// 배포(deploy.bat)로 파일 이름이 바뀐 뒤 예전 화면에서 메뉴를 열면 옛 파일이 없어 실패한다 → 한 번만 새로고침해 새 화면을 받는다.
+const RELOAD_KEY = 'chunk-reload-at'
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function lazyView<T extends ComponentType<any>>(load: () => Promise<{ default: T }>) {
+  return lazy(() =>
+    load().catch((err) => {
+      let last = 0
+      try {
+        last = Number(sessionStorage.getItem(RELOAD_KEY) || 0)
+        if (Date.now() - last > 30_000) sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
+      } catch {
+        /* storage 사용 불가 */
+      }
+      if (Date.now() - last > 30_000) window.location.reload()
+      throw err
+    }),
+  )
+}
+const DashboardView = lazyView(() => import('./components/DashboardView'))
+const DetailView = lazyView(() => import('./components/DetailView'))
+const ChatWidget = lazyView(() => import('./components/ChatWidget'))
+const AdminView = lazyView(() => import('./components/AdminView'))
+const InvtPlanView = lazyView(() => import('./components/InvtPlanView'))
+const SaleMonthlyView = lazyView(() => import('./components/SaleMonthlyView'))
+const SaleDashboardView = lazyView(() => import('./components/SaleDashboardView'))
 
 type Theme = 'light' | 'dark'
 
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000 // 화면 조작 시 세션 연장 호출 최소 간격
+const FRESHNESS_INTERVAL_MS = 10 * 60 * 1000 // 관리자: 새 월 마감 데이터 확인 주기 (서버는 1분 캐시)
 const WARN_BEFORE_SEC = 5 * 60 // 만료 5분 전 경고
 
 function readStorage(key: string) {
@@ -104,6 +128,7 @@ function writeUrl(params: Record<string, string | number | undefined | null>) {
   if (next !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, '', next)
 }
 
+const fmtYm = (v: string | null) => (v ? `${v.slice(0, 4)}-${v.slice(4)}` : '-')
 const fmtRemain = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
 
 export default function App() {
@@ -192,6 +217,21 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const lastTouch = useRef(0)
+  const [freshness, setFreshness] = useState<DataFreshness | null>(null)
+  const [adminTab, setAdminTab] = useState<{ tab: AdminTab; nonce: number } | null>(null)
+  const isAdmin = user.pages.includes('admin')
+
+  // 관리자: 원본에 사전 집계 뷰보다 새로운 마감 월이 들어오면 상단 배너로 갱신을 알린다
+  useEffect(() => {
+    if (!isAdmin) return
+    const check = () => api.admin.dataFreshness().then(setFreshness).catch(() => undefined)
+    check()
+    const t = setInterval(check, FRESHNESS_INTERVAL_MS)
+    return () => clearInterval(t)
+  }, [isAdmin])
+  useEffect(() => {
+    if (isAdmin && view === 'admin') api.admin.dataFreshness().then(setFreshness).catch(() => undefined)
+  }, [isAdmin, view])
 
   useEffect(() => writeStorage('sidebar', collapsed ? 'collapsed' : 'expanded'), [collapsed])
 
@@ -389,7 +429,22 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
           </div>
         )}
 
+        {freshness?.behind && (
+          <div className="fresh-warn">
+            <DatabaseZap size={15} />
+            {freshness.refreshing
+              ? '사전 집계 뷰를 갱신하는 중입니다. 끝나면 판매 현황·AI 에 새 마감 월이 바로 반영됩니다.'
+              : `새 마감 월 ${fmtYm(freshness.baseMaxMonth)} 데이터가 원본에 들어왔습니다. 사전 집계 뷰(현재 ${fmtYm(freshness.mvMaxMonth)})를 갱신해 주세요.`}
+            {!freshness.refreshing && (
+              <button className="btn-link" onClick={() => { setAdminTab({ tab: 'aitools', nonce: Date.now() }); setView('admin') }}>
+                갱신하러 가기
+              </button>
+            )}
+          </div>
+        )}
+
         <main className="container">
+          <Suspense fallback={<div className="skeleton-page" />}>
           {datesError && <div className="alert error">수집일 목록을 불러오지 못했습니다: {datesError}</div>}
           {!view && <div className="empty-state">접근 가능한 페이지가 없습니다. 관리자에게 권한을 요청하세요.</div>}
           {range && user.pages.includes('dashboard') && (
@@ -421,12 +476,17 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </div>
           )}
           {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
-          {view === 'admin' && user.pages.includes('admin') && <AdminView me={user} />}
+          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} />}
           {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
+          </Suspense>
         </main>
       </div>
 
-      {user.ai.enabled && <ChatWidget user={user} context={chatContext} />}
+      {user.ai.enabled && (
+        <Suspense fallback={null}>
+          <ChatWidget user={user} context={chatContext} />
+        </Suspense>
+      )}
     </div>
   )
 }

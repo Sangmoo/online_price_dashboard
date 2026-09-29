@@ -59,6 +59,11 @@
   background: rgba(245, 158, 11, 0.13); color: #b45309; border-bottom: 1px solid rgba(245, 158, 11, 0.3);
 }
 :root[data-theme='dark'] .session-warn { color: #fcd34d; }
+.fresh-warn {
+  display: flex; align-items: center; gap: 8px; justify-content: center; padding: 9px 16px; font-size: 13px; font-weight: 600;
+  background: rgba(99, 102, 241, 0.1); color: #4338ca; border-bottom: 1px solid rgba(99, 102, 241, 0.28);
+}
+:root[data-theme='dark'] .fresh-warn { color: #c7d2fe; }
 .btn-link { border: 0; background: none; color: var(--primary); font-weight: 700; padding: 0; display: inline-flex; align-items: center; gap: 3px; font-size: inherit; }
 .btn-link:hover { text-decoration: underline; }
 .empty-state { padding: 80px 20px; text-align: center; color: var(--muted); font-size: 15px; }
@@ -306,3 +311,12 @@
   .tool-textarea.size-xl { min-height: 260px; }
   .tool-textarea.size-sql { min-height: 220px; }
 }
+
+/* 관리자 > 서버 상태 */
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.status-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; }
+.status-card.warn { border-color: rgba(245, 158, 11, 0.55); background: rgba(245, 158, 11, 0.06); }
+.status-value { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.keep-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.keep-row label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.keep-row .small-num { width: 80px; height: 34px; }

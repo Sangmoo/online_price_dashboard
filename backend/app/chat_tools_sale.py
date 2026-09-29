@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from . import config, db
+from . import tool_limits
 from . import sale_monthly as sm
 
 TABLE = "T_CLOSE_SALE_BASE"
@@ -313,6 +314,35 @@ def _ym(inp: dict, name: str) -> str:
     return v
 
 
+NARROW_MAX_SHOPS = 500
+
+
+def _narrow_by_shop_name(conds: list[str], p: dict, f: str, t: str) -> None:
+    """매장명 부분 일치(INSTR) 조건을 빠르게: 사전 집계 뷰에서 이름이 맞는 매장코드를 먼저 찾아
+    (판매년월 목록, 매장코드) 조건을 덧붙인다 → 원본 인덱스를 매장 단위로 바로 찾는다 (36개월 기준 30초 → 1초 안팎).
+
+    결과는 같다: 뷰가 최신(FRESH)이고 요청 기간이 뷰에 모두 있을 때만 쓰며(뷰 = 원본의 월·매장·매장명 조합),
+    INSTR 조건도 그대로 두어 같은 행만 남는다. 뷰가 오래됐거나 매장이 너무 많으면 기존 방식(INSTR 만)으로 조회한다."""
+    st = mv_state()
+    if not (st["usable"] and st["mv_max"] and t <= st["mv_max"]):
+        return
+    ids = [r[0] for r in db.query(
+        f"SELECT DISTINCT SHOP_ID FROM {MV_NAME} WHERE MAKE_YYMM BETWEEN :f AND :t AND INSTR(SHOP_NM, :v) > 0",
+        {"f": f, "t": t, "v": p["shop_nm"]})[1]]
+    if len(ids) > NARROW_MAX_SHOPS:
+        return
+    if not ids:
+        conds.append("1 = 0")  # 이름이 맞는 매장이 없음
+        return
+    months = sm._month_list(f, t)
+    mb = {f"nym{i}": m for i, m in enumerate(months)}
+    sb = {f"nshop{i}": s for i, s in enumerate(ids)}
+    conds.append(f"MAKE_YYMM IN ({', '.join(':' + k for k in mb)})")
+    conds.append(f"SHOP_ID IN ({', '.join(':' + k for k in sb)})")
+    p.update(mb)
+    p.update(sb)
+
+
 def _where(inp: dict) -> tuple[str, dict]:
     f, t = _ym(inp, "ym_from"), _ym(inp, "ym_to")
     if f > t:
@@ -340,6 +370,8 @@ def _where(inp: dict) -> tuple[str, dict]:
         if (v := _text(inp, key)) is not None:
             conds.append(f"INSTR({col}, :{key}) > 0")
             p[key] = v
+    if "shop_nm" in p:
+        _narrow_by_shop_name(conds, p, f, t)
     for key, col in _EXACT.items():
         if (v := _text(inp, key)) is not None:
             allowed = _FILTER_PROPS[key].get("enum")
@@ -357,7 +389,7 @@ def _limit(inp: dict, default: int) -> int:
     v = inp.get("limit", default)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise SaleToolError("limit 는 정수여야 합니다.")
-    return max(1, min(int(v), MAX_LIMIT))
+    return max(1, min(int(v), tool_limits.cap(MAX_LIMIT)))  # 전체 엑셀일 때만 상한 확대
 
 
 def _dir(inp: dict, default: str) -> str:

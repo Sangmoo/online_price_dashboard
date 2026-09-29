@@ -40,7 +40,7 @@ def _clear_caches() -> None:
     from . import sale_dashboard, sale_monthly
 
     cts._mv_state = None
-    sale_dashboard._cache.clear()
+    sale_dashboard.clear_cache()
     with sale_monthly._stats_lock:
         sale_monthly._stats_cache.clear()
 
@@ -91,3 +91,20 @@ def _run(admin: dict) -> None:
                            "elapsedSec": int(time.time() - (_state["started"] or time.time()))})
         _log.exception("사전 집계 뷰 갱신 실패")
         audit.record(admin, "MV_REFRESH", _mv_name(), summary=f"사전 집계 뷰 갱신 실패: {msg[:200]}")
+
+
+def freshness() -> dict:
+    """새 월 마감 알림 (관리자 화면 상단 배너).
+
+    원본에 뷰보다 새로운 판매년월이 들어왔으면 behind=True. 뷰 상태 조회(chat_tools_sale.mv_state)의 60초 캐시를 그대로
+    쓰므로 접속자 수와 관계없이 DB 조회는 1분에 한 번 이하다 (인덱스 최대값 조회 + 딕셔너리 1행, 수 ms).
+    """
+    from . import chat_tools_sale as cts
+
+    st = cts.mv_state()
+    return {
+        "behind": bool(st["base_max"] and st["mv_max"] and st["base_max"] > st["mv_max"]),
+        "mvMaxMonth": st["mv_max"], "baseMaxMonth": st["base_max"],
+        "lastRefresh": st["last_refresh"].strftime("%Y-%m-%d %H:%M:%S") if st["last_refresh"] else None,
+        "refreshing": _state["status"] == "running",
+    }

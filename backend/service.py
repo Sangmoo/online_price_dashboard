@@ -4,6 +4,7 @@ service_install.bat 이 Windows 작업 스케줄러에 'PC 시작 시 실행'으
 - 서버(run.py)를 창 없이 띄우고, 종료되면 자동으로 다시 띄운다 (연속 실패 시 대기 시간을 늘림).
 - 30초마다 /api/health 를 확인해 3번 연속 응답이 없으면(약 1분 30초) 멈춘 것으로 보고 강제 종료 후 다시 띄운다.
 - backend/data/service.stop 파일이 생기면(service_stop.bat) 서버를 끄고 종료한다.
+- backend/data/service.restart 파일이 생기면(deploy.bat) 서버만 다시 띄운다 (관리자 권한 없이 새 코드 반영).
 - 기록: backend/logs/service.log (감시 기록), backend/logs/server-console.log (서버 출력)
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ BASE = Path(__file__).resolve().parent
 DATA = BASE / "data"
 LOGS = BASE / "logs"
 STOP_FILE = DATA / "service.stop"
+RESTART_FILE = DATA / "service.restart"
 PID_FILE = DATA / "service.pid"
 CHILD_PID_FILE = DATA / "server.pid"
 
@@ -71,6 +73,7 @@ def main() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     log = _setup_log()
     STOP_FILE.unlink(missing_ok=True)
+    RESTART_FILE.unlink(missing_ok=True)
     PID_FILE.write_text(str(os.getpid()))
     port = _port()
     log.info("감시 시작 (pid=%s, port=%s)", os.getpid(), port)
@@ -95,6 +98,10 @@ def main() -> None:
             if STOP_FILE.exists():
                 reason = "stop"
                 break
+            if RESTART_FILE.exists():
+                RESTART_FILE.unlink(missing_ok=True)
+                reason = "restart"
+                break
             code = child.poll()
             if code is not None:
                 reason = f"종료됨(code={code})"
@@ -117,6 +124,11 @@ def main() -> None:
         if reason == "stop":
             log.info("중지 요청으로 서버를 종료했습니다.")
             break
+        if reason == "restart":
+            log.info("재시작 요청으로 서버를 다시 시작합니다 (배포).")
+            time.sleep(2)  # 포트 반환 대기
+            backoff = 5
+            continue
         ran = time.time() - started
         backoff = 5 if ran > 300 else min(backoff * 2, 120)  # 5분 이상 잘 돌았으면 대기 초기화, 계속 죽으면 늘림
         log.error("서버 재시작 예정: %s, %s초 실행, %s초 후 다시 시작 (server-console.log 확인)", reason, int(ran), backoff)

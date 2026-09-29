@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from . import db
+from . import tool_limits
 from . import invt_plan as ip
 
 TABLE = ip.TABLE
@@ -241,7 +242,7 @@ def _limit(inp: dict, default: int) -> int:
     v = inp.get("limit", default)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise InvtToolError("limit 는 정수여야 합니다.")
-    return max(1, min(int(v), MAX_LIMIT))
+    return max(1, min(int(v), tool_limits.cap(MAX_LIMIT)))  # 전체 엑셀일 때만 상한 확대
 
 
 def _dir(inp: dict) -> str:

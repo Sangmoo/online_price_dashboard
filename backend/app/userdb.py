@@ -23,6 +23,7 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "default_daily_cost_usd": ("DEFAULT_DAY_COST_LMT", "float"),
     "model": ("AI_MODEL", "str"),
     "effort": ("AI_EFFORT", "str"),
+    "log_keep_days": ("LOG_KEEP_DAYS", "int"),
 }
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
@@ -30,6 +31,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_daily_cost_usd": 2.0,
     "model": None,
     "effort": None,
+    "log_keep_days": 7,
 }
 
 _lock = threading.Lock()

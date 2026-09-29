@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import {
   api,
+  exportFullTable,
   exportTable,
   streamChat,
   type ChatEvent,
@@ -40,7 +41,16 @@ import { compact, fmtNum } from '../format'
 type Part =
   | { kind: 'text'; text: string }
   | { kind: 'tool'; id: string; label: string; status: 'running' | 'ok' | 'fail' }
-  | { kind: 'table'; id: string; title: string; columns: Column[]; rows: Row[]; totalMatched?: number }
+  | {
+      kind: 'table'
+      id: string
+      title: string
+      columns: Column[]
+      rows: Row[]
+      totalMatched?: number
+      truncated?: boolean
+      source?: { tool: string; input: Record<string, unknown> } // 잘린 표: 전체 결과 엑셀용
+    }
   | { kind: 'notice'; text: string; error?: boolean }
 
 type Message = { role: 'user'; text: string } | { role: 'assistant'; parts: Part[]; streaming?: boolean }
@@ -60,7 +70,14 @@ const SALE_SUGGESTIONS = [
   '최근 12개월 월별 수량과 실판금액 추이를 보여줘',
   '지난달 시즌별 판매 수량과 실판금액을 정리해줘',
 ]
-const RAW_KEYS = new Set(['ONLINE_ID', 'DT', 'INS_DAY', 'PLAN_ID', 'MAKE_YYMM', 'PLAN_YY'])
+const SALE_DASH_SUGGESTIONS = [
+  '지난달 판매 현황을 전년 동월과 비교해서 요약해줘',
+  '올해 누계 실판금액과 원가율을 전년과 비교해줘',
+  '지난달 브랜드별·팀별 목표 달성률을 정리해줘',
+  '올해 1월부터 지난달까지 목표 달성률이 낮은 매장을 알려줘',
+  '지난달 전년 대비 많이 하락한 매장과 이유가 될 만한 점을 알려줘',
+]
+const RAW_KEYS = new Set(['ONLINE_ID', 'DT', 'INS_DAY', 'PLAN_ID', 'MAKE_YYMM', 'PLAN_YY', 'ym', 'rank'])
 
 export default function ChatWidget({ user, context }: { user: User; context: Record<string, string> }) {
   const [open, setOpen] = useState(false)
@@ -108,9 +125,11 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
     const price = user.pages.includes('dashboard') || user.pages.includes('detail') ? PRICE_SUGGESTIONS : []
     const invt = user.pages.includes('invt_plan') ? INVT_SUGGESTIONS : []
     const sale = user.pages.includes('sale_monthly') ? SALE_SUGGESTIONS : []
-    if (context.view === 'invt_plan') return [...invt, ...sale, ...price].slice(0, 4)
-    if (context.view === 'sale_monthly') return [...sale, ...invt, ...price].slice(0, 4)
-    return [...price, ...sale, ...invt].slice(0, 4)
+    const dash = user.pages.includes('sale_dashboard') || user.pages.includes('sale_monthly') ? SALE_DASH_SUGGESTIONS : []
+    if (context.view === 'invt_plan') return [...invt, ...dash, ...sale, ...price].slice(0, 4)
+    if (context.view === 'sale_dashboard') return [...dash, ...sale, ...invt, ...price].slice(0, 4)
+    if (context.view === 'sale_monthly') return [...sale, ...dash, ...invt, ...price].slice(0, 4)
+    return [...price, ...dash, ...sale, ...invt].slice(0, 4)
   }, [user.pages, context.view])
 
   const updateLast = (fn: (parts: Part[]) => Part[], streaming = true) =>
@@ -143,7 +162,7 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
         updateLast((p) => p.map((x) => (x.kind === 'tool' && x.id === e.id ? { ...x, status: e.ok ? 'ok' : 'fail' } : x)))
         break
       case 'table':
-        updateLast((p) => [...p, { kind: 'table', id: e.id, title: e.title, columns: e.columns, rows: e.rows, totalMatched: e.totalMatched }])
+        updateLast((p) => [...p, { kind: 'table', id: e.id, title: e.title, columns: e.columns, rows: e.rows, totalMatched: e.totalMatched, truncated: e.truncated, source: e.source }])
         break
       case 'notice':
         updateLast((p) => [...p, { kind: 'notice', text: e.message }])
@@ -411,6 +430,8 @@ function TableCard({ part }: { part: Extract<Part, { kind: 'table' }> }) {
   const [mode, setMode] = useState<'table' | 'chart'>('table')
   const [expanded, setExpanded] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingFull, setSavingFull] = useState(false)
+  const [fullError, setFullError] = useState<string | null>(null)
   const cols = part.columns.filter((c) => c.key !== 'URL')
   const rows = expanded ? part.rows : part.rows.slice(0, 5)
 
@@ -436,6 +457,20 @@ function TableCard({ part }: { part: Extract<Part, { kind: 'table' }> }) {
     }
   }
 
+  const saveFull = async () => {
+    if (!part.source) return
+    setSavingFull(true)
+    setFullError(null)
+    try {
+      await exportFullTable(part.title, part.source)
+    } catch (e) {
+      setFullError((e as Error).message)
+    } finally {
+      setSavingFull(false)
+    }
+  }
+  const fullLabel = part.totalMatched !== undefined ? `전체 ${fmtNum(Math.min(part.totalMatched, 100_000))}행` : '전체'
+
   return (
     <div className="data-card">
       <div className="data-card-head">
@@ -453,7 +488,13 @@ function TableCard({ part }: { part: Extract<Part, { kind: 'table' }> }) {
         <button className="mini-btn" onClick={save} disabled={saving}>
           {saving ? <Loader2 size={12} className="spin" /> : <Download size={12} />} 엑셀
         </button>
+        {part.source && (
+          <button className="mini-btn" onClick={saveFull} disabled={savingFull} title="AI 에게 보인 일부가 아니라, 같은 조건의 전체 결과(최대 10만 행)를 다시 조회해 엑셀로 받습니다.">
+            {savingFull ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {fullLabel} 엑셀
+          </button>
+        )}
       </div>
+      {fullError && <div className="notice error">{fullError}</div>}
 
       {mode === 'chart' && canChart ? (
         <ResultChart part={part} categoryCol={categoryCol!} metric={metric!} metrics={metrics} onMetric={setMetric} />

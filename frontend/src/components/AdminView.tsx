@@ -12,6 +12,7 @@ import {
   MonitorSmartphone,
   RefreshCw,
   ScrollText,
+  Server,
   Wrench,
   Search,
   ShieldCheck,
@@ -38,8 +39,9 @@ import { fmtNum } from '../format'
 import AiToolsTab from './admin/AiToolsTab'
 import AuditTab from './admin/AuditTab'
 import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
+import ServerStatusTab from './admin/ServerStatusTab'
 
-type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'audit' | 'serverlogs'
+export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'audit' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -50,11 +52,12 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
   { key: 'audit', label: '변경 이력', icon: History },
+  { key: 'status', label: '서버 상태', icon: Server },
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
 
-export default function AdminView({ me }: { me: User }) {
-  const [tab, setTab] = useState<Tab>('users')
+export default function AdminView({ me, initialTab }: { me: User; initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'users')
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
 
   const notify = useCallback((text: string, error = false) => {
@@ -79,6 +82,7 @@ export default function AdminView({ me }: { me: User }) {
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
       {tab === 'audit' && <AuditTab notify={notify} />}
+      {tab === 'status' && <ServerStatusTab notify={notify} />}
       {tab === 'serverlogs' && <ServerLogsTab notify={notify} />}
       {toast && <div className={`toast ${toast.error ? 'error' : ''}`}>{toast.error ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
     </div>

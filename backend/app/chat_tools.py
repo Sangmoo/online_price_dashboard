@@ -10,6 +10,7 @@ from typing import Any
 
 from . import data_service as ds
 from . import db
+from . import tool_limits
 
 TABLE = ds.TABLE
 DC_RATE_SQL = ds.DC_RATE_SQL
@@ -184,7 +185,7 @@ def _limit(inp: dict, default: int) -> int:
     v = inp.get("limit", default)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise ToolInputError("limit 는 정수여야 합니다.")
-    return max(1, min(int(v), MAX_LIMIT))
+    return max(1, min(int(v), tool_limits.cap(MAX_LIMIT)))  # 전체 엑셀일 때만 상한 확대
 
 
 def _order_dir(inp: dict) -> str:
@@ -275,31 +276,39 @@ def _run_price_tool(name: str, inp: Any) -> dict:
 # ----------------------------------------------------------------------------
 # 도구 레지스트리 (메뉴 권한 연동)
 # ----------------------------------------------------------------------------
+from . import chat_tools_dashboard as dash  # noqa: E402
 from . import chat_tools_invt as invt  # noqa: E402
 from . import chat_tools_sale as sale  # noqa: E402
 
 PRICE_PAGES = {"dashboard", "detail"}   # 온라인 가격 데이터 메뉴
 SALE_PAGES = {"sale_monthly"}           # 월별 매장별 판매 집계 메뉴
+DASH_PAGES = {"sale_dashboard"}         # 판매 현황 메뉴
 INVT_PAGES = {"invt_plan"}              # 매장 재고 실사계획 메뉴
 TOOL_LABELS.update(invt.TOOL_LABELS)
 TOOL_LABELS.update(sale.TOOL_LABELS)
+TOOL_LABELS.update(dash.TOOL_LABELS)
 _PRICE_TOOL_NAMES = {t["name"] for t in TOOLS}
 _INVT_TOOL_NAMES = {t["name"] for t in invt.TOOLS}
 _SALE_TOOL_NAMES = {t["name"] for t in sale.TOOLS}
+_DASH_TOOL_NAMES = {t["name"] for t in dash.TOOLS}
+# 판매 현황 메뉴만 있어도 쓸 수 있는 판매 도구: 월×매장 합계(대시보드와 같은 수준의 합계). 판매 행 조회는 판매 집계 권한 필요
+_SUM_TOOL = next(t for t in sale.TOOLS if t["name"] == "sum_sales_shop_month")
 
 
 # 기본 도구 목록 (관리자 화면 표시용): (도구, 데이터 이름, 필요한 메뉴)
 BUILTIN_GROUPS = [
     (TOOLS, "온라인 가격", sorted(PRICE_PAGES)),
+    (dash.TOOLS, "판매 현황", sorted(DASH_PAGES | SALE_PAGES)),
     (sale.TOOLS, "월별 매장별 판매 집계", sorted(SALE_PAGES)),
     (invt.TOOLS, "매장 재고 실사계획", sorted(INVT_PAGES)),
 ]
-BUILTIN_NAMES = _PRICE_TOOL_NAMES | _SALE_TOOL_NAMES | _INVT_TOOL_NAMES
+BUILTIN_NAMES = _PRICE_TOOL_NAMES | _SALE_TOOL_NAMES | _INVT_TOOL_NAMES | _DASH_TOOL_NAMES
 
 
 def data_scopes(me: dict) -> dict[str, bool]:
     pages = set(me.get("pages") or [])
-    return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES), "sale": bool(pages & SALE_PAGES)}
+    return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES), "sale": bool(pages & SALE_PAGES),
+            "dash": bool(pages & DASH_PAGES)}
 
 
 def _with_admin_note(tool: dict, cfg: dict | None) -> dict:
@@ -317,7 +326,8 @@ def tools_for(me: dict) -> list[dict]:
 
     cfg = ai_tools.snapshot()
     sc = data_scopes(me)
-    base = (TOOLS if sc["price"] else []) + (sale.TOOLS if sc["sale"] else []) + (invt.TOOLS if sc["invt"] else [])
+    sales = (dash.TOOLS + sale.TOOLS if sc["sale"] else dash.TOOLS + [_SUM_TOOL] if sc["dash"] else [])
+    base = (TOOLS if sc["price"] else []) + sales + (invt.TOOLS if sc["invt"] else [])
     out = [_with_admin_note(t, cfg["builtin"].get(t["name"])) for t in base
            if cfg["builtin"].get(t["name"], {}).get("enabled", True)]
     pages = set(me.get("pages") or [])
@@ -355,8 +365,16 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
             return invt.run(name, inp)
         except invt.InvtToolError as ex:
             raise ToolInputError(str(ex))
+    if name in _DASH_TOOL_NAMES:
+        if not (sc["dash"] or sc["sale"]):
+            raise ToolInputError("이 사용자는 판매 현황 메뉴 권한이 없어 조회할 수 없습니다.")
+        try:
+            return dash.run(name, inp)
+        except dash.DashToolError as ex:
+            raise ToolInputError(str(ex))
     if name in _SALE_TOOL_NAMES:
-        if not sc["sale"]:
+        allowed = sc["sale"] or (sc["dash"] and name == _SUM_TOOL["name"])
+        if not allowed:
             raise ToolInputError("이 사용자는 월별 매장별 판매 집계 메뉴 권한이 없어 조회할 수 없습니다.")
         try:
             return sale.run(name, inp)
