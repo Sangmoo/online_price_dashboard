@@ -303,8 +303,12 @@ def data_scopes(me: dict) -> dict[str, bool]:
 
 
 def _with_admin_note(tool: dict, cfg: dict | None) -> dict:
-    extra = (cfg or {}).get("extraDesc")
-    return {**tool, "description": f"{tool['description']}\n[관리자 안내] {extra}"} if extra else tool
+    """관리자가 바꾼 설명이 있으면 그것을, 추가 안내가 있으면 끝에 덧붙인다."""
+    cfg = cfg or {}
+    desc = cfg.get("description") or tool["description"]
+    if cfg.get("extraDesc"):
+        desc = f"{desc}\n[관리자 안내] {cfg['extraDesc']}"
+    return tool if desc == tool["description"] else {**tool, "description": desc}
 
 
 def tools_for(me: dict) -> list[dict]:

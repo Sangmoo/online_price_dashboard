@@ -71,17 +71,16 @@ def test_ai_sale_tool_matches_screen_summary(oracle):
 def client(oracle):
     from fastapi.testclient import TestClient
 
-    from app import auth, main, store
+    from app import appdb, auth, main
 
     token = secrets.token_urlsafe(24)
     now = time.time()
-    store.execute("INSERT INTO sessions(token,sid,usr_id,created_at,last_seen,expires_at,ip,user_agent) VALUES(?,?,?,?,?,?,?,?)",
-                  (token, secrets.token_hex(8), "250016", now, now, now + 600, "pytest", "pytest"))
+    appdb.session_create(token, secrets.token_hex(8), "250016", now, now + 600, "pytest", "pytest")
     c = TestClient(main.app)
     try:
         yield c, token, auth.SESSION_COOKIE
     finally:
-        store.execute("DELETE FROM sessions WHERE token=?", (token,))
+        appdb.session_delete(token)
 
 
 def test_api_requires_login(client):
@@ -119,3 +118,14 @@ def test_mv_tool_matches_base_table(oracle):
         "SELECT /*+ NO_REWRITE */ TEAM_CD, COUNT(*), COUNT(DISTINCT SHOP_ID), SUM(QTY), SUM(REAL_SALE_AMT), SUM(DSCT_AMT) "
         "FROM T_CLOSE_SALE_BASE WHERE MAKE_YYMM BETWEEN '202601' AND '202608' GROUP BY TEAM_CD ORDER BY TEAM_CD")[1]
     assert [tuple(r.values()) for r in out["result"]["rows"]] == [tuple(int(x) if not isinstance(x, str) else x for x in r) for r in base]
+
+
+def test_summary_cost_matches_base_table(oracle):
+    """요약 원가(월별은 사전 집계 뷰로 자동 재작성) = 원본 테이블 직접 계산 (NO_REWRITE)."""
+    from app import sale_monthly as sm
+
+    r = sm.summary("2026-07", "2026-08", None, None, None, "month")
+    base = oracle.query("SELECT /*+ NO_REWRITE */ SUM(PRODUCT_COST2 * QTY), SUM(REAL_SALE_AMT) FROM T_CLOSE_SALE_BASE "
+                        "WHERE MAKE_YYMM BETWEEN '202607' AND '202608'")[1][0]
+    assert r["total"]["cost"] == int(base[0]) and r["total"]["amt"] == int(base[1])
+    assert r["total"]["costRate"] == round(int(base[0]) * 100 / int(base[1]), 1)

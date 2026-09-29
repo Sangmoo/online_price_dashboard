@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
+  ChartLine,
   ClipboardList,
   Clock,
   Home,
@@ -23,6 +24,7 @@ import LoginView from './components/LoginView'
 import AdminView from './components/AdminView'
 import InvtPlanView from './components/InvtPlanView'
 import SaleMonthlyView from './components/SaleMonthlyView'
+import SaleDashboardView from './components/SaleDashboardView'
 
 type Theme = 'light' | 'dark'
 
@@ -59,6 +61,7 @@ type MenuGroup = 'view' | 'sales' | 'data' | 'admin'
 const MENU: { key: PageKey; label: string; desc: string; icon: typeof Home; group: MenuGroup }[] = [
   { key: 'dashboard', label: '대시보드', desc: '기간별 수집 현황', icon: Home, group: 'view' },
   { key: 'detail', label: '일자별 상세', desc: '일자별 원본 · 엑셀', icon: Table2, group: 'view' },
+  { key: 'sale_dashboard', label: '판매 현황', desc: '월 실적 · 전년 대비', icon: ChartLine, group: 'sales' },
   { key: 'sale_monthly', label: '월별 매장별 판매 집계', desc: '마감 매출 · 엑셀', icon: BarChart3, group: 'sales' },
   { key: 'invt_plan', label: '매장 재고 실사계획', desc: '실사 일정 · 예상 비용', icon: ClipboardList, group: 'data' },
   { key: 'admin', label: '관리자', desc: '사용자 · 권한 · AI 설정', icon: ShieldCheck, group: 'admin' },
@@ -185,6 +188,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [detail, setDetail] = useState<{ state: DetailState; nonce: number } | null>(null)
   const [invtCtx, setInvtCtx] = useState<Record<string, string>>({})
   const [saleCtx, setSaleCtx] = useState<Record<string, string>>({})
+  const [saleDashCtx, setSaleDashCtx] = useState<Record<string, string>>({})
   const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const lastTouch = useRef(0)
@@ -287,7 +291,9 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
           ? { view, ...invtCtx }
           : view === 'sale_monthly'
             ? { view, ...saleCtx }
-            : { view: view ?? '' }
+            : view === 'sale_dashboard'
+              ? { view, ...saleDashCtx }
+              : { view: view ?? '' }
 
   return (
     <div className={`app ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -369,7 +375,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </button>
             <div>
               <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
-              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
+              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
           </div>
         </header>
@@ -408,6 +414,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               />
             </div>
           )}
+          {view === 'sale_dashboard' && user.pages.includes('sale_dashboard') && <SaleDashboardView onContextChange={setSaleDashCtx} />}
           {user.pages.includes('sale_monthly') && (
             <div hidden={view !== 'sale_monthly'}>
               <SaleMonthlyView onContextChange={setSaleCtx} />

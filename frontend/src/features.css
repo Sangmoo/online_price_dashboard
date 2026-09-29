@@ -274,3 +274,35 @@
 .alert.warn-inline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .icon-btn.danger { color: #dc2626; }
 .nowrap { white-space: nowrap; }
+
+.tool-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin: 0 0 3px 6px;
+  color: #b45309; background: color-mix(in srgb, #f59e0b 16%, transparent); }
+.tool-desc-actions { display: flex; align-items: center; justify-content: space-between; margin-top: -6px; }
+
+/* 관리자 > 변경 이력 */
+.audit-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.audit-table td { vertical-align: top; }
+.audit-summary { max-width: 520px; font-size: 12.5px; }
+.audit-action { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+.audit-action.a-tool { background: color-mix(in srgb, #10b981 14%, transparent); color: #059669; }
+.audit-action.a-lock, .audit-action.a-session { background: color-mix(in srgb, #f59e0b 16%, transparent); color: #b45309; }
+.audit-detail td { background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.audit-json { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.audit-json pre { margin: 2px 0 0; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; }
+
+.mv-refresh-line { margin-top: 8px; }
+.mv-refresh-line.error { color: #dc2626; }
+
+/* AI 도구 설명·SQL 입력칸을 넉넉하게 (드래그로 더 늘릴 수 있음) */
+.modal.tool-editor { width: min(1100px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 24px); }
+.tool-textarea { font-size: 14px; line-height: 1.65; padding: 10px 12px; resize: vertical; }
+.tool-textarea.size-xl { min-height: 380px; }
+.tool-textarea.size-lg { min-height: 160px; }
+.tool-textarea.size-md { min-height: 150px; }
+.tool-textarea.size-sql { min-height: 300px; font-size: 13px; line-height: 1.55; }
+.tool-field .tool-count { align-self: flex-end; font-weight: 400; }
+@media (max-height: 760px) {
+  .tool-textarea.size-xl { min-height: 260px; }
+  .tool-textarea.size-sql { min-height: 220px; }
+}

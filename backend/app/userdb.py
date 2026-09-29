@@ -263,6 +263,25 @@ def save_settings(values: dict[str, Any], by: str) -> dict[str, Any]:
     return get_settings()
 
 
+def grant_page_once(flag: str, page: str, if_has: str) -> list[str]:
+    """새 메뉴를 기존 사용자에게 1회 부여: if_has 메뉴 권한이 있는 사용자에게 page 를 더한다.
+    실행 여부는 T_ERP_WEB_SETTING 의 flag 키로 기록해 한 번만 한다(이후 관리자가 회수해도 다시 주지 않음)."""
+    if db.query("SELECT COUNT(*) FROM T_ERP_WEB_SETTING WHERE SET_KEY = :k", {"k": flag})[1][0][0]:
+        return []
+    now = _now14()
+    granted = []
+    for u in list_users():
+        pages = json.loads(u["pages"] or "[]")
+        if if_has in pages and page not in pages:
+            db.execute("INSERT INTO T_ERP_WEB_USER_PAGE (USR_ID, PAGE_CD, INS_DAY, INS_USERID) VALUES (:id, :p, :d, 'MIGRATION')",
+                       {"id": u["usr_id"], "p": page, "d": now})
+            granted.append(u["usr_id"])
+    db.execute("INSERT INTO T_ERP_WEB_SETTING (SET_KEY, SET_VAL, SET_DESC, UPT_DAY, UPT_USERID) VALUES (:k, 'Y', :d, :t, 'MIGRATION')",
+               {"k": flag, "d": f"1회 메뉴 부여 완료: {page}", "t": now})
+    invalidate()
+    return granted
+
+
 # ----------------------------------------------------------------------------
 # 1회성: SQLite(이전 저장소) → Oracle 이전
 # ----------------------------------------------------------------------------

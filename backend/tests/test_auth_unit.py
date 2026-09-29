@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi import HTTPException
 
-from app import admin, auth
+from app import admin, appdb, auth
 
 SETTINGS = {"ai_enabled": True, "default_daily_questions": 10, "default_daily_cost_usd": 2.0, "model": None, "effort": None}
 
@@ -42,7 +42,7 @@ def _login(uid, pw="1234"):
 def test_login_success_creates_session(env):
     token, me = _login("170046")
     assert me["id"] == "170046" and me["role"] == "USER" and me["pages"] == ["dashboard"]
-    row = env["store"].row("SELECT * FROM sessions WHERE token=?", (token,))
+    row = env["store"].row("SELECT * FROM sessions WHERE token=?", (appdb.token_hash(token),))
     assert row and row["expires_at"] - row["created_at"] == pytest.approx(auth.SESSION_TTL)
 
 
@@ -114,11 +114,11 @@ class _Req:
 
 def test_current_user_slides_expiry_and_page_guard(env, monkeypatch):
     token, _ = _login("170046")
-    before = env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (token,))["expires_at"]
+    before = env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (appdb.token_hash(token),))["expires_at"]
     real = auth.time.time
     monkeypatch.setattr(auth.time, "time", lambda: real() + 600)
     me = auth.current_user(_Req(token))
-    after = env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (token,))["expires_at"]
+    after = env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (appdb.token_hash(token),))["expires_at"]
     assert after == pytest.approx(before + 600, abs=2) and me["id"] == "170046"
     assert auth.require_page("dashboard")(_Req(token))["id"] == "170046"
     with pytest.raises(HTTPException) as e:
@@ -174,3 +174,17 @@ def test_create_user_requires_6_digit_employee_number(uid):
     with pytest.raises(HTTPException) as e:
         admin.create_user({"id": "250016"}, {"id": uid, "pages": ["dashboard"]})
     assert "사번" in e.value.detail["message"]
+
+
+def test_session_token_stored_as_hash_and_touch_throttled(env, monkeypatch):
+    token, _ = _login("170046")
+    assert env["store"].row("SELECT 1 FROM sessions WHERE token=?", (token,)) is None  # 원문 저장 안 함
+    writes = []
+    real_touch = appdb.session_touch
+    monkeypatch.setattr(appdb, "session_touch", lambda *a: (writes.append(a), real_touch(*a)))
+    auth.current_user(_Req(token))  # 로그인 직후: 1분이 안 지나 DB 쓰기 없음
+    assert writes == []
+    real = auth.time.time
+    monkeypatch.setattr(auth.time, "time", lambda: real() + appdb.TOUCH_INTERVAL + 1)
+    auth.current_user(_Req(token))
+    assert len(writes) == 1

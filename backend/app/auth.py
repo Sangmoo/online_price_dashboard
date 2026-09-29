@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from . import config, db, logs, store, userdb
+from . import appdb, config, db, logs, userdb
 
 _log = logs.get("auth")
 
@@ -18,10 +18,11 @@ SESSION_TTL = 60 * 60          # 1시간 (사용 시마다 연장)
 MAX_FAILS = 5
 LOCK_SECONDS = 60
 
-PAGES = ["dashboard", "detail", "sale_monthly", "invt_plan"]   # 권한 부여 가능한 일반 페이지
+PAGES = ["dashboard", "detail", "sale_dashboard", "sale_monthly", "invt_plan"]   # 권한 부여 가능한 일반 페이지
 EMP_NO_RE = re.compile(r"^\d{6}$")             # 사번 형식 (6자리 숫자)
-PAGE_GROUPS = {"dashboard": "온라인 가격", "detail": "온라인 가격", "sale_monthly": "판매 분석", "invt_plan": "데이터 관리"}
-PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "sale_monthly": "월별 매장별 판매 집계", "invt_plan": "매장 재고 실사계획",
+PAGE_GROUPS = {"dashboard": "온라인 가격", "detail": "온라인 가격", "sale_dashboard": "판매 분석", "sale_monthly": "판매 분석",
+               "invt_plan": "데이터 관리"}
+PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "sale_dashboard": "판매 현황", "sale_monthly": "월별 매장별 판매 집계", "invt_plan": "매장 재고 실사계획",
                "admin": "관리자"}
 
 MSG_BAD_LOGIN = "아이디 또는 패스워드가 일치하지 않습니다."
@@ -87,11 +88,11 @@ def effective(u: dict, settings: dict | None = None) -> dict:
 # 로그인 / 잠금
 # ----------------------------------------------------------------------------
 def _lock_state(usr_id: str) -> dict:
-    return store.row("SELECT * FROM login_attempts WHERE usr_id=?", (usr_id,)) or {"fail_count": 0, "locked_until": 0}
+    return appdb.lock_get(usr_id)
 
 
 def _record(usr_id: str, success: bool, reason: str, ip: str | None):
-    store.execute("INSERT INTO login_log(usr_id, success, reason, ip) VALUES(?,?,?,?)", (usr_id, int(success), reason, ip))
+    appdb.login_log_add(usr_id, success, reason, ip)
     (_log.info if success else _log.warning)("로그인 %s user=%s ip=%s", reason, usr_id, ip)
 
 
@@ -127,18 +128,14 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
     if not found:
         fails = st["fail_count"] + 1
         locked_until = now + LOCK_SECONDS if fails >= MAX_FAILS else 0
-        store.execute(
-            """INSERT INTO login_attempts(usr_id, fail_count, locked_until) VALUES(?,?,?)
-               ON CONFLICT(usr_id) DO UPDATE SET fail_count=excluded.fail_count, locked_until=excluded.locked_until""",
-            (usr_id, 0 if locked_until else fails, locked_until),
-        )
+        appdb.lock_set(usr_id, 0 if locked_until else fails, locked_until)
         _record(usr_id, False, "LOCKED" if locked_until else "BAD_CREDENTIALS", ip)
         if locked_until:
             raise AuthError(429, f"{MSG_BAD_LOGIN} 로그인 {MAX_FAILS}회 실패로 1분간 로그인할 수 없습니다.",
                             "LOCKED", retryAfter=LOCK_SECONDS)
         raise AuthError(401, MSG_BAD_LOGIN, "BAD_CREDENTIALS", remaining=MAX_FAILS - fails)
 
-    store.execute("DELETE FROM login_attempts WHERE usr_id=?", (usr_id,))
+    appdb.lock_clear(usr_id)
     u = registered_user(found["USR_ID"], found["USR_NM"])
     if u is None:
         _record(usr_id, False, "NOT_REGISTERED", ip)
@@ -149,11 +146,8 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
         raise AuthError(403, "사용이 중지된 계정입니다. 관리자에게 문의하세요.", "INACTIVE")
 
     token = secrets.token_urlsafe(32)
-    store.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
-    store.execute(
-        "INSERT INTO sessions(token, sid, usr_id, created_at, last_seen, expires_at, ip, user_agent) VALUES(?,?,?,?,?,?,?,?)",
-        (token, secrets.token_hex(8), usr_id, now, now, now + SESSION_TTL, ip, (user_agent or "")[:200]),
-    )
+    appdb.session_purge(now)
+    appdb.session_create(token, secrets.token_hex(8), usr_id, now, now + SESSION_TTL, ip, user_agent)
     userdb.touch_login(usr_id)
     _record(usr_id, True, "OK", ip)
     return token, me
@@ -161,7 +155,7 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
 
 def logout(token: str | None):
     if token:
-        store.execute("DELETE FROM sessions WHERE token=?", (token,))
+        appdb.session_delete(token)
 
 
 # ----------------------------------------------------------------------------
@@ -170,23 +164,27 @@ def logout(token: str | None):
 def current_user(request: Request) -> dict:
     token = request.cookies.get(SESSION_COOKIE)
     now = time.time()
-    sess = store.row("SELECT * FROM sessions WHERE token=?", (token,)) if token else None
+    sess = appdb.session_get(token) if token else None
     if not sess or sess["expires_at"] <= now:
         if sess:
-            store.execute("DELETE FROM sessions WHERE token=?", (token,))
+            appdb.session_delete(token)
         raise AuthError(401, "로그인이 필요합니다." if not sess else "1시간 동안 사용하지 않아 로그아웃되었습니다.",
                         "SESSION_EXPIRED")
     u = userdb.get_user(sess["usr_id"])
     me = effective(u) if u else None
     if not me or not me["active"]:
-        store.execute("DELETE FROM sessions WHERE token=?", (token,))
+        appdb.session_delete(token)
         raise AuthError(401, "사용이 중지된 계정입니다. 관리자에게 문의하세요.", "INACTIVE")
 
-    # 서비스 이용 시 세션 만료시간 연장 (슬라이딩 1시간)
-    expires = now + SESSION_TTL
-    store.execute("UPDATE sessions SET last_seen=?, expires_at=? WHERE token=?", (now, expires, token))
+    # 서비스 이용 시 세션 만료시간 연장 (슬라이딩 1시간). DB 쓰기는 1분에 한 번만.
+    if now - sess["last_seen"] >= appdb.TOUCH_INTERVAL:
+        expires = now + SESSION_TTL
+        appdb.session_touch(token, now, expires)
+    else:
+        expires = sess["expires_at"]
     request.state.session_expires = int(expires)
     request.state.usr_id = me["id"]
+    me["ip"] = request.client.host if getattr(request, "client", None) else None  # 관리자 변경 이력용
     me["sessionExpiresAt"] = int(expires)
     return me
 

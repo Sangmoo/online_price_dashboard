@@ -26,6 +26,8 @@ except ImportError:
     pass
 for k, v in {"DB_HOST": "localhost", "DB_SID": "XE", "DB_USER": "test", "DB_PASSWORD": "test"}.items():
     os.environ.setdefault(k, v)
+# 테스트가 실제 운영 데이터 이전(SQLite → Oracle)을 일으키지 않게 한다
+os.environ["ERP_NO_AUTO_MIGRATE"] = "1"
 
 
 @pytest.fixture
@@ -33,7 +35,13 @@ def temp_store(tmp_path, monkeypatch):
     """store(SQLite)를 임시 파일로 바꿔 세션·로그인 잠금 테스트가 실제 app.db 를 건드리지 않게 한다."""
     from app import store
 
+    from app import appdb
+
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(appdb, "use_oracle", lambda: False)  # 단위 테스트는 실제 Oracle 운영 테이블에 쓰지 않는다
+    from app import audit
+
+    monkeypatch.setattr(audit, "use_oracle", lambda: False)
     if hasattr(store._local, "conn"):
         monkeypatch.delattr(store._local, "conn")
     store.init()
@@ -65,3 +73,15 @@ def oracle():
     from app import db
 
     return db
+
+
+@pytest.fixture(autouse=True)
+def audit_capture(monkeypatch):
+    """관리자 변경 이력은 테스트 중 메모리에만 모은다 (실제 SQLite/Oracle 에 기록하지 않음)."""
+    from app import audit
+
+    captured: list[dict] = []
+    monkeypatch.setattr(audit, "record", lambda admin, action, target, before=None, after=None, summary=None:
+                        captured.append({"admin": admin.get("id"), "action": action, "target": target, "before": before,
+                                         "after": after, "summary": summary}))
+    return captured

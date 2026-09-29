@@ -181,3 +181,20 @@ def test_save_permissions_validates_all_before_saving(monkeypatch):
     out = admin.save_permissions({"id": "250016"}, [{"id": "170046", "pages": ["invt_plan", "dashboard"]}, {"id": "250016", "pages": []}])
     assert saved == [("170046", ["dashboard", "invt_plan"])]  # 최고 관리자는 건너뜀
     assert [u["id"] for u in out] == ["170046"]
+
+
+def test_builtin_description_override_and_reset(local_store):
+    adm = {"id": "250016"}
+    default = next(t for t in ct.sale.TOOLS if t["name"] == "search_sales")["description"]
+    admin.save_builtin_tool(adm, "search_sales", {"enabled": True, "extraDesc": "", "description": "판매 행을 직접 보여 줄 때만 쓰는 도구입니다."})
+    desc = next(t for t in ct.tools_for({"pages": ["sale_monthly"]}) if t["name"] == "search_sales")["description"]
+    assert desc == "판매 행을 직접 보여 줄 때만 쓰는 도구입니다."
+    ov = next(b for b in admin.ai_tools_overview()["builtin"] if b["name"] == "search_sales")
+    assert ov["customized"] and ov["defaultDescription"] == default
+    admin.save_builtin_tool(adm, "search_sales", {"enabled": False, "extraDesc": ""})  # 사용 여부만 바꿔도 바꾼 설명 유지
+    assert next(b for b in admin.ai_tools_overview()["builtin"] if b["name"] == "search_sales")["customized"]
+    admin.save_builtin_tool(adm, "search_sales", {"enabled": True, "extraDesc": "", "description": default})  # 기본값으로
+    ov = next(b for b in admin.ai_tools_overview()["builtin"] if b["name"] == "search_sales")
+    assert not ov["customized"] and ov["description"] == default
+    with pytest.raises(HTTPException):
+        admin.save_builtin_tool(adm, "search_sales", {"enabled": True, "extraDesc": "", "description": "짧음"})

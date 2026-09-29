@@ -1,12 +1,13 @@
 """관리자 기능: 사용자 권한/페이지/AI 설정, 전역 설정, 사용 현황, 로그인 이력, 세션 관리."""
 from __future__ import annotations
 
+import json
 import time
 from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from . import ai_tools, auth, config, db, store, usage, userdb
+from . import ai_tools, appdb, audit, auth, config, db, mv_refresh, usage, userdb
 
 MODELS = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -26,7 +27,7 @@ def _names() -> dict[str, str]:
 def list_users(q: str | None = None) -> list[dict]:
     settings = userdb.get_settings()
     today = usage.today_by_user()
-    online = {r["usr_id"] for r in store.rows("SELECT DISTINCT usr_id FROM sessions WHERE expires_at > ?", (time.time(),))}
+    online = appdb.online_user_ids(time.time())
     out = []
     for u in userdb.list_users(q):
         me = auth.effective(u, settings)
@@ -80,6 +81,15 @@ def _verify_emp(usr_id: str) -> dict:
     return found[0]
 
 
+def _snap(usr_id: str) -> dict | None:
+    """변경 이력용 사용자 설정 스냅샷"""
+    u = userdb.get_user(usr_id, fresh=True)
+    if not u:
+        return None
+    return {"role": u.get("role"), "pages": list(json.loads(u.get("pages") or "[]")), "ai_enabled": bool(u.get("ai_enabled", 1)),
+            "daily_questions": u.get("daily_questions"), "daily_cost_usd": u.get("daily_cost_usd"), "active": bool(u.get("active", 1))}
+
+
 def create_user(admin: dict, body: dict) -> dict:
     """관리자만 사용자를 등록한다. 권한·메뉴·AI 설정을 등록 시점에 함께 지정."""
     usr_id = str(body.get("id") or "").strip()
@@ -95,6 +105,9 @@ def create_user(admin: dict, body: dict) -> dict:
         ai_enabled=v.get("ai_enabled", True), daily_questions=v.get("daily_questions"),
         daily_cost_usd=v.get("daily_cost_usd"), active=v.get("active", True),
     )
+    after = _snap(usr_id)
+    audit.record(admin, "USER_CREATE", usr_id, None, after,
+                 summary=f"{emp['USR_NM']}({usr_id}) 추가 · " + audit.diff_summary({}, after))
     return next(x for x in list_users() if x["id"] == usr_id)
 
 
@@ -104,9 +117,11 @@ def save_user(admin: dict, usr_id: str, body: dict) -> dict:
                                                      "code": "NOT_FOUND"})
     updates = _validate(usr_id, body)
     if updates:
+        before = _snap(usr_id)
         userdb.update_user(usr_id, updates, by=admin["id"])
         if updates.get("active") is False:
-            store.execute("DELETE FROM sessions WHERE usr_id=?", (usr_id,))  # 즉시 로그아웃
+            appdb.session_delete_user(usr_id)  # 즉시 로그아웃
+        audit.record(admin, "USER_UPDATE", usr_id, before, _snap(usr_id))
     return next(x for x in list_users() if x["id"] == usr_id)
 
 
@@ -163,7 +178,9 @@ def save_permissions(admin: dict, changes: list) -> list[dict]:
             continue  # 최고 관리자는 항상 전체 메뉴
         plan.append((usr_id, _validate(usr_id, {"pages": ch.get("pages")})))
     for usr_id, updates in plan:
+        before = _snap(usr_id)
         userdb.update_user(usr_id, updates, by=admin["id"])
+        audit.record(admin, "PERM_UPDATE", usr_id, {"pages": before["pages"]} if before else None, {"pages": updates["pages"]})
     changed = {u for u, _ in plan}
     return [x for x in list_users() if x["id"] in changed]
 
@@ -186,7 +203,8 @@ def ai_tools_overview() -> dict:
             builtin.append({
                 "name": t["name"], "label": ct.TOOL_LABELS.get(t["name"], t["name"]), "group": group,
                 "pages": [{"key": p, "label": auth.PAGE_LABELS[p]} for p in pages],
-                "description": t["description"], "params": list(t["input_schema"].get("properties", {})),
+                "description": c.get("description") or t["description"], "defaultDescription": t["description"],
+                "customized": bool(c.get("description")), "params": list(t["input_schema"].get("properties", {})),
                 "enabled": c.get("enabled", True), "extraDesc": c.get("extraDesc", ""),
                 "updatedAt": c.get("updatedAt"), "updatedBy": c.get("updatedBy"),
             })
@@ -195,15 +213,53 @@ def ai_tools_overview() -> dict:
             "maxRowsLimit": ai_tools.MAX_ROWS_LIMIT}
 
 
+def data_status() -> dict:
+    """사전 집계 뷰 상태 (관리자 화면). 캐시를 비우고 지금 상태를 읽는다."""
+    from . import chat_tools_sale as cts
+
+    cts._mv_state = None
+    st = cts.mv_state()
+    rows = None
+    if st["mv_max"]:
+        try:
+            rows = int(db.query(f"SELECT COUNT(*) FROM {cts.MV_NAME}")[1][0][0])
+        except Exception:  # noqa: BLE001
+            rows = None
+    return {
+        "name": cts.MV_NAME, "usable": st["usable"], "staleness": st["staleness"],
+        "lastRefresh": st["last_refresh"].strftime("%Y-%m-%d %H:%M:%S") if st["last_refresh"] else None,
+        "mvMaxMonth": st["mv_max"], "baseMaxMonth": st["base_max"], "rows": rows,
+        "hasCostColumn": "TOTAL_COST_AMT" in st.get("columns", set()),
+        "behind": bool(st["base_max"] and st["mv_max"] and st["base_max"] > st["mv_max"]),
+        "refresh": mv_refresh.state(),
+    }
+
+
+def refresh_mv(admin: dict) -> dict:
+    """[지금 갱신]: 백그라운드로 시작하고 현재 상태를 돌려준다 (이미 진행 중이면 그 상태)."""
+    return {"refresh": mv_refresh.start(admin)}
+
+
 def save_builtin_tool(admin: dict, name: str, body: dict) -> dict:
     from . import chat_tools as ct
 
     if name not in ct.BUILTIN_NAMES:
         _bad("기본 도구가 아닙니다.")
+    old = ai_tools.snapshot()["builtin"].get(name, {})
+    before = {"enabled": old.get("enabled", True), "description": old.get("description") or "(기본)", "extraDesc": old.get("extraDesc", "")}
     try:
-        ai_tools.save_builtin(name, bool(body.get("enabled", True)), str(body.get("extraDesc") or ""), admin["id"])
+        desc = body.get("description")
+        default = next(t["description"] for tools, _, _ in ct.BUILTIN_GROUPS for t in tools if t["name"] == name)
+        if desc is not None and str(desc).strip() == default.strip():
+            desc = None  # 기본 설명과 같으면 저장하지 않음 (프로그램이 설명을 개선하면 자동 반영되도록)
+        elif desc is None:
+            desc = ai_tools.snapshot()["builtin"].get(name, {}).get("description")  # 사용 여부만 바꿀 때는 기존 설명 유지
+        ai_tools.save_builtin(name, bool(body.get("enabled", True)), str(body.get("extraDesc") or ""), admin["id"],
+                              description=desc)
     except ai_tools.ToolDefError as ex:
         _tool_bad(ex)
+    audit.record(admin, "TOOL_BUILTIN", name, before,
+                 {"enabled": bool(body.get("enabled", True)), "description": desc or "(기본)", "extraDesc": str(body.get("extraDesc") or "")})
     return ai_tools_overview()
 
 
@@ -212,19 +268,30 @@ def save_custom_tool(admin: dict, body: dict, name: str | None = None) -> dict:
 
     if name is not None and str(body.get("name") or "").lower() != name:
         _bad("도구 이름은 바꿀 수 없습니다. 새 이름으로 추가한 뒤 기존 도구를 삭제하세요.")
+    keys = ("label", "description", "page", "sql", "params", "maxRows", "enabled")
+    old = next((c for c in ai_tools.snapshot()["custom"] if c["name"] == name), None) if name else None
     try:
         spec = ai_tools.validate_def(body, ct.BUILTIN_NAMES, auth.PAGES, existing=name)
         ai_tools.save_custom(spec, admin["id"], is_new=name is None)
     except ai_tools.ToolDefError as ex:
         _tool_bad(ex)
+    after = {k: spec[k] for k in keys}
+    if name is None:
+        audit.record(admin, "TOOL_CREATE", spec["name"], None, after,
+                     summary=f"{spec['label']}({spec['name']}) 추가 · 연결 메뉴 {auth.PAGE_LABELS.get(spec['page'], spec['page'])}"
+                             f" · 입력값 {len(spec['params'])}개")
+    else:
+        audit.record(admin, "TOOL_UPDATE", name, {k: old[k] for k in keys} if old else None, after)
     return ai_tools_overview()
 
 
 def delete_custom_tool(admin: dict, name: str) -> dict:
+    old = next((c for c in ai_tools.snapshot()["custom"] if c["name"] == name), None)
     try:
         ai_tools.delete_custom(name, admin["id"])
     except ai_tools.ToolDefError as ex:
         _tool_bad(ex)
+    audit.record(admin, "TOOL_DELETE", name, old, None, summary=f"{old['label'] if old else name}({name}) 삭제")
     return ai_tools_overview()
 
 
@@ -265,7 +332,7 @@ def get_settings() -> dict:
     }
 
 
-def save_settings(body: dict, by: str) -> dict:
+def save_settings(body: dict, admin: dict) -> dict:
     values: dict = {}
     if "aiEnabled" in body:
         values["ai_enabled"] = bool(body["aiEnabled"])
@@ -287,7 +354,12 @@ def save_settings(body: dict, by: str) -> dict:
         if body["effort"] not in EFFORTS:
             _bad("지원하지 않는 effort 입니다.")
         values["effort"] = body["effort"]
-    userdb.save_settings(values, by=by)
+    before = userdb.get_settings()
+    userdb.save_settings(values, by=admin["id"])
+    after = userdb.get_settings()
+    rename = {"ai_enabled": "ai_enabled_global"}
+    audit.record(admin, "SETTING_UPDATE", "AI 설정", {rename.get(k, k): before.get(k) for k in values},
+                 {rename.get(k, k): after.get(k) for k in values})
     return get_settings()
 
 
@@ -308,38 +380,32 @@ def usage_report(days: int = 30) -> dict:
 # 로그인 이력 / 잠금 / 세션
 # ----------------------------------------------------------------------------
 def login_log(limit: int = 200, q: str | None = None) -> list[dict]:
-    sql = "SELECT l.id, l.usr_id, l.ts, l.success, l.reason, l.ip FROM login_log l"
-    params: tuple = ()
-    if q:
-        sql += " WHERE l.usr_id LIKE ?"
-        params = (f"%{q}%",)
-    sql += " ORDER BY l.id DESC LIMIT ?"
     names = _names()
-    return [{**r, "usr_nm": names.get(r["usr_id"])} for r in store.rows(sql, (*params, max(1, min(limit, 1000))))]
+    return [{**r, "usr_nm": names.get(r["usr_id"])} for r in appdb.login_log_list(limit, q)]
 
 
 def locks() -> list[dict]:
     now = time.time()
-    return [
-        {**r, "locked": r["locked_until"] > now, "remainSec": max(0, int(r["locked_until"] - now))}
-        for r in store.rows("SELECT * FROM login_attempts WHERE fail_count > 0 OR locked_until > ? ORDER BY locked_until DESC",
-                            (now,))
-    ]
+    return [{**r, "locked": r["locked_until"] > now, "remainSec": max(0, int(r["locked_until"] - now))} for r in appdb.locks_list(now)]
 
 
-def unlock(usr_id: str) -> None:
-    store.execute("DELETE FROM login_attempts WHERE usr_id=?", (usr_id,))
+def unlock(admin: dict, usr_id: str) -> None:
+    appdb.lock_clear(usr_id)
+    audit.record(admin, "LOCK_RELEASE", usr_id, summary=f"{usr_id} 로그인 잠금 해제")
 
 
 def sessions() -> list[dict]:
     names = _names()
-    rows = store.rows(
-        """SELECT sid, usr_id, created_at, last_seen, expires_at, ip, user_agent
-             FROM sessions WHERE expires_at > ? ORDER BY last_seen DESC""",
-        (time.time(),),
-    )
-    return [{**r, "usr_nm": names.get(r["usr_id"])} for r in rows]
+    return [{**r, "usr_nm": names.get(r["usr_id"])} for r in appdb.sessions_active(time.time())]
 
 
-def kill_session(sid: str) -> None:
-    store.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+def kill_session(admin: dict, sid: str) -> None:
+    target = next((s for s in appdb.sessions_active(time.time()) if s["sid"] == sid), None)
+    appdb.session_delete_sid(sid)
+    who = target["usr_id"] if target else "-"
+    audit.record(admin, "SESSION_KILL", who, summary=f"{who} 세션 강제 로그아웃 (IP {target['ip'] if target else '-'})")
+
+
+def audit_log(action: str | None, q: str | None, days: int) -> dict:
+    return {"logs": audit.search(action or None, q or None, days),
+            "actions": [{"key": k, "label": v} for k, v in audit.ACTIONS.items()], "storage": audit.backend_name()}

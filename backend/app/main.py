@@ -1,6 +1,7 @@
 """FastAPI 엔트리포인트."""
 from __future__ import annotations
 
+import os
 import time
 from urllib.parse import quote
 
@@ -14,17 +15,25 @@ from . import logs
 
 logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
 
-from . import admin, auth, chat_service, config, data_service as ds, invt_plan, sale_monthly, store, usage, userdb  # noqa: E402
+from . import admin, appdb, auth, chat_service, config, data_service as ds, invt_plan, sale_dashboard, sale_monthly, store, usage, userdb  # noqa: E402
 from .auth import current_user, require_admin, require_page  # noqa: E402
 
 _log = logs.get("request")
 logs.get("app").info("서버 시작 (port=%s)", config.API_PORT)
 
 store.init()
+logs.get("app").info("운영 데이터 저장소: %s", appdb.backend_name())  # Oracle 이면 첫 사용 시 SQLite 내용 1회 이전
 sale_monthly.cleanup_exports()  # 재시작 전 남은 엑셀 임시 파일 정리
 _moved = userdb.migrate_from_sqlite(store)  # 1회: 이전 SQLite 사용자/설정 → Oracle
 if _moved:
     logs.get("app").info("사용자 권한을 Oracle 로 이전했습니다: %s", ", ".join(_moved))
+try:  # 새 메뉴 '판매 현황' 을 판매 집계 메뉴가 있는 기존 사용자에게 1회 부여 (테스트 실행 시에는 하지 않음)
+    _granted = ([] if os.getenv("ERP_NO_AUTO_MIGRATE") == "1" else
+                userdb.grant_page_once("_MIGR_PAGE_SALE_DASHBOARD", "sale_dashboard", "sale_monthly"))
+    if _granted:
+        logs.get("app").info("판매 현황 메뉴를 부여했습니다: %s", ", ".join(_granted))
+except Exception:  # noqa: BLE001
+    logs.get("app").exception("판매 현황 메뉴 1회 부여 실패")
 
 app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
@@ -135,14 +144,17 @@ PREF_KEYS = {"detail.columns"}
 def get_pref(key: str, user: dict = Depends(current_user)):
     if key not in PREF_KEYS:
         raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
-    return {"value": store.get_pref(user["id"], key)}
+    return {"value": appdb.pref_get(user["id"], key)}
 
 
 @app.put("/api/prefs/{key}")
 def put_pref(key: str, body: dict, user: dict = Depends(current_user)):
     if key not in PREF_KEYS:
         raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
-    store.set_pref(user["id"], key, body.get("value"))
+    try:
+        appdb.pref_set(user["id"], key, body.get("value"))
+    except ValueError as ex:
+        _bad_request(ex)
     return {"ok": True}
 
 
@@ -278,8 +290,7 @@ class FavoriteBody(BaseModel):
 
 @app.get("/api/chat/favorites")
 def favorites(user: dict = Depends(current_user)):
-    return {"favorites": store.rows("SELECT id, text, created_at AS createdAt FROM favorites WHERE usr_id=? ORDER BY id DESC",
-                                    (user["id"],))}
+    return {"favorites": appdb.fav_list(user["id"])}
 
 
 @app.post("/api/chat/favorites")
@@ -287,13 +298,13 @@ def add_favorite(body: FavoriteBody, user: dict = Depends(current_user)):
     text = " ".join(body.text.split())[:500]
     if not text:
         raise HTTPException(400, {"message": "내용이 비어 있습니다.", "code": "BAD_REQUEST"})
-    store.execute("INSERT OR IGNORE INTO favorites(usr_id, text) VALUES(?,?)", (user["id"], text))
+    appdb.fav_add(user["id"], text)
     return favorites(user)
 
 
 @app.delete("/api/chat/favorites/{fav_id}")
 def delete_favorite(fav_id: int, user: dict = Depends(current_user)):
-    store.execute("DELETE FROM favorites WHERE id=? AND usr_id=?", (fav_id, user["id"]))
+    appdb.fav_delete(user["id"], fav_id)
     return favorites(user)
 
 
@@ -324,6 +335,28 @@ def admin_save_user(usr_id: str, body: dict, me: dict = Depends(require_admin)):
 @app.put("/api/admin/permissions")
 def admin_save_permissions(body: dict, me: dict = Depends(require_admin)):
     return {"users": admin.save_permissions(me, body.get("changes"))}
+
+
+@app.get("/api/admin/audit")
+def admin_audit(action: str | None = None, q: str | None = None, days: int = 90, _: dict = Depends(require_admin)):
+    return admin.audit_log(action, q, days)
+
+
+@app.get("/api/admin/data-status")
+def admin_data_status(_: dict = Depends(require_admin)):
+    return admin.data_status()
+
+
+@app.get("/api/admin/data-status/refresh")
+def admin_mv_refresh_state(_: dict = Depends(require_admin)):
+    from . import mv_refresh
+
+    return {"refresh": mv_refresh.state()}
+
+
+@app.post("/api/admin/data-status/refresh")
+def admin_mv_refresh(me: dict = Depends(require_admin)):
+    return admin.refresh_mv(me)
 
 
 @app.get("/api/admin/ai-tools")
@@ -363,7 +396,7 @@ def admin_get_settings(_: dict = Depends(require_admin)):
 
 @app.put("/api/admin/settings")
 def admin_put_settings(body: dict, me: dict = Depends(require_admin)):
-    return admin.save_settings(body, by=me["id"])
+    return admin.save_settings(body, me)
 
 
 @app.get("/api/admin/usage")
@@ -377,8 +410,8 @@ def admin_logins(limit: int = 200, q: str | None = None, _: dict = Depends(requi
 
 
 @app.delete("/api/admin/locks/{usr_id}")
-def admin_unlock(usr_id: str, _: dict = Depends(require_admin)):
-    admin.unlock(usr_id)
+def admin_unlock(usr_id: str, me: dict = Depends(require_admin)):
+    admin.unlock(me, usr_id)
     return {"ok": True}
 
 
@@ -394,8 +427,8 @@ def admin_logs(level: str = "INFO", q: str | None = None, category: str | None =
 
 
 @app.delete("/api/admin/sessions/{sid}")
-def admin_kill_session(sid: str, _: dict = Depends(require_admin)):
-    admin.kill_session(sid)
+def admin_kill_session(sid: str, me: dict = Depends(require_admin)):
+    admin.kill_session(me, sid)
     return {"ok": True}
 
 
@@ -409,6 +442,17 @@ invt_page = require_page("invt_plan")
 # 월별 매장별 판매 집계 (T_CLOSE_SALE_BASE)
 # ----------------------------------------------------------------------------
 sale_page = require_page("sale_monthly")
+sale_dash_page = require_page("sale_dashboard")
+
+
+@app.get("/api/sale-dashboard")
+def sale_dashboard_get(ym: str | None = None, _: dict = Depends(sale_dash_page)):
+    return sale_dashboard.dashboard(ym)
+
+
+@app.get("/api/sale-dashboard/shops/{shop_id}/trend")
+def sale_dashboard_trend(shop_id: str, _: dict = Depends(sale_dash_page)):
+    return sale_monthly.shop_trend(shop_id)
 
 
 @app.get("/api/sale-monthly/options")

@@ -3,7 +3,7 @@ export type Row = Record<string, string | number | null>
 
 export type DateInfo = { dt: string; count: number }
 
-export type PageKey = 'dashboard' | 'detail' | 'sale_monthly' | 'invt_plan' | 'admin'
+export type PageKey = 'dashboard' | 'detail' | 'sale_dashboard' | 'sale_monthly' | 'invt_plan' | 'admin'
 
 export type AiLimits = {
   enabled: boolean
@@ -181,7 +181,10 @@ export const api = {
     saveUser: (id: string, body: Partial<AdminUserUpdate>) => sendJson<{ user: AdminUser }>('PUT', `/api/admin/users/${encodeURIComponent(id)}`, body),
     savePermissions: (changes: { id: string; pages: PageKey[] }[]) => sendJson<{ users: AdminUser[] }>('PUT', '/api/admin/permissions', { changes }),
     aiTools: () => getJson<AiToolsOverview>('/api/admin/ai-tools'),
-    saveBuiltinTool: (name: string, body: { enabled: boolean; extraDesc: string }) =>
+    dataStatus: () => getJson<DataStatus>('/api/admin/data-status'),
+    refreshState: () => getJson<{ refresh: MvRefresh }>('/api/admin/data-status/refresh'),
+    refreshMv: () => sendJson<{ refresh: MvRefresh }>('POST', '/api/admin/data-status/refresh'),
+    saveBuiltinTool: (name: string, body: { enabled: boolean; extraDesc: string; description?: string }) =>
       sendJson<AiToolsOverview>('PUT', `/api/admin/ai-tools/builtin/${encodeURIComponent(name)}`, body),
     createTool: (tool: CustomToolDef) => sendJson<AiToolsOverview>('POST', '/api/admin/ai-tools', tool),
     updateTool: (tool: CustomToolDef) => sendJson<AiToolsOverview>('PUT', `/api/admin/ai-tools/${encodeURIComponent(tool.name)}`, tool),
@@ -244,11 +247,33 @@ export type BuiltinTool = {
   group: string
   pages: { key: PageKey; label: string }[]
   description: string
+  defaultDescription: string
+  customized: boolean
   params: string[]
   enabled: boolean
   extraDesc: string
   updatedAt: string | null
   updatedBy: string | null
+}
+export type DataStatus = {
+  name: string
+  usable: boolean
+  staleness: string | null
+  lastRefresh: string | null
+  mvMaxMonth: string | null
+  baseMaxMonth: string | null
+  rows: number | null
+  hasCostColumn: boolean
+  behind: boolean
+  refresh: MvRefresh
+}
+export type MvRefresh = {
+  status: 'idle' | 'running' | 'done' | 'error'
+  started: string | null
+  finished: string | null
+  by: string | null
+  error: string | null
+  elapsedSec: number | null
 }
 export type AiToolsOverview = {
   storage: 'oracle' | 'sqlite'

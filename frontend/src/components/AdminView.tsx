@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   Activity,
+  History,
   Bot,
   Check,
   KeyRound,
@@ -35,9 +36,10 @@ import {
 } from '../api'
 import { fmtNum } from '../format'
 import AiToolsTab from './admin/AiToolsTab'
+import AuditTab from './admin/AuditTab'
 import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
 
-type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'serverlogs'
+type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'audit' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -47,6 +49,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
+  { key: 'audit', label: '변경 이력', icon: History },
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
 
@@ -75,6 +78,7 @@ export default function AdminView({ me }: { me: User }) {
       {tab === 'usage' && <UsageTab />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
+      {tab === 'audit' && <AuditTab notify={notify} />}
       {tab === 'serverlogs' && <ServerLogsTab notify={notify} />}
       {toast && <div className={`toast ${toast.error ? 'error' : ''}`}>{toast.error ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
     </div>

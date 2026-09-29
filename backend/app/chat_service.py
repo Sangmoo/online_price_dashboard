@@ -9,7 +9,7 @@ from typing import Iterator
 
 import anthropic
 
-from . import config, logs, store, usage, userdb
+from . import appdb, config, logs, usage, userdb
 
 _log = logs.get("ai")
 from .chat_tools import BUILTIN_NAMES, ToolInputError, data_scopes, run_tool, tool_label, tools_for
@@ -70,45 +70,37 @@ def _client() -> anthropic.Anthropic:
 # 대화 기록 (사용자별 SQLite 저장)
 # ----------------------------------------------------------------------------
 def list_conversations(usr_id: str) -> list[dict]:
-    return store.rows(
-        "SELECT id, title, created_at AS createdAt, updated_at AS updatedAt FROM conversations "
-        "WHERE usr_id=? ORDER BY updated_at DESC LIMIT 100",
-        (usr_id,),
-    )
+    return appdb.conv_list(usr_id)
 
 
 def get_conversation(usr_id: str, conv_id: str) -> dict | None:
-    r = store.row("SELECT id, title, display, updated_at FROM conversations WHERE id=? AND usr_id=?", (conv_id, usr_id))
+    r = appdb.conv_get(usr_id, conv_id)
     if not r:
         return None
-    return {"id": r["id"], "title": r["title"], "messages": json.loads(r["display"]), "updatedAt": r["updated_at"]}
+    return {"id": r["id"], "title": r["title"], "messages": r["display"], "updatedAt": r["updated_at"]}
 
 
 def delete_conversation(usr_id: str, conv_id: str) -> None:
-    store.execute("DELETE FROM conversations WHERE id=? AND usr_id=?", (conv_id, usr_id))
+    appdb.conv_delete(usr_id, conv_id)
 
 
 def rename_conversation(usr_id: str, conv_id: str, title: str) -> None:
-    store.execute("UPDATE conversations SET title=? WHERE id=? AND usr_id=?", (title.strip()[:80], conv_id, usr_id))
+    appdb.conv_rename(usr_id, conv_id, title)
 
 
 def _load_or_create(usr_id: str, conv_id: str | None, first_text: str) -> tuple[str, str, list, list]:
     if conv_id:
-        r = store.row("SELECT * FROM conversations WHERE id=? AND usr_id=?", (conv_id, usr_id))
+        r = appdb.conv_get(usr_id, conv_id)
         if r:
-            return r["id"], r["title"], json.loads(r["api_messages"]), json.loads(r["display"])
+            return r["id"], r["title"], r["api_messages"], r["display"]
     new_id = uuid.uuid4().hex
     title = " ".join(first_text.split())[:40]
-    store.execute("INSERT INTO conversations(id, usr_id, title) VALUES(?,?,?)", (new_id, usr_id, title))
+    appdb.conv_create(new_id, usr_id, title)
     return new_id, title, [], []
 
 
 def _save(conv_id: str, api_messages: list, display: list) -> None:
-    store.execute(
-        "UPDATE conversations SET api_messages=?, display=?, updated_at=datetime('now','localtime') WHERE id=?",
-        (json.dumps(api_messages, ensure_ascii=False, default=str),
-         json.dumps(display, ensure_ascii=False, default=str), conv_id),
-    )
+    appdb.conv_save(conv_id, api_messages, display)
 
 
 # ----------------------------------------------------------------------------
@@ -140,6 +132,8 @@ def _context_text(ctx: dict | None, me: dict) -> str:
             if ctx.get("q"):
                 cond.append(f"검색어 '{ctx['q']}'")
             parts.append("보고 있는 화면: 매장 재고 실사계획" + (f" (조건: {', '.join(cond)})" if cond else " (조건 없음)"))
+        elif view == "sale_dashboard" and ctx.get("ym"):
+            parts.append(f"보고 있는 화면: 판매 현황 대시보드 ({ctx['ym']} 기준, 전년 동월·전월 비교)")
         elif view == "sale_monthly" and ctx.get("ymFrom"):
             cond = [f"판매년월 {ctx['ymFrom'].replace('-', '')}~{ctx.get('ymTo', '').replace('-', '')}"]
             if ctx.get("shops"):

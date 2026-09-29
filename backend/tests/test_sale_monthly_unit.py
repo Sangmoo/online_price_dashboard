@@ -127,8 +127,8 @@ def test_summary_month_matches_previous_year(monkeypatch):
     def group(where, p, col):
         seen.append((p["ym_from"], p["ym_to"], {k: v for k, v in p.items() if k.startswith("yy")}))
         if p["ym_from"] == "202601":  # 당해
-            return {"202601": (10, 100, 1_000_000, 50), "202602": (10, 120, 1_500_000, 60)}
-        return {"202501": (9, 90, 800_000, 40)}  # 전년 (2월 없음)
+            return {"202601": (10, 100, 1_000_000, 50, 300_000), "202602": (10, 120, 1_500_000, 60, 600_000)}
+        return {"202501": (9, 90, 800_000, 40, 280_000)}  # 전년 (2월 없음)
 
     monkeypatch.setattr(sm, "_group", group)
     r = sm.summary("2026-01", "2026-02", None, "2026", None, "month")
@@ -138,13 +138,17 @@ def test_summary_month_matches_previous_year(monkeypatch):
     assert (feb["prevAmt"], feb["growth"]) == (0, None)  # 전년 값 없으면 증감 없음
     assert r["total"]["amt"] == 2_500_000 and r["total"]["prevAmt"] == 800_000
     assert jan["share"] == 40.0
+    # 원가율 = 원가 / 실판금액: 1월 30.0% (전년 35.0% → -5.0%p), 합계 36.0%
+    assert (jan["cost"], jan["costRate"], jan["prevCostRate"], jan["costRateDiff"]) == (300_000, 30.0, 35.0, -5.0)
+    assert (feb["costRate"], feb["prevCostRate"], feb["costRateDiff"]) == (40.0, None, None)
+    assert (r["total"]["cost"], r["total"]["costRate"], r["total"]["prevCostRate"]) == (900_000, 36.0, 35.0)
 
 
 def test_summary_plan_year_and_season_keys(monkeypatch):
     def group(where, p, col):
         if col == "PLAN_YY":
-            return {"2026": (1, 1, 300, 0)} if p["ym_from"] == "202601" else {"2025": (1, 1, 200, 0)}
-        return {"여름": (1, 1, 100, 0), "봄": (1, 1, 50, 0)} if p["ym_from"] == "202601" else {"봄": (1, 1, 100, 0)}
+            return {"2026": (1, 1, 300, 0, 0)} if p["ym_from"] == "202601" else {"2025": (1, 1, 200, 0, 0)}
+        return {"여름": (1, 1, 100, 0, 0), "봄": (1, 1, 50, 0, 0)} if p["ym_from"] == "202601" else {"봄": (1, 1, 100, 0, 0)}
 
     monkeypatch.setattr(sm, "_group", group)
     yy = sm.summary("2026-01", "2026-08", None, None, None, "plan_yy")["rows"]

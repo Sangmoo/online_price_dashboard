@@ -227,11 +227,17 @@ def shop_names(ids: list[str]) -> dict[str, str]:
 
 
 def _group(where: str, p: dict, col: str) -> dict:
-    sql = (f"SELECT {col} AS K, COUNT(DISTINCT SHOP_ID), NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0), NVL(SUM(DSCT_AMT), 0) "
-           f"FROM T_CLOSE_SALE_BASE WHERE {where} GROUP BY {col}")
-    return _cached(f"group:{col}", where, p, lambda: {
-        k: (int(s), int(q), int(a), int(d)) for k, s, q, a, d in db.query(sql, p)[1]
+    # 원가 금액 = 제조원가(V+) × 수량. 월·매장 묶음은 Oracle 이 사전 집계 뷰(MV_CLOSE_SALE_SHOP_YM)로 자동 재작성해 즉시 계산된다.
+    sql = (f"SELECT {col} AS K, COUNT(DISTINCT SHOP_ID), NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0), NVL(SUM(DSCT_AMT), 0), "
+           f"NVL(SUM(PRODUCT_COST2 * QTY), 0) FROM T_CLOSE_SALE_BASE WHERE {where} GROUP BY {col}")
+    return _cached(f"group2:{col}", where, p, lambda: {
+        k: (int(s), int(q), int(a), int(d), int(c)) for k, s, q, a, d, c in db.query(sql, p)[1]
     })
+
+
+def _rate(cost: int, amt: int) -> float | None:
+    """원가율(%) = 원가 금액 / 실판금액 × 100"""
+    return round(cost * 100 / amt, 1) if amt else None
 
 
 def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None, dim: str) -> dict:
@@ -266,8 +272,9 @@ def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, s
     total_amt = sum(v[2] for v in cur.values()) or 1
     rows = []
     for k in keys:
-        s, q, a, d = cur.get(k, (0, 0, 0, 0))
-        ps, pq, pa, pd = prev_by.get(k, (0, 0, 0, 0))
+        s, q, a, d, c = cur.get(k, (0, 0, 0, 0, 0))
+        ps, pq, pa, pd, pc = prev_by.get(k, (0, 0, 0, 0, 0))
+        rate, prate = _rate(c, a), _rate(pc, pa)
         rows.append({
             "key": k, "label": (f"{k[:4]}-{k[4:]}" if dim == "month" and k else names.get(k, k) if dim == "shop" else k) or "(없음)",
             "shopNm": names.get(k) if dim == "shop" else None,
@@ -275,6 +282,8 @@ def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, s
             "prevKey": (_shift_ym(k, -12) if dim == "month" and k else str(int(k) - 1) if dim == "plan_yy" and k and str(k).isdigit() else k),
             "prevQty": pq, "prevAmt": pa,
             "growth": round((a / pa - 1) * 100, 1) if pa else None,
+            "cost": c, "costRate": rate, "prevCostRate": prate,
+            "costRateDiff": round(rate - prate, 1) if rate is not None and prate is not None else None,
         })
     if dim == "month":
         rows.sort(key=lambda r: r["key"] or "")
@@ -285,13 +294,17 @@ def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, s
     else:
         rows.sort(key=lambda r: r["amt"], reverse=True)
     tot = lambda src, i: sum(v[i] for v in src.values())  # noqa: E731
+    t_amt, t_cost, p_amt, p_cost = tot(cur, 2), tot(cur, 4), tot(prev, 2), tot(prev, 4)
+    t_rate, p_rate = _rate(t_cost, t_amt), _rate(p_cost, p_amt)
     return {
         "dim": dim, "dimLabel": label, "rows": rows,
         "period": {"from": p["ym_from"], "to": p["ym_to"], "prevFrom": prev_from, "prevTo": prev_to,
                    "planYys": _split(plan_yys), "prevPlanYys": _split(prev_yys)},
         "total": {"qty": tot(cur, 1), "amt": tot(cur, 2), "dsct": tot(cur, 3),
                   "prevQty": tot(prev, 1), "prevAmt": tot(prev, 2),
-                  "growth": round((tot(cur, 2) / tot(prev, 2) - 1) * 100, 1) if tot(prev, 2) else None},
+                  "growth": round((tot(cur, 2) / tot(prev, 2) - 1) * 100, 1) if tot(prev, 2) else None,
+                  "cost": t_cost, "costRate": t_rate, "prevCostRate": p_rate,
+                  "costRateDiff": round(t_rate - p_rate, 1) if t_rate is not None and p_rate is not None else None},
     }
 
 

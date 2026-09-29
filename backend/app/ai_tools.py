@@ -457,16 +457,21 @@ def delete_custom(name: str, by: str) -> None:
     _log.info("AI 도구 삭제: %s (by %s)", name, by)
 
 
-def save_builtin(name: str, enabled: bool, extra_desc: str, by: str) -> None:
+def save_builtin(name: str, enabled: bool, extra_desc: str, by: str, description: str | None = None) -> None:
+    """기본 도구 설정. description 을 주면 AI 에게 주는 설명 자체를 바꾸고, 빈 값/None 이면 프로그램 기본 설명을 쓴다."""
     extra_desc = (extra_desc or "").strip()
     if len(extra_desc) > 1000:
         raise ToolDefError("추가 안내는 1,000자 이내로 입력하세요.")
+    description = (description or "").strip() or None
+    if description is not None and not 10 <= len(description) <= 4000:
+        raise ToolDefError("설명은 10~4,000자로 입력하세요. (비우면 기본 설명)")
     now = _now14()
     old = next((r for r in _load_all() if r["tool_nm"] == name), None)
     _upsert({
-        "tool_nm": name, "tool_type": "B", "label": None, "description": None, "extra_desc": extra_desc or None,
+        "tool_nm": name, "tool_type": "B", "label": None, "description": description, "extra_desc": extra_desc or None,
         "page_cd": None, "sql_text": None, "params_json": None, "max_rows": None, "use_yn": "Y" if enabled else "N",
         "ins_day": old["ins_day"] if old else now, "ins_userid": old["ins_userid"] if old else by,
         "upt_day": now, "upt_userid": by,
     })
-    _log.info("기본 AI 도구 설정: %s 사용=%s 추가안내=%d자 (by %s)", name, enabled, len(extra_desc), by)
+    _log.info("기본 AI 도구 설정: %s 사용=%s 설명변경=%s 추가안내=%d자 (by %s)", name, enabled, description is not None,
+              len(extra_desc), by)

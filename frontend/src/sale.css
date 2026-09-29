@@ -42,3 +42,15 @@
 .trend-loading { display: flex; align-items: center; gap: 8px; padding: 18px; color: var(--primary); flex-wrap: wrap; }
 .trend-modal { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .trend-table { max-height: 300px; }
+
+/* 판매 현황 대시보드 */
+.sd-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.sd-kpi .kpi-value { font-size: 24px; }
+.sd-delta { font-size: 12px; margin: 2px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.sd-delta > span:first-child { display: inline-flex; align-items: center; gap: 1px; font-weight: 700; }
+.sd-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+.sd-grid.three { grid-template-columns: repeat(3, 1fr); }
+.sd-grid > * { min-width: 0; }
+.sd-table { font-size: 13px; }
+.sd-table td, .sd-table th { padding: 6px 8px; }
+@media (max-width: 1100px) { .sd-grid, .sd-grid.three { grid-template-columns: 1fr; } }

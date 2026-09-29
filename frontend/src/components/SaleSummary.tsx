@@ -20,19 +20,37 @@ type SRow = {
   prevQty: number
   prevAmt: number
   growth: number | null
+  cost: number
+  costRate: number | null
+  prevCostRate: number | null
+  costRateDiff: number | null
 }
 type SData = {
   dim: string
   dimLabel: string
   rows: SRow[]
   period: { from: string; to: string; prevFrom: string; prevTo: string; planYys: string[]; prevPlanYys: string[] }
-  total: { qty: number; amt: number; dsct: number; prevQty: number; prevAmt: number; growth: number | null }
+  total: {
+    qty: number
+    amt: number
+    dsct: number
+    prevQty: number
+    prevAmt: number
+    growth: number | null
+    cost: number
+    costRate: number | null
+    prevCostRate: number | null
+    costRateDiff: number | null
+  }
 }
-type SortKey = 'label' | 'shops' | 'qty' | 'amt' | 'dsct' | 'share' | 'prevAmt' | 'growth'
+type SortKey = 'label' | 'shops' | 'qty' | 'amt' | 'dsct' | 'share' | 'prevAmt' | 'growth' | 'cost' | 'costRate' | 'costRateDiff'
 
 const ym = (v: string) => `${v.slice(0, 4)}-${v.slice(4)}`
 const mil = (v: number) => Math.round(v / 1_000_000)
 const TOP_N = 15
+const pct = (v: number | null) => (v === null ? '-' : `${v.toFixed(1)}%`)
+// 원가율 증감: 오르면(원가 부담 증가) 빨강, 내리면 파랑 — 앱의 상승/하락 색과 같은 규칙
+const pp = (v: number | null) => (v === null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%p`)
 
 export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: Dim[] }) {
   const [dim, setDim] = useState('month')
@@ -102,6 +120,10 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
       { key: 'share', label: '비중(%)' },
       { key: 'prevAmt', label: '전년 동기 실판금액' },
       { key: 'growth', label: '증감(%)' },
+      { key: 'cost', label: '원가 금액(제조원가×수량)' },
+      { key: 'costRate', label: '원가율(%)' },
+      { key: 'prevCostRate', label: '전년 동기 원가율(%)' },
+      { key: 'costRateDiff', label: '원가율 증감(%p)' },
     ]
     exportTable(`판매요약_${data.dimLabel}_${data.period.from}-${data.period.to}`, cols, rows as unknown as Record<string, string | number | null>[])
   }
@@ -148,6 +170,11 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
             <div className="pill"><span>증감</span><b className={growthClass(data.total.growth)}>{fmtGrowth(data.total.growth)}</b></div>
             <div className="pill"><span>수량</span><b>{fmtNum(data.total.qty)}</b><span className="muted">(전년 {fmtNum(data.total.prevQty)})</span></div>
             <div className="pill"><span>할인금액</span><b>{fmtNum(data.total.dsct)}원</b></div>
+            <div className="pill" title="원가율 = 원가 금액(제조원가×수량) ÷ 실판금액">
+              <span>원가율</span><b>{pct(data.total.costRate)}</b>
+              <span className="muted">(전년 {pct(data.total.prevCostRate)}, </span>
+              <b className={growthClass(data.total.costRateDiff)}>{pp(data.total.costRateDiff)}</b><span className="muted">)</span>
+            </div>
           </section>
 
           <section className="card panel">
@@ -193,6 +220,9 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
                     {th('share', '비중')}
                     {th('prevAmt', '전년 동기(원)')}
                     {th('growth', '증감')}
+                    {th('cost', '원가(원)')}
+                    {th('costRate', '원가율')}
+                    {th('costRateDiff', '원가율 증감')}
                   </tr>
                 </thead>
                 <tbody>
@@ -214,9 +244,12 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
                       <td className="num muted">{r.share.toFixed(1)}%</td>
                       <td className="num muted">{fmtNum(r.prevAmt)}</td>
                       <td className={`num ${growthClass(r.growth)}`}>{fmtGrowth(r.growth)}</td>
+                      <td className="num">{fmtNum(r.cost)}</td>
+                      <td className="num" title={r.prevCostRate !== null ? `전년 동기 ${pct(r.prevCostRate)}` : undefined}>{pct(r.costRate)}</td>
+                      <td className={`num ${growthClass(r.costRateDiff)}`}>{pp(r.costRateDiff)}</td>
                     </tr>
                   ))}
-                  {rows.length === 0 && <tr><td colSpan={8} className="empty">조회된 데이터가 없습니다.</td></tr>}
+                  {rows.length === 0 && <tr><td colSpan={11} className="empty">조회된 데이터가 없습니다.</td></tr>}
                 </tbody>
               </table>
             </div>

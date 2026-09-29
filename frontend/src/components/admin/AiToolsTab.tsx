@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Check, Database, Loader2, Pencil, Play, Plus, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Check, Database, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 import {
   api,
   type AiToolTestResult,
@@ -7,6 +7,8 @@ import {
   type BuiltinTool,
   type CustomTool,
   type CustomToolDef,
+  type DataStatus,
+  type MvRefresh,
   type PageMeta,
   type ToolParam,
 } from '../../api'
@@ -53,10 +55,11 @@ export default function AiToolsTab({ notify }: { notify: Notify }) {
 
   return (
     <div className="stack">
+      <DataStatusCard notify={notify} />
       <section className="card panel">
         <div className="panel-head row">
           <h3>기본 도구</h3>
-          <span className="panel-hint">프로그램에 들어 있는 조회 도구 · 끄면 AI 가 쓰지 않음 · 추가 안내는 AI 에게 주는 설명 끝에 덧붙음</span>
+          <span className="panel-hint">프로그램에 들어 있는 조회 도구 · 끄면 AI 가 쓰지 않음 · ✎ 로 AI 에게 주는 설명·추가 안내 수정 (조회 방식은 고정)</span>
           <div className="grow" />
           <span className={`storage-badge ${data.storage}`} title={data.storage === 'sqlite' ? 'db/create_erp_web_ai_tool.sql 로 Oracle 테이블을 만들면 자동으로 옮겨집니다.' : ''}>
             <Database size={13} /> 저장 위치: {data.storage === 'oracle' ? 'Oracle' : '서버 로컬 (Oracle 테이블 생성 시 자동 이전)'}
@@ -72,10 +75,13 @@ export default function AiToolsTab({ notify }: { notify: Notify }) {
                 <tr key={t.name} className={t.enabled ? '' : 'inactive'}>
                   <td><div className="strong">{t.label}</div><div className="muted mono small">{t.name}</div></td>
                   <td><div>{t.group}</div><div className="muted small">{t.pages.map((p) => p.label).join(', ')}</div></td>
-                  <td className="tool-desc" title={t.description}>{t.description}</td>
+                  <td>
+                    {t.customized && <span className="tool-badge">설명 변경됨</span>}
+                    <div className="tool-desc" title={t.description}>{t.description}</div>
+                  </td>
                   <td className="tool-note">
                     {t.extraDesc ? <span>{t.extraDesc}</span> : <span className="muted">-</span>}
-                    <button className="icon-btn tiny-visible" title="추가 안내 편집" onClick={() => setNoteFor(t)}><Pencil size={13} /></button>
+                    <button className="icon-btn tiny-visible" title="설명 · 추가 안내 편집" onClick={() => setNoteFor(t)}><Pencil size={13} /></button>
                   </td>
                   <td className="center">
                     <Toggle on={t.enabled} disabled={busy === t.name}
@@ -138,8 +144,9 @@ export default function AiToolsTab({ notify }: { notify: Notify }) {
         <NoteModal
           tool={noteFor}
           onClose={() => setNoteFor(null)}
-          onSave={async (text) => {
-            if (await run(noteFor.name, () => api.admin.saveBuiltinTool(noteFor.name, { enabled: noteFor.enabled, extraDesc: text }), '추가 안내를 저장했습니다.'))
+          onSave={async (description, extraDesc) => {
+            if (await run(noteFor.name, () => api.admin.saveBuiltinTool(noteFor.name, { enabled: noteFor.enabled, extraDesc, description }),
+              `${noteFor.label} 도구 설명을 저장했습니다.`))
               setNoteFor(null)
           }}
         />
@@ -161,6 +168,107 @@ export default function AiToolsTab({ notify }: { notify: Notify }) {
   )
 }
 
+// ----------------------------------------------------------------------------
+// 사전 집계 뷰 상태 (AI 합계 도구 · 판매 현황 · 요약 화면이 사용)
+// ----------------------------------------------------------------------------
+function DataStatusCard({ notify }: { notify: Notify }) {
+  const [st, setSt] = useState<DataStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [refresh, setRefresh] = useState<MvRefresh | null>(null)
+  const load = useCallback(() => {
+    setLoading(true)
+    api.admin
+      .dataStatus()
+      .then((d) => {
+        setSt(d)
+        setRefresh(d.refresh)
+      })
+      .catch((e) => notify(e.message, true))
+      .finally(() => setLoading(false))
+  }, [notify])
+  useEffect(load, [load])
+
+  // 갱신 중이면 3초마다 상태 확인, 끝나면 뷰 상태를 다시 읽는다
+  const running = refresh?.status === 'running'
+  useEffect(() => {
+    if (!running) return
+    const t = setTimeout(() => {
+      api.admin
+        .refreshState()
+        .then(({ refresh: r }) => {
+          setRefresh(r)
+          if (r.status === 'done') {
+            notify(`사전 집계 뷰를 갱신했습니다 (${r.elapsedSec ?? '-'}초).`)
+            load()
+          } else if (r.status === 'error') {
+            notify(`갱신 실패: ${r.error}`, true)
+          }
+        })
+        .catch(() => undefined)
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [refresh, running, load, notify])
+
+  const startRefresh = async () => {
+    if (!st) return
+    const msg =
+      `사전 집계 뷰를 지금 갱신할까요?\n\n` +
+      `· 원본(T_CLOSE_SALE_BASE) 전체를 월×매장으로 다시 집계합니다 (몇 분 걸릴 수 있음).\n` +
+      `· 갱신이 끝날 때까지 화면·AI 는 이전 데이터로 조회되고, 끝나면 바로 새 데이터를 씁니다.\n` +
+      `· 전월 마감 적재가 끝난 뒤에 실행하세요. (현재 원본 최신 월: ${ym(st.baseMaxMonth)})`
+    if (!confirm(msg)) return
+    try {
+      const { refresh: r } = await api.admin.refreshMv()
+      setRefresh(r)
+    } catch (e) {
+      notify((e as Error).message, true)
+    }
+  }
+
+  const ym = (v: string | null) => (v ? `${v.slice(0, 4)}-${v.slice(4)}` : '-')
+  const ok = !!st && st.usable && !st.behind
+  return (
+    <section className="card panel">
+      <div className="panel-head row">
+        <h3>사전 집계 뷰</h3>
+        <span className="panel-hint">월×매장 합계 · 판매 현황, 판매 요약(월·매장), AI 합계 도구가 사용 · 최신이 아니면 원본으로 계산(느려짐)</span>
+        <div className="grow" />
+        <button className="icon-btn bordered" onClick={load} title="상태 새로고침"><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
+        <button className={`btn ${ok ? 'ghost' : 'primary'}`} onClick={startRefresh} disabled={!st || running}
+          title="전월 마감 적재가 끝난 뒤 눌러 주세요">
+          {running ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} {running ? `갱신 중 ${refresh?.elapsedSec ?? 0}초` : '지금 갱신'}
+        </button>
+      </div>
+      {st && (
+        <div className="summary-pills">
+          <div className={`pill strong ${ok ? '' : 'warn-pill'}`}>
+            <span>상태</span>
+            <b>{!st.mvMaxMonth ? '뷰 없음' : st.staleness === 'FRESH' ? (st.behind ? '최근 월 없음' : '최신') : '갱신 필요'}</b>
+          </div>
+          <div className="pill"><span>마지막 갱신</span><b>{st.lastRefresh ?? '-'}</b></div>
+          <div className="pill"><span>뷰 최신 월</span><b>{ym(st.mvMaxMonth)}</b><span className="muted">/ 원본 {ym(st.baseMaxMonth)}</span></div>
+          <div className="pill"><span>행 수</span><b>{st.rows === null ? '-' : fmtNum(st.rows)}</b></div>
+          <div className="pill"><span>원가 컬럼</span><b>{st.hasCostColumn ? '있음' : '없음'}</b></div>
+        </div>
+      )}
+      {st && !ok && !running && (
+        <div className="alert warn-inline">
+          <AlertTriangle size={14} />
+          {st.behind ? `원본에 ${ym(st.baseMaxMonth)} 데이터가 들어왔지만 뷰에는 아직 없습니다.` : '원본이 바뀌어 뷰가 최신이 아닙니다.'}
+          {' '}마감 적재가 끝났으면 [지금 갱신]을 눌러 주세요. 그동안은 원본 테이블로 계산합니다(결과는 같고 느릴 뿐).
+        </div>
+      )}
+      {refresh && refresh.status !== 'idle' && (
+        <div className={`muted small mv-refresh-line ${refresh.status}`}>
+          {refresh.status === 'running' && `갱신 중 · ${refresh.by} · ${refresh.started} 시작 · ${refresh.elapsedSec ?? 0}초 경과 (다른 화면으로 가도 계속됩니다)`}
+          {refresh.status === 'done' && `최근 갱신 완료 · ${refresh.by} · ${refresh.finished} · ${refresh.elapsedSec}초`}
+          {refresh.status === 'error' && `최근 갱신 실패 · ${refresh.by} · ${refresh.finished} · ${refresh.error}`}
+        </div>
+      )}
+    </section>
+  )
+}
+
 const emptyTool = (pages: PageMeta[]): CustomToolDef => ({
   name: '', label: '', description: '', page: pages[0]?.key ?? '', sql: 'SELECT ...\n  FROM ...\n WHERE MAKE_YYMM = :ym', params: [], maxRows: 100, enabled: true,
 })
@@ -177,21 +285,39 @@ const bindsIn = (sql: string) => {
 }
 
 // ----------------------------------------------------------------------------
-function NoteModal({ tool, onClose, onSave }: { tool: BuiltinTool; onClose: () => void; onSave: (text: string) => void }) {
+function NoteModal({ tool, onClose, onSave }: { tool: BuiltinTool; onClose: () => void; onSave: (description: string, extraDesc: string) => void }) {
+  const [desc, setDesc] = useState(tool.description)
   const [text, setText] = useState(tool.extraDesc)
+  const isDefault = desc.trim() === tool.defaultDescription.trim()
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal card">
+      <div className="modal card tool-editor">
         <div className="modal-head">
-          <h3>추가 안내 · {tool.label}</h3>
+          <h3>설명 편집 · {tool.label} <span className="muted mono small">{tool.name}</span></h3>
           <button className="icon-btn" onClick={onClose}><X size={18} /></button>
         </div>
-        <p className="muted small">AI 에게 주는 도구 설명 끝에 "[관리자 안내]"로 덧붙습니다. 예: "원가율은 소수 첫째 자리까지 표시", "자사몰(S51012)은 온라인 매장으로 구분해서 설명"</p>
-        <textarea className="input tool-textarea" rows={5} maxLength={1000} value={text} onChange={(e) => setText(e.target.value)} />
+        <label className="tool-field">
+          <span>
+            설명 (AI 에게 전달) — AI 가 이 도구를 언제·어떻게 쓸지 판단하는 글입니다. 조회 조건·계산 방식은 바뀌지 않습니다.
+            {!isDefault && <span className="tool-badge">기본 설명과 다름</span>}
+          </span>
+          <textarea className="input tool-textarea size-xl" rows={18} maxLength={4000} value={desc} onChange={(e) => setDesc(e.target.value)} />
+        </label>
+        <div className="tool-desc-actions">
+          <span className="muted small">{desc.length}/4000 · 입력값: {tool.params.join(', ') || '없음'}</span>
+          <button className="btn-link small" disabled={isDefault} onClick={() => setDesc(tool.defaultDescription)}>기본값으로 되돌리기</button>
+        </div>
+        <label className="tool-field">
+          <span>추가 안내 — 설명 끝에 "[관리자 안내]"로 덧붙습니다. 예: "원가율은 소수 첫째 자리까지", "자사몰(S51012)은 온라인 매장으로 구분"</span>
+          <textarea className="input tool-textarea size-md" rows={7} maxLength={1000} value={text} onChange={(e) => setText(e.target.value)} />
+        </label>
+        {!isDefault && (
+          <div className="alert warn-inline"><AlertTriangle size={14} /> 설명을 바꾸면 AI 가 도구를 고르는 방식이 달라질 수 있습니다. 바꾼 뒤 몇 가지 질문으로 확인해 보세요.</div>
+        )}
         <div className="setting-actions">
           <span className="muted small">{text.length}/1000</span>
           <button className="btn ghost" onClick={onClose}>취소</button>
-          <button className="btn primary" onClick={() => onSave(text)}><Check size={15} /> 저장</button>
+          <button className="btn primary" disabled={desc.trim().length < 10} onClick={() => onSave(desc, text)}><Check size={15} /> 저장</button>
         </div>
       </div>
     </div>
@@ -266,13 +392,14 @@ function ToolEditor({ initial, isNew, overview, onClose, onSave }: {
 
         <label className="tool-field">
           <span>설명 — AI 가 언제 이 도구를 쓰는지 판단하는 글입니다. 무엇을 조회하는지, 결과 컬럼의 뜻, 단위를 적어 주세요.</span>
-          <textarea className="input tool-textarea" rows={3} maxLength={2000} value={t.description} onChange={(e) => set('description', e.target.value)}
+          <textarea className="input tool-textarea size-lg" rows={7} maxLength={2000} value={t.description} onChange={(e) => set('description', e.target.value)}
             placeholder="예: 판매년월을 받아 그 달 실판금액 상위 매장을 조회합니다. AMT 는 실판금액(원)입니다." />
+          <span className="muted small tool-count">{t.description.length}/2000</span>
         </label>
 
         <label className="tool-field">
           <span>조회 SQL — SELECT/WITH 한 문장, 값은 :이름 바인드로만 (주석·세미콜론·쓰기 구문 불가)</span>
-          <textarea className="input tool-textarea mono" rows={8} spellCheck={false} value={t.sql} onChange={(e) => set('sql', e.target.value)} />
+          <textarea className="input tool-textarea size-sql mono" rows={14} spellCheck={false} value={t.sql} onChange={(e) => set('sql', e.target.value)} />
         </label>
         {(missing.length > 0 || unused.length > 0) && (
           <div className="alert warn-inline">
