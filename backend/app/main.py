@@ -1,13 +1,11 @@
 """FastAPI 엔트리포인트."""
 from __future__ import annotations
 
-import os
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,6 +13,7 @@ from . import admin, auth, chat_service, config, data_service as ds, invt_plan, 
 from .auth import current_user, require_admin, require_page
 
 store.init()
+sale_monthly.cleanup_exports()  # 재시작 전 남은 엑셀 임시 파일 정리
 _moved = userdb.migrate_from_sqlite(store)  # 1회: 이전 SQLite 사용자/설정 → Oracle
 if _moved:
     print(f"[migration] 사용자 권한을 Oracle 로 이전했습니다: {', '.join(_moved)}")
@@ -361,13 +360,45 @@ def sale_search(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str |
     return sale_monthly.search(ymFrom, ymTo, shops, planYys, seasons, page, total)
 
 
-@app.get("/api/sale-monthly/export")
-def sale_export(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
-                seasons: str | None = None, _: dict = Depends(sale_page)):
-    path, name = sale_monthly.export_xlsx(ymFrom, ymTo, shops, planYys, seasons)
+@app.get("/api/sale-monthly/dsct")
+def sale_dsct(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
+              seasons: str | None = None, _: dict = Depends(sale_page)):
+    return sale_monthly.dsct_total(ymFrom, ymTo, shops, planYys, seasons)
+
+
+class SaleExportReq(BaseModel):
+    ymFrom: str
+    ymTo: str
+    shops: str | None = None
+    planYys: str | None = None
+    seasons: str | None = None
+
+
+@app.post("/api/sale-monthly/exports")
+def sale_export_start(req: SaleExportReq, me: dict = Depends(sale_page)):
+    return sale_monthly.start_export(me["id"], req.ymFrom, req.ymTo, req.shops, req.planYys, req.seasons)
+
+
+@app.get("/api/sale-monthly/exports/current")
+def sale_export_current(me: dict = Depends(sale_page)):
+    return {"job": sale_monthly.current_export(me["id"])}
+
+
+@app.get("/api/sale-monthly/exports/{job_id}")
+def sale_export_status(job_id: str, me: dict = Depends(sale_page)):
+    return sale_monthly.export_status(me["id"], job_id)
+
+
+@app.delete("/api/sale-monthly/exports/{job_id}")
+def sale_export_cancel(job_id: str, me: dict = Depends(sale_page)):
+    return sale_monthly.cancel_export(me["id"], job_id)
+
+
+@app.get("/api/sale-monthly/exports/{job_id}/file")
+def sale_export_file(job_id: str, me: dict = Depends(sale_page)):
+    path, name = sale_monthly.export_file(me["id"], job_id)
     return FileResponse(path, media_type=XLSX,
-                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
-                        background=BackgroundTask(lambda: os.path.exists(path) and os.remove(path)))
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 @app.get("/api/sale-monthly/shops")

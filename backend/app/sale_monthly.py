@@ -3,18 +3,24 @@ from __future__ import annotations
 
 import os
 import re
-import tempfile
+import threading
+import time
+import uuid
 from datetime import date
+from pathlib import Path
 
-import xlsxwriter
 from fastapi import HTTPException
 
 from . import db
+from .xlsx_stream import XlsxStreamWriter
 
 PAGE_SIZE = 100
 MAX_MONTHS = 36                  # 조회 기간 최대 개월 수
-SHEET_ROWS = 1_000_000           # 엑셀 시트당 최대 행 (엑셀 한도 1,048,576)
-MAX_EXPORT_ROWS = 2_000_000      # 엑셀 한 번에 내려받을 수 있는 최대 행
+SHEET_ROWS = 1_000_000           # 엑셀 시트당 행 수. 넘으면 다음 시트에 이어서 쓴다 (엑셀 한도 1,048,576)
+EXPORT_DIR = Path(__file__).resolve().parents[1] / "data" / "exports"   # git 제외 폴더
+EXPORT_KEEP_SEC = 2 * 60 * 60    # 완료된 엑셀 파일 보관 시간 (다시 받기 가능)
+MAX_RUNNING_JOBS = 2             # 서버 전체 동시 생성 작업 수
+WIDTHS = [10, 12, 10, 22, 8, 9, 10, 12, 10, 10, 14, 7, 7, 8, 11, 11, 11, 13, 11, 10, 8, 10, 10, 12]
 
 # 시즌: 계절 순서 (봄 → 여름 → 가을 → 겨울, 각 계절은 기본 → 기획)
 SEASONS = ["봄", "봄기획", "여름", "여름기획", "가을", "가을기획", "겨울", "겨울기획"]
@@ -106,78 +112,225 @@ def _row(r: tuple) -> dict:
             for (c, _, kind), v in zip(COLUMNS, r)}
 
 
+# 조회 결과 월별 건수/합계 캐시. 마감 데이터라 자주 바뀌지 않으므로 같은 조건의 페이지 이동은 캐시로 위치를 계산한다.
+STATS_TTL = 10 * 60
+_stats_cache: dict[tuple, tuple[float, object]] = {}
+_stats_lock = threading.Lock()
+
+
+def _cached(kind: str, where: str, p: dict, fn):
+    key = (kind, where, tuple(sorted(p.items())))
+    now = time.time()
+    with _stats_lock:
+        hit = _stats_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    val = fn()
+    with _stats_lock:
+        if len(_stats_cache) > 500:
+            _stats_cache.clear()
+        _stats_cache[key] = (now + STATS_TTL, val)
+    return val
+
+
+def _month_stats(where: str, p: dict) -> list[tuple[str, int, int, int]]:
+    """(판매년월, 건수, 수량, 실판금액). 매장 조건까지는 인덱스(IX_03)만으로 계산되어 36개월도 수 초 안에 끝난다."""
+    return _cached("months", where, p, lambda: [
+        (ym, int(c), int(q or 0), int(a or 0))
+        for ym, c, q, a in db.query(
+            f"SELECT MAKE_YYMM, COUNT(*), SUM(QTY), SUM(REAL_SALE_AMT) FROM T_CLOSE_SALE_BASE WHERE {where} "
+            "GROUP BY MAKE_YYMM ORDER BY MAKE_YYMM", p)[1]
+    ])
+
+
 def search(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None,
            page: int = 1, with_total: bool = True) -> dict:
+    """정렬(판매년월 → 매장코드 …)의 첫 키가 판매년월이므로, 월별 건수로 페이지가 걸친 월을 찾아 그 월만 정렬해 가져온다.
+    전체 기간을 한 번에 정렬하면 36개월(1,400만 행)에서 페이지마다 수십 초가 걸린다."""
     where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
     page = max(1, int(page))
-    out: dict = {"page": page, "pageSize": PAGE_SIZE}
+    months = _month_stats(where, p)
+    total = sum(m[1] for m in months)
+    out: dict = {"page": page, "pageSize": PAGE_SIZE, "total": total}
     if with_total:
-        cnt, qty, amt, dsct = db.query(
-            f"SELECT COUNT(*), NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0), NVL(SUM(DSCT_AMT), 0) "
-            f"FROM T_CLOSE_SALE_BASE WHERE {where}", p)[1][0]
-        out["summary"] = {"rows": int(cnt), "qty": int(qty), "realSaleAmt": int(amt), "dsctAmt": int(dsct)}
-        out["total"] = int(cnt)
-    rows = db.query(
-        f"""SELECT {COL_SQL} FROM (
-               SELECT A.*, ROWNUM RN FROM (
-                   SELECT {COL_SQL} FROM T_CLOSE_SALE_BASE WHERE {where} {ORDER_SQL}
-               ) A WHERE ROWNUM <= :hi
-            ) WHERE RN > :lo""",
-        {**p, "hi": page * PAGE_SIZE, "lo": (page - 1) * PAGE_SIZE},
-    )[1]
+        out["summary"] = {"rows": total, "qty": sum(m[2] for m in months), "realSaleAmt": sum(m[3] for m in months)}
+
+    lo, need, acc, rows = (page - 1) * PAGE_SIZE, PAGE_SIZE, 0, []
+    for ym, cnt, _, _ in months:
+        if need <= 0:
+            break
+        if lo >= acc + cnt:
+            acc += cnt
+            continue
+        local_lo = lo - acc
+        got = db.query(
+            f"""SELECT {COL_SQL} FROM (
+                   SELECT A.*, ROWNUM RN FROM (
+                       SELECT {COL_SQL} FROM T_CLOSE_SALE_BASE WHERE {where} AND MAKE_YYMM = :cur_ym {ORDER_SQL}
+                   ) A WHERE ROWNUM <= :hi
+                ) WHERE RN > :lo""",
+            {**p, "cur_ym": ym, "hi": local_lo + need, "lo": local_lo},
+        )[1]
+        rows += got
+        need -= len(got)
+        acc += cnt
+        lo = acc  # 다음 월은 처음부터
     out["rows"] = [_row(r) for r in rows]
     return out
 
 
-def export_xlsx(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None) -> tuple[str, str]:
-    """조회 조건 전체 결과를 엑셀 파일로 만든다. (임시 파일 경로, 파일명) 반환 — 호출부에서 전송 후 삭제."""
+def dsct_total(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None) -> dict:
+    """할인금액 합계는 인덱스에 없어 테이블을 읽어야 하므로(36개월 약 40초) 화면에서 따로 요청한다."""
     where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
-    total = db.query(f"SELECT COUNT(*) FROM T_CLOSE_SALE_BASE WHERE {where}", p)[1][0][0]
+    val = _cached("dsct", where, p, lambda: int(db.query(
+        f"SELECT NVL(SUM(DSCT_AMT), 0) FROM T_CLOSE_SALE_BASE WHERE {where}", p)[1][0][0] or 0))
+    return {"dsctAmt": val}
+
+
+# ----------------------------------------------------------------------------
+# 전체 엑셀: 백그라운드 작업 (행 수 제한 없음, 시트당 SHEET_ROWS 행)
+# 36개월이면 1,400만 행 이상이라 요청 하나로 기다릴 수 없으므로 작업을 만들고 진행률을 조회한다.
+# 월 단위로 나눠 조회해 DB 정렬 부담을 줄이고, 결과 순서는 판매년월 → 매장코드 순 그대로 유지된다.
+# ----------------------------------------------------------------------------
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _month_list(f: str, t: str) -> list[str]:
+    y, m, out = int(f[:4]), int(f[4:]), []
+    while f"{y:04d}{m:02d}" <= t:
+        out.append(f"{y:04d}{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def _public(job: dict) -> dict:
+    now = time.time()
+    return {
+        "id": job["id"], "status": job["status"], "total": job["total"], "written": job["written"],
+        "sheets": max(1, -(-job["written"] // SHEET_ROWS)) if job["written"] else 0,
+        "startedAt": job["started"], "elapsedSec": int((job["finished"] or now) - job["started"]),
+        "fileName": job["file_name"], "fileSize": job["file_size"], "error": job["error"], "cond": job["cond"],
+    }
+
+
+def cleanup_exports() -> None:
+    """보관 시간이 지난 작업·파일 삭제. 서버 재시작 전 남은 파일도 정리."""
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    with _jobs_lock:
+        for jid, j in list(_jobs.items()):
+            if j["status"] != "running" and (j["finished"] or now) + EXPORT_KEEP_SEC < now:
+                _jobs.pop(jid, None)
+        live = {j["path"] for j in _jobs.values()}
+    for f in EXPORT_DIR.glob("*.xlsx"):
+        if str(f) not in live:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
+def start_export(usr_id: str, ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None,
+                 seasons: str | None) -> dict:
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+    cleanup_exports()
+    with _jobs_lock:
+        mine = [j for j in _jobs.values() if j["usr_id"] == usr_id and j["status"] == "running"]
+        if mine:
+            raise HTTPException(status_code=409, detail={"message": "이미 엑셀을 만들고 있습니다. 끝나거나 취소한 뒤 다시 요청하세요.",
+                                                         "code": "EXPORT_RUNNING", "job": _public(mine[0])})
+        if sum(j["status"] == "running" for j in _jobs.values()) >= MAX_RUNNING_JOBS:
+            raise HTTPException(status_code=429, detail={"message": "다른 사용자의 대용량 엑셀 작업이 진행 중입니다. 잠시 후 다시 시도하세요.",
+                                                         "code": "EXPORT_BUSY"})
+    total = sum(m[1] for m in _month_stats(where, p))
     if total == 0:
         _bad("조회된 데이터가 없습니다.")
-    if total > MAX_EXPORT_ROWS:
-        _bad(f"결과가 {total:,}건으로 엑셀 최대 {MAX_EXPORT_ROWS:,}건을 넘습니다. 기간·매장·시즌 조건을 좁혀 주세요.")
+    f, t = p["ym_from"], p["ym_to"]
+    jid = uuid.uuid4().hex
+    job = {
+        "id": jid, "usr_id": usr_id, "status": "running", "total": total, "written": 0,
+        "started": time.time(), "finished": None, "error": None, "cancel": False,
+        "path": str(EXPORT_DIR / f"{jid}.xlsx"), "file_size": None,
+        "file_name": f"월별매장별판매집계_{f}-{t}_{date.today():%Y%m%d}.xlsx",
+        "cond": {"ymFrom": f, "ymTo": t, "shops": shops or "", "planYys": plan_yys or "", "seasons": seasons or ""},
+    }
+    with _jobs_lock:
+        _jobs[jid] = job
+    threading.Thread(target=_run_export, args=(job, where, p), daemon=True, name=f"export-{jid[:8]}").start()
+    return _public(job)
 
-    fd, path = tempfile.mkstemp(suffix=".xlsx", prefix="sale_monthly_")
-    os.close(fd)
+
+def _run_export(job: dict, where: str, p: dict) -> None:
     try:
-        wb = xlsxwriter.Workbook(path, {"constant_memory": True})
-        head = wb.add_format({"bold": True, "bg_color": "#E8ECF7", "border": 1, "align": "center", "valign": "vcenter"})
-        num = wb.add_format({"num_format": "#,##0"})
-        widths = [10, 8, 10, 22, 8, 9, 10, 12, 10, 10, 14, 7, 7, 8, 11, 11, 11, 13, 11, 10, 8, 10, 10, 12]
-        ws, n_sheet, r_idx = None, 0, 0
+        with XlsxStreamWriter(job["path"], [label for _, label, _ in COLUMNS], [k for _, _, k in COLUMNS], WIDTHS,
+                              sheet_name="판매집계", sheet_rows=SHEET_ROWS) as w:
+            with db.get_pool().acquire() as conn:
+                cur = conn.cursor()
+                cur.arraysize = 5000
+                cur.prefetchrows = 5000
+                for ym in _month_list(p["ym_from"], p["ym_to"]):
+                    cur.execute(f"SELECT {COL_SQL} FROM T_CLOSE_SALE_BASE WHERE {where} AND MAKE_YYMM = :cur_ym {ORDER_SQL}",
+                                {**p, "cur_ym": ym})
+                    while batch := cur.fetchmany():
+                        if job["cancel"]:
+                            raise InterruptedError
+                        w.write_rows(batch)
+                        job["written"] = w.total
+        job["file_size"] = os.path.getsize(job["path"])
+        job["status"] = "done"
+    except InterruptedError:
+        job["status"] = "cancelled"
+    except Exception as ex:  # noqa: BLE001 - 작업 실패는 상태로 전달
+        job["status"] = "error"
+        job["error"] = f"엑셀 생성 중 오류가 발생했습니다: {ex}"
+    finally:
+        job["finished"] = time.time()
+        if job["status"] != "done":
+            try:
+                os.remove(job["path"])
+            except OSError:
+                pass
 
-        def new_sheet():
-            nonlocal ws, n_sheet, r_idx
-            n_sheet += 1
-            ws = wb.add_worksheet("판매집계" if n_sheet == 1 else f"판매집계_{n_sheet}")
-            for i, (_, label, _) in enumerate(COLUMNS):
-                ws.write(0, i, label, head)
-                ws.set_column(i, i, widths[i], num if COLUMNS[i][2] == "int" else None)
-            ws.freeze_panes(1, 0)
-            r_idx = 1
 
-        new_sheet()
-        with db.get_pool().acquire() as conn:
-            cur = conn.cursor()
-            cur.arraysize = 5000
-            cur.prefetchrows = 5000
-            cur.execute(f"SELECT {COL_SQL} FROM T_CLOSE_SALE_BASE WHERE {where} {ORDER_SQL}", p)
-            while True:
-                batch = cur.fetchmany()
-                if not batch:
-                    break
-                for r in batch:
-                    if r_idx > SHEET_ROWS:
-                        new_sheet()
-                    ws.write_row(r_idx, 0, r)
-                    r_idx += 1
-        wb.close()
-    except Exception:
-        os.remove(path)
-        raise
-    ym = f"{ym_from.replace('-', '')}-{ym_to.replace('-', '')}"
-    return path, f"월별매장별판매집계_{ym}_{date.today():%Y%m%d}.xlsx"
+def _own_job(usr_id: str, job_id: str) -> dict:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job or job["usr_id"] != usr_id:
+        raise HTTPException(status_code=404, detail={"message": "엑셀 작업을 찾을 수 없습니다. 다시 요청하세요.", "code": "NOT_FOUND"})
+    return job
+
+
+def export_status(usr_id: str, job_id: str) -> dict:
+    return _public(_own_job(usr_id, job_id))
+
+
+def current_export(usr_id: str) -> dict | None:
+    """화면 재진입 시 이어서 보여줄 작업 (진행 중이거나 받을 수 있는 최근 작업)."""
+    cleanup_exports()
+    with _jobs_lock:
+        mine = sorted((j for j in _jobs.values() if j["usr_id"] == usr_id and j["status"] in ("running", "done")),
+                      key=lambda j: j["started"], reverse=True)
+    return _public(mine[0]) if mine else None
+
+
+def cancel_export(usr_id: str, job_id: str) -> dict:
+    job = _own_job(usr_id, job_id)
+    job["cancel"] = True
+    if job["status"] == "done":  # 완료 후 취소 = 파일 삭제
+        job["status"] = "cancelled"
+        try:
+            os.remove(job["path"])
+        except OSError:
+            pass
+    return _public(job)
+
+
+def export_file(usr_id: str, job_id: str) -> tuple[str, str]:
+    job = _own_job(usr_id, job_id)
+    if job["status"] != "done" or not os.path.exists(job["path"]):
+        _bad("아직 엑셀 파일이 준비되지 않았습니다.")
+    return job["path"], job["file_name"]
 
 
 def options() -> dict:
@@ -188,5 +341,5 @@ def options() -> dict:
         "columns": [{"key": c, "label": label, "type": kind} for c, label, kind in COLUMNS],
         "pageSize": PAGE_SIZE,
         "maxMonths": MAX_MONTHS,
-        "maxExportRows": MAX_EXPORT_ROWS,
+        "sheetRows": SHEET_ROWS,
     }

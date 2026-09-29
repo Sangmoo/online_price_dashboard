@@ -25,3 +25,11 @@
   .sale-filter-row .toolbar-actions { margin-left: 0; }
 }
 .sale-filter .date-range { flex-wrap: wrap; max-width: 100%; }
+
+/* 대용량 엑셀 작업 진행률 */
+.export-job { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
+.export-job-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.export-job-head .grow { flex: 1; }
+.export-job .progress { height: 8px; border-radius: 999px; background: rgba(148,163,184,.2); overflow: hidden; }
+.export-job .progress > div { height: 100%; background: var(--primary); border-radius: inherit; transition: width .6s ease; }
+.export-job.done .progress > div { background: #10b981; }

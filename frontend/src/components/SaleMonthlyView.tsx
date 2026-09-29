@@ -13,17 +13,30 @@ import {
   Store,
   X,
 } from 'lucide-react'
-import { apiFetch, downloadFile } from '../api'
+import { ApiError, apiFetch } from '../api'
 import type { ShopRow } from '../invtApi'
 import { fmtNum } from '../format'
 
 type Col = { key: string; label: string; type: 'text' | 'int' }
-type Options = { seasons: string[]; planYears: string[]; columns: Col[]; pageSize: number; maxMonths: number; maxExportRows: number }
-type Summary = { rows: number; qty: number; realSaleAmt: number; dsctAmt: number }
+type Options = { seasons: string[]; planYears: string[]; columns: Col[]; pageSize: number; maxMonths: number; sheetRows: number }
+type ExportJob = {
+  id: string
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  total: number
+  written: number
+  sheets: number
+  elapsedSec: number
+  fileName: string
+  fileSize: number | null
+  error: string | null
+}
+type Summary = { rows: number; qty: number; realSaleAmt: number }
 type Row = Record<string, string | number | null>
 type Cond = { ymFrom: string; ymTo: string; shops: { id: string; name: string }[]; planYys: string[]; seasons: string[] }
 
-const json = async <T,>(url: string) => (await apiFetch(url)).json() as Promise<T>
+const json = async <T,>(url: string, init?: RequestInit) => (await apiFetch(url, init)).json() as Promise<T>
+const fmtSec = (sec: number) => (sec >= 60 ? `${Math.floor(sec / 60)}분 ${sec % 60}초` : `${sec}초`)
+const fmtSize = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)}GB` : `${Math.max(1, Math.round(b / 1024 ** 2))}MB`)
 
 const lastMonth = () => {
   const d = new Date()
@@ -43,8 +56,8 @@ function toQuery(c: Cond, extra: Record<string, string | number> = {}) {
   return p.toString()
 }
 
-// 엑셀 1행당 대략 시간 (측정값: 31.8만 행 ≈ 60초)
-const SEC_PER_ROW = 60 / 318_000
+// 엑셀 생성 대략 속도 (측정값 기준, 조회 포함)
+const ROWS_PER_SEC = 35_000
 
 export default function SaleMonthlyView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
   const [opts, setOpts] = useState<Options | null>(null)
@@ -52,13 +65,16 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
   const [applied, setApplied] = useState<Cond | null>(null)
   const [page, setPage] = useState(1)
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [dsct, setDsct] = useState<number | null | 'error'>(null)
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picker, setPicker] = useState(false)
-  const [exporting, setExporting] = useState<number | null>(null) // 시작 시각(ms)
-  const [, setTick] = useState(0)
+  const [job, setJob] = useState<ExportJob | null>(null)
+  const [starting, setStarting] = useState(false)
+  const downloaded = useRef<string | null>(null)
   const reqId = useRef(0)
+  const dsctReq = useRef(0)
 
   useEffect(() => {
     json<Options>('/api/sale-monthly/options').then(setOpts).catch((e) => setError(e.message))
@@ -76,6 +92,14 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
       })
       .catch((e) => id === reqId.current && setError(e.message))
       .finally(() => id === reqId.current && setLoading(false))
+    if (withTotal) {
+      // 할인금액 합계는 테이블 전체를 읽어야 해서 따로 계산 (긴 기간은 수십 초)
+      const did = ++dsctReq.current
+      setDsct(null)
+      json<{ dsctAmt: number }>(`/api/sale-monthly/dsct?${toQuery(c)}`)
+        .then((r) => did === dsctReq.current && setDsct(r.dsctAmt))
+        .catch(() => did === dsctReq.current && setDsct('error'))
+    }
   }, [])
 
   const search = () => {
@@ -113,11 +137,46 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
     })
   }, [applied, onContextChange])
 
+  // 화면 재진입 시 진행 중이거나 받을 수 있는 작업 이어서 표시
   useEffect(() => {
-    if (exporting === null) return
-    const t = setInterval(() => setTick((n) => n + 1), 1000)
-    return () => clearInterval(t)
-  }, [exporting])
+    json<{ job: ExportJob | null }>('/api/sale-monthly/exports/current')
+      .then((r) => {
+        if (r.job) {
+          if (r.job.status === 'done') downloaded.current = r.job.id // 이미 끝난 작업은 자동으로 다시 받지 않음
+          setJob(r.job)
+        }
+      })
+      .catch(() => undefined)
+  }, [])
+
+  // 진행률 조회
+  useEffect(() => {
+    if (!job || job.status !== 'running') return
+    const t = setTimeout(() => {
+      json<ExportJob>(`/api/sale-monthly/exports/${job.id}`)
+        .then(setJob)
+        .catch((e) => {
+          setError(e.message)
+          setJob(null)
+        })
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [job])
+
+  // 완료되면 파일 받기 (브라우저 기본 다운로드 → 대용량도 메모리에 올리지 않고 디스크로 저장)
+  const download = useCallback((j: ExportJob) => {
+    downloaded.current = j.id
+    const a = document.createElement('a')
+    a.href = `/api/sale-monthly/exports/${j.id}/file`
+    a.download = j.fileName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }, [])
+  useEffect(() => {
+    if (job?.status === 'done' && downloaded.current !== job.id) download(job)
+    if (job?.status === 'error') setError(job.error)
+  }, [job, download])
 
   const total = summary?.rows ?? 0
   const pageSize = opts?.pageSize ?? 100
@@ -126,19 +185,42 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
     const start = Math.max(1, Math.min(page - 4, pages - 9))
     return Array.from({ length: Math.min(10, pages) }, (_, i) => start + i)
   }, [page, pages])
-  const tooMany = !!opts && total > opts.maxExportRows
-  const estSec = Math.round(total * SEC_PER_ROW)
+  const sheetRows = opts?.sheetRows ?? 1_000_000
+  const running = job?.status === 'running'
 
   const exportXlsx = async () => {
     if (!applied || !total) return
-    if (estSec >= 60 && !window.confirm(`${fmtNum(total)}건을 엑셀로 만듭니다. 약 ${Math.ceil(estSec / 60)}분 걸릴 수 있습니다. 계속할까요?`)) return
-    setExporting(Date.now())
+    const estSec = Math.round(total / ROWS_PER_SEC)
+    const sheets = Math.ceil(total / sheetRows)
+    if (
+      (estSec >= 60 || sheets > 1) &&
+      !window.confirm(
+        `${fmtNum(total)}건을 엑셀로 만듭니다.\n` +
+          (sheets > 1 ? `시트당 ${fmtNum(sheetRows)}행씩 ${sheets}개 시트로 나눠 담습니다.\n` : '') +
+          `예상 소요 시간: 약 ${fmtSec(Math.max(estSec, 5))} (서버에서 만들고, 끝나면 자동으로 내려받습니다)\n계속할까요?`,
+      )
+    )
+      return
+    setStarting(true)
+    setError(null)
     try {
-      await downloadFile(`/api/sale-monthly/export?${toQuery(applied)}`, undefined, '월별매장별판매집계.xlsx')
+      const body = { ymFrom: applied.ymFrom, ymTo: applied.ymTo, shops: applied.shops.map((s) => s.id).join(','), planYys: applied.planYys.join(','), seasons: applied.seasons.join(',') }
+      setJob(await json<ExportJob>('/api/sale-monthly/exports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }))
     } catch (e) {
-      setError((e as Error).message)
+      const ex = e as ApiError
+      if (ex.code === 'EXPORT_RUNNING' && ex.extra?.job) setJob(ex.extra.job as ExportJob)
+      setError(ex.message)
     } finally {
-      setExporting(null)
+      setStarting(false)
+    }
+  }
+
+  const cancelExport = async () => {
+    if (!job) return
+    try {
+      await apiFetch(`/api/sale-monthly/exports/${job.id}`, { method: 'DELETE' })
+    } finally {
+      setJob(null)
     }
   }
 
@@ -167,11 +249,11 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
             <button
               className="btn success"
               onClick={exportXlsx}
-              disabled={exporting !== null || !total || tooMany}
-              title={tooMany ? `엑셀은 최대 ${fmtNum(opts!.maxExportRows)}건까지 내려받을 수 있습니다. 조건을 좁혀 주세요.` : '조회 조건의 전체 결과를 엑셀로 내려받습니다.'}
+              disabled={running || starting || !total}
+              title={`조회 조건의 전체 결과를 엑셀로 내려받습니다. ${fmtNum(sheetRows)}행을 넘으면 다음 시트에 이어서 담습니다.`}
             >
-              {exporting !== null ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
-              {exporting !== null ? ` 엑셀 생성 중 ${Math.floor((Date.now() - exporting) / 1000)}초` : ` 엑셀 전체 (${fmtNum(total)}건)`}
+              {running || starting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+              {running ? ' 엑셀 생성 중' : ` 엑셀 전체 (${fmtNum(total)}건)`}
             </button>
           </div>
         </div>
@@ -216,7 +298,10 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
           <div className="pill strong"><span>조회 건수</span><b>{fmtNum(summary.rows)}건</b></div>
           <div className="pill"><span>수량 합계</span><b>{fmtNum(summary.qty)}</b></div>
           <div className="pill"><span>실판금액 합계</span><b>{fmtNum(summary.realSaleAmt)}원</b></div>
-          <div className="pill"><span>할인금액 합계</span><b>{fmtNum(summary.dsctAmt)}원</b></div>
+          <div className="pill">
+            <span>할인금액 합계</span>
+            <b>{dsct === null ? <Loader2 size={13} className="spin" /> : dsct === 'error' ? '계산 실패' : `${fmtNum(dsct)}원`}</b>
+          </div>
           {applied && (
             <div className="pill hint-pill">
               {applied.ymFrom === applied.ymTo ? applied.ymFrom : `${applied.ymFrom} ~ ${applied.ymTo}`}
@@ -229,7 +314,27 @@ export default function SaleMonthlyView({ onContextChange }: { onContextChange?:
       )}
 
       {error && <div className="alert error">{error}</div>}
-      {tooMany && <div className="alert">결과가 {fmtNum(total)}건이라 엑셀 최대 {fmtNum(opts!.maxExportRows)}건을 넘습니다. 기간·매장·시즌 조건을 좁히면 내려받을 수 있습니다.</div>}
+      {job && job.status !== 'cancelled' && job.status !== 'error' && (
+        <section className={`card export-job ${job.status}`}>
+          <div className="export-job-head">
+            {job.status === 'running' ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+            <b>{job.status === 'running' ? '엑셀 만드는 중' : '엑셀 준비 완료'}</b>
+            <span className="muted">
+              {fmtNum(job.written)} / {fmtNum(job.total)}건 · {job.sheets || 1}개 시트 · {fmtSec(job.elapsedSec)}
+              {job.status === 'running' && job.written > 0 && job.written < job.total &&
+                ` · 약 ${fmtSec(Math.max(1, Math.round(((job.total - job.written) * job.elapsedSec) / job.written)))} 남음`}
+              {job.status === 'done' && job.fileSize ? ` · ${fmtSize(job.fileSize)}` : ''}
+            </span>
+            <div className="grow" />
+            {job.status === 'done' && (
+              <button className="btn success sm" onClick={() => download(job)}><Download size={13} /> 다시 받기</button>
+            )}
+            <button className="btn ghost sm" onClick={cancelExport}>{job.status === 'running' ? '취소' : '닫기'}</button>
+          </div>
+          <div className="progress"><div style={{ width: `${job.total ? Math.min(100, (job.written * 100) / job.total) : 0}%` }} /></div>
+          {job.status === 'running' && <div className="muted small">다른 메뉴로 이동해도 서버에서 계속 만들고, 이 화면으로 돌아오면 이어서 보여 줍니다. 완료 후 2시간 동안 다시 받을 수 있습니다.</div>}
+        </section>
+      )}
 
       <section className="card grid-card">
         <div className={`table-wrap tall sale-wrap ${loading ? 'is-loading' : ''}`}>
