@@ -103,8 +103,9 @@ def test_employee_number_rule(uid, ok):
 # 요청 인증 · 페이지 권한
 # ----------------------------------------------------------------------------
 class _Req:
-    def __init__(self, token):
+    def __init__(self, token, headers=None):
         self.cookies = {auth.SESSION_COOKIE: token} if token else {}
+        self.headers = headers or {}
 
         class S:
             pass
@@ -188,3 +189,29 @@ def test_session_token_stored_as_hash_and_touch_throttled(env, monkeypatch):
     monkeypatch.setattr(auth.time, "time", lambda: real() + appdb.TOUCH_INTERVAL + 1)
     auth.current_user(_Req(token))
     assert len(writes) == 1
+
+
+def test_background_requests_do_not_extend_session(env, monkeypatch):
+    """화면의 자동 주기 요청(X-Background: 1)은 세션을 연장하지 않아, 열어만 둔 화면도 1시간 뒤 로그아웃된다."""
+    token, _ = _login("170046")
+    exp0 = env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (appdb.token_hash(token),))["expires_at"]
+    real = auth.time.time
+    bg = {"X-Background": "1"}
+    for minutes in (10, 30, 50):  # 10분마다 자동 확인이 와도
+        monkeypatch.setattr(auth.time, "time", lambda m=minutes: real() + m * 60)
+        me = auth.current_user(_Req(token, bg))
+        assert me["sessionExpiresAt"] == int(exp0)
+    assert env["store"].row("SELECT expires_at FROM sessions WHERE token=?", (appdb.token_hash(token),))["expires_at"] == exp0
+    monkeypatch.setattr(auth.time, "time", lambda: real() + auth.SESSION_TTL + 5)
+    with pytest.raises(HTTPException) as e:  # 사람이 쓰지 않았으면 만료
+        auth.current_user(_Req(token, bg))
+    assert e.value.detail["code"] == "SESSION_EXPIRED"
+
+
+def test_user_request_still_extends_after_background(env, monkeypatch):
+    token, _ = _login("170046")
+    real = auth.time.time
+    monkeypatch.setattr(auth.time, "time", lambda: real() + 20 * 60)
+    auth.current_user(_Req(token, {"X-Background": "1"}))
+    me = auth.current_user(_Req(token))  # 사람이 조작한 요청은 연장
+    assert me["sessionExpiresAt"] == pytest.approx(real() + 20 * 60 + auth.SESSION_TTL, abs=2)

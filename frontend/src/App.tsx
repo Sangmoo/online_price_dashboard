@@ -268,9 +268,14 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
       lastTouch.current = Date.now()
     }
     window.addEventListener(SESSION_EXTENDED_EVENT, onExtended)
-    const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000)
+    const tick = () => setNowSec(Math.floor(Date.now() / 1000))
+    const t = setInterval(tick, 1000)
+    // 다른 탭을 보는 동안 브라우저가 타이머를 늦추므로, 돌아오면 바로 남은 시간을 다시 계산 (지났으면 즉시 로그아웃)
+    const onVisible = () => document.visibilityState === 'visible' && tick()
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       window.removeEventListener(SESSION_EXTENDED_EVENT, onExtended)
+      document.removeEventListener('visibilitychange', onVisible)
       clearInterval(t)
     }
   }, [])

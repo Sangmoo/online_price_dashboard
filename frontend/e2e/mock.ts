@@ -2,7 +2,7 @@
 // 실제 서버(포트 8000)로 새어 나가지 않게 한다. 요청 기록(calls)으로 화면이 보낸 조건을 검사한다.
 import { expect, test as base, type Page, type Request } from '@playwright/test'
 
-export type Call = { method: string; path: string; query: URLSearchParams; body: unknown }
+export type Call = { method: string; path: string; query: URLSearchParams; body: unknown; headers: Record<string, string> }
 type Reply = { status?: number; json?: unknown; body?: Buffer; headers?: Record<string, string> }
 type Handler = (req: Request, url: URL) => Reply | Promise<Reply>
 
@@ -123,7 +123,7 @@ export class MockApi {
       } catch {
         body = req.postData()
       }
-      this.calls.push({ method: req.method(), path: url.pathname, query: url.searchParams, body })
+      this.calls.push({ method: req.method(), path: url.pathname, query: url.searchParams, body, headers: req.headers() })
       const h = this.handlers.find((x) => x.method === req.method() && (typeof x.path === 'string' ? x.path === url.pathname : x.path.test(url.pathname)))
       if (!h) {
         this.unhandled.push(`${req.method()} ${url.pathname}`)

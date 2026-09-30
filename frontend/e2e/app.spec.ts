@@ -179,3 +179,23 @@ test('관리자: 서버 상태 탭에서 요약을 보고 로그 보관 기간�
   await expect(page.getByText('로그 보관 기간을 14일로 저장했습니다')).toBeVisible()
   expect(api.find('PUT', '/api/admin/settings')[0].body).toEqual({ logKeepDays: 14 })
 })
+
+test('관리자 화면을 열어만 두면 1시간 뒤 로그아웃된다 (자동 확인 요청은 세션을 연장하지 않음)', async ({ page, mockApi }) => {
+  await page.clock.install()
+  const admin = makeUser('ADMIN')
+  admin.sessionExpiresAt = Math.floor(Date.now() / 1000) + 3600
+  const api = await mockApi(admin)
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '' } }))
+  await page.goto('/?view=admin')
+  await expect(page.getByText('테스트관리자').first()).toBeVisible()
+
+  await page.clock.runFor('56:00') // 10분마다 자동 확인이 여러 번 온다
+  const polls = api.find('GET', '/api/admin/data-freshness')
+  expect(polls.length).toBeGreaterThan(3)
+  expect(polls.every((c) => c.headers['x-background'] === '1')).toBe(true)
+  await expect(page.getByText('후 자동 로그아웃됩니다')).toBeVisible() // 만료 5분 전 경고
+
+  await page.clock.runFor('05:00')
+  await expect(page.getByText('1시간 동안 사용하지 않아 로그아웃되었습니다.')).toBeVisible()
+  await expect(page.getByPlaceholder('사번 ID')).toBeVisible()
+})

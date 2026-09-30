@@ -109,10 +109,14 @@ export class ApiError extends Error {
 export const SESSION_EXPIRED_EVENT = 'opd:session-expired'
 export const SESSION_EXTENDED_EVENT = 'opd:session-extended'
 
+// 사람 조작 없이 화면이 스스로 보내는 요청(주기 확인 등): 서버가 세션을 연장하지 않는다
+export const BACKGROUND_HEADERS = { 'X-Background': '1' }
+
 export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, { credentials: 'same-origin', ...init })
   const exp = res.headers.get('X-Session-Expires')
-  if (exp) window.dispatchEvent(new CustomEvent(SESSION_EXTENDED_EVENT, { detail: Number(exp) }))
+  const background = new Headers(init?.headers).get('X-Background') === '1'
+  if (exp && !background) window.dispatchEvent(new CustomEvent(SESSION_EXTENDED_EVENT, { detail: Number(exp) }))
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     const d = body.detail
@@ -182,7 +186,8 @@ export const api = {
     savePermissions: (changes: { id: string; pages: PageKey[] }[]) => sendJson<{ users: AdminUser[] }>('PUT', '/api/admin/permissions', { changes }),
     aiTools: () => getJson<AiToolsOverview>('/api/admin/ai-tools'),
     dataStatus: () => getJson<DataStatus>('/api/admin/data-status'),
-    dataFreshness: () => getJson<DataFreshness>('/api/admin/data-freshness'),
+    // 10분마다 자동 확인 → 세션 연장 안 함 (화면을 열어만 둬도 1시간 뒤 로그아웃되도록)
+    dataFreshness: async () => (await apiFetch('/api/admin/data-freshness', { headers: BACKGROUND_HEADERS })).json() as Promise<DataFreshness>,
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
     cleanupLogs: () => sendJson<{ deleted: string[]; freedBytes: number; keepDays: number }>('POST', '/api/admin/logs/cleanup'),
     refreshState: () => getJson<{ refresh: MvRefresh }>('/api/admin/data-status/refresh'),

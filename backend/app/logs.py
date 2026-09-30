@@ -70,17 +70,18 @@ def sql_text(sql: str, limit: int = 400) -> str:
 # ----------------------------------------------------------------------------
 # 보관 · 정리
 # ----------------------------------------------------------------------------
-def rotated_files() -> list[Path]:
+def rotated_files(folder: Path | None = None) -> list[Path]:
     """교체된 로그 파일 (app.log.2026-09-28, error.log.1 같은 이전 방식 포함), 오래된 순"""
-    if not LOG_DIR.exists():
+    folder = folder or LOG_DIR
+    if not folder.exists():
         return []
-    return sorted((p for p in LOG_DIR.glob("*.log.*") if p.is_file()), key=lambda p: p.stat().st_mtime)
+    return sorted((p for p in folder.glob("*.log.*") if p.is_file()), key=lambda p: p.stat().st_mtime)
 
 
 def app_log_files(days: int) -> list[Path]:
-    """최근 days 일의 app.log 파일들 (오래된 순, 마지막이 현재 파일)"""
+    """최근 days 일의 app.log 파일들 (오래된 순, 마지막이 현재 파일). 현재 파일과 같은 폴더의 날짜 파일만 본다."""
     since = time.time() - days * 86400
-    old = [p for p in rotated_files() if p.name.startswith("app.log.") and p.stat().st_mtime >= since]
+    old = [p for p in rotated_files(APP_LOG.parent) if p.name.startswith(f"{APP_LOG.name}.") and p.stat().st_mtime >= since]
     return old + ([APP_LOG] if APP_LOG.exists() else [])
 
 

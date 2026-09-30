@@ -161,6 +161,14 @@ def logout(token: str | None):
 # ----------------------------------------------------------------------------
 # 요청 인증 (FastAPI 의존성)
 # ----------------------------------------------------------------------------
+BACKGROUND_HEADER = "X-Background"
+
+
+def is_background(request: Request) -> bool:
+    headers = getattr(request, "headers", None) or {}
+    return headers.get(BACKGROUND_HEADER) == "1"
+
+
 def current_user(request: Request) -> dict:
     token = request.cookies.get(SESSION_COOKIE)
     now = time.time()
@@ -177,7 +185,11 @@ def current_user(request: Request) -> dict:
         raise AuthError(401, "사용이 중지된 계정입니다. 관리자에게 문의하세요.", "INACTIVE")
 
     # 서비스 이용 시 세션 만료시간 연장 (슬라이딩 1시간). DB 쓰기는 1분에 한 번만.
-    if now - sess["last_seen"] >= appdb.TOUCH_INTERVAL:
+    # 화면이 사람 조작 없이 스스로 보내는 요청(주기 확인 등, 헤더 X-Background: 1)은 연장하지 않는다
+    # → 화면을 열어만 두고 1시간 쓰지 않으면 정상적으로 로그아웃된다.
+    if is_background(request):
+        expires = sess["expires_at"]
+    elif now - sess["last_seen"] >= appdb.TOUCH_INTERVAL:
         expires = now + SESSION_TTL
         appdb.session_touch(token, now, expires)
     else:

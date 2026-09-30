@@ -39,3 +39,4 @@ backend/data/
 # ===== 화면 자동 테스트 결과 =====
 frontend/test-results/
 frontend/playwright-report/
+frontend/.e2e-dist/

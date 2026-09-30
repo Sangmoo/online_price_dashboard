@@ -78,19 +78,26 @@ def _run(admin: dict) -> None:
         after = _snapshot()
         _clear_caches()
         sec = int(time.time() - _state["started"])
+        _log.info("사전 집계 뷰 갱신 완료 %s초 %s", sec, after)
+        # 변경 이력을 먼저 남기고 상태를 바꾼다 (화면이 '완료'를 본 시점에는 이력에도 있도록)
+        _audit(admin, before, after, f"사전 집계 뷰 갱신 {sec}초 · 행 {before['rows']:,} → {after['rows']:,} · 최신 월 "
+                                     f"{before['maxMonth']} → {after['maxMonth']}")
         with _lock:
             _state.update({"status": "done", "finished": time.time(), "elapsedSec": sec})
-        _log.info("사전 집계 뷰 갱신 완료 %s초 %s", sec, after)
-        audit.record(admin, "MV_REFRESH", _mv_name(), before, after,
-                     summary=f"사전 집계 뷰 갱신 {sec}초 · 행 {before['rows']:,} → {after['rows']:,} · 최신 월 "
-                             f"{before['maxMonth']} → {after['maxMonth']}")
     except Exception as ex:  # noqa: BLE001 - 실패는 상태로 알리고, 원자적 갱신이라 뷰는 이전 데이터 그대로
         msg = str(ex).splitlines()[0]
+        _log.exception("사전 집계 뷰 갱신 실패")
+        _audit(admin, None, None, f"사전 집계 뷰 갱신 실패: {msg[:200]}")
         with _lock:
             _state.update({"status": "error", "finished": time.time(), "error": msg,
                            "elapsedSec": int(time.time() - (_state["started"] or time.time()))})
-        _log.exception("사전 집계 뷰 갱신 실패")
-        audit.record(admin, "MV_REFRESH", _mv_name(), summary=f"사전 집계 뷰 갱신 실패: {msg[:200]}")
+
+
+def _audit(admin: dict, before, after, summary: str) -> None:
+    try:
+        audit.record(admin, "MV_REFRESH", _mv_name(), before, after, summary=summary)
+    except Exception:  # noqa: BLE001 - 이력 기록 실패가 갱신 결과를 바꾸지 않게
+        _log.exception("사전 집계 뷰 갱신 이력 기록 실패")
 
 
 def freshness() -> dict:
