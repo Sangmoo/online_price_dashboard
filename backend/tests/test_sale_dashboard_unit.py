@@ -141,7 +141,21 @@ def test_report_workbook(fake_db):
     shops = wb["전체 매장"]
     assert [c.value for c in shops[4]][:3] == ["순위", "매장명", "매장코드"] and shops.max_row == 4 + 6
     assert rpt.filename(d) == "판매현황_202608_prev.xlsx"
+    charts = wb["요약"]._charts
+    assert len(charts) == 2  # 월별 추이 · 브랜드별
+    assert [len(c.series) for c in charts] == [1, 3]  # 추이: 막대(당해)+선(전년)은 묶은 차트, 브랜드: 실판·비교·목표
 
 
 def test_brand_of():
     assert [sd.brand_of(t) for t in ("쉬즈3팀", "리스트1팀", "시스티나5팀", None)] == ["쉬즈미스", "리스트", "시스티나", "(미지정)"]
+
+
+def test_allowed_brands_limit_scope(fake_db):
+    d = sd.dashboard(allowed=["리스트"])
+    assert d["brandOptions"] == ["리스트"] and d["brandLimited"] and [b["brand"] for b in d["brands"]] == ["리스트"]
+    assert d["kpi"]["amt"] == 110 * M and d["brands"][0]["share"] == 100.0  # 비중은 허용 브랜드 합계 대비 (전사 수치 노출 안 함)
+    with pytest.raises(HTTPException) as ex:
+        sd.dashboard(brand="쉬즈미스", allowed=["리스트"])
+    assert ex.value.status_code == 403
+    both = sd.dashboard(allowed=["리스트", "쉬즈미스"])
+    assert both["kpi"]["amt"] == 265 * M and not sd.dashboard()["brandLimited"]

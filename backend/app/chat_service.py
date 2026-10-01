@@ -122,6 +122,9 @@ def _context_text(ctx: dict | None, me: dict) -> str:
                                ("판매 현황(C)", sc["dash"] or sc["sale"]),
                                ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"])) if ok]
     parts = [f"오늘 날짜: {date.today():%Y%m%d}", f"조회 권한이 있는 데이터: {', '.join(allowed) or '없음'}"]
+    if (sc["dash"] or sc["sale"]) and me.get("brands"):
+        parts.append(f"판매 데이터 브랜드 권한: {', '.join(me['brands'])} 만 조회됩니다 (도구 결과도 이 브랜드로만 계산됨). "
+                     "전사·다른 브랜드 수치는 알 수 없다고 답하세요.")
     if ctx:
         view = ctx.get("view")
         if view == "dashboard" and ctx.get("start") and ctx.get("end"):

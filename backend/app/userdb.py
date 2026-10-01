@@ -84,9 +84,55 @@ def _pages_of(ids: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def _to_row(r: dict, pages: list[str]) -> dict:
-    """기존 SQLite users 행과 같은 키."""
+# ----------------------------------------------------------------------------
+# 브랜드 데이터 권한 (T_ERP_WEB_USER_BRAND, 행 없음 = 모든 브랜드)
+# ----------------------------------------------------------------------------
+BRAND_TABLE = "T_ERP_WEB_USER_BRAND"
+_brand_ready: tuple[float, bool] | None = None
+
+
+def brand_table_ready() -> bool:
+    """브랜드 권한 테이블이 있는지 (1분 캐시). 없으면 모든 사용자 = 모든 브랜드."""
+    global _brand_ready
+    now = time.time()
+    if _brand_ready and _brand_ready[0] > now:
+        return _brand_ready[1]
+    try:
+        db.query(f"SELECT 1 FROM {BRAND_TABLE} WHERE 1 = 0")
+        ok = True
+    except Exception:  # noqa: BLE001 - 테이블 없음/권한 없음
+        ok = False
+    _brand_ready = (now + 60, ok)
+    return ok
+
+
+def _brands_of(ids: list[str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {i: [] for i in ids}
+    if not ids or not brand_table_ready():
+        return out
+    for i in range(0, len(ids), 500):
+        binds = {f"u{j}": v for j, v in enumerate(ids[i:i + 500])}
+        for uid, brand in db.query(f"SELECT USR_ID, BRAND_NM FROM {BRAND_TABLE} WHERE USR_ID IN ({', '.join(':' + k for k in binds)}) "
+                                   "ORDER BY BRAND_NM", binds)[1]:
+            out.setdefault(uid, []).append(brand)
+    return out
+
+
+def _sync_brands(cur, usr_id: str, brands: list[str], now: str, by: str) -> None:
+    cur.execute(f"SELECT BRAND_NM FROM {BRAND_TABLE} WHERE USR_ID = :id", {"id": usr_id})
+    current = {r[0] for r in cur.fetchall()}
+    target = set(brands)
+    for b in current - target:
+        cur.execute(f"DELETE FROM {BRAND_TABLE} WHERE USR_ID = :id AND BRAND_NM = :b", {"id": usr_id, "b": b})
+    for b in target - current:
+        cur.execute(f"INSERT INTO {BRAND_TABLE} (USR_ID, BRAND_NM, INS_DAY, INS_USERID) VALUES (:id, :b, :d, :usr_by)",
+                    {"id": usr_id, "b": b, "d": now, "usr_by": by})
+
+
+def _to_row(r: dict, pages: list[str], brands: list[str] | None = None) -> dict:
+    """기존 SQLite users 행과 같은 키. brands: 빈 목록 = 모든 브랜드."""
     return {
+        "brands": json.dumps(brands or []),
         "usr_id": r["USR_ID"],
         "usr_nm": r["USR_NM"],
         "role": r["ROLE_CD"],
@@ -110,7 +156,7 @@ def get_user(usr_id: str, fresh: bool = False) -> dict | None:
         if hit and hit[0] > now:
             return hit[1]
     rows = db.query_dicts(USER_SQL + " WHERE U.USR_ID = :id", {"id": usr_id})
-    row = _to_row(rows[0], _pages_of([usr_id])[usr_id]) if rows else None
+    row = _to_row(rows[0], _pages_of([usr_id])[usr_id], _brands_of([usr_id])[usr_id]) if rows else None
     with _lock:
         _user_cache[usr_id] = (now + CACHE_TTL, row)
     return row
@@ -122,8 +168,10 @@ def list_users(q: str | None = None) -> list[dict]:
         sql += " WHERE U.USR_ID LIKE :q OR U.USR_NM LIKE :q"
         p["q"] = f"%{q}%"
     rows = db.query_dicts(sql + " ORDER BY DECODE(U.ROLE_CD, 'ADMIN', 0, 1), U.LAST_LOGIN_DAY DESC NULLS LAST", p)
-    pages = _pages_of([r["USR_ID"] for r in rows]) if rows else {}
-    return [_to_row(r, pages.get(r["USR_ID"], [])) for r in rows]
+    ids = [r["USR_ID"] for r in rows]
+    pages = _pages_of(ids) if rows else {}
+    brands = _brands_of(ids) if rows else {}
+    return [_to_row(r, pages.get(r["USR_ID"], []), brands.get(r["USR_ID"], [])) for r in rows]
 
 
 def user_ids() -> set[str]:
@@ -132,7 +180,8 @@ def user_ids() -> set[str]:
 
 def create_user(usr_id: str, usr_nm: str | None, role: str, pages: list[str], by: str, *,
                 ai_enabled: bool = True, daily_questions: int | None = None,
-                daily_cost_usd: float | None = None, active: bool = True) -> None:
+                daily_cost_usd: float | None = None, active: bool = True, brands: list[str] | None = None) -> None:
+    """brands: 볼 수 있는 브랜드 (None/빈 목록 = 모든 브랜드)"""
     now = _now14()
     with db.get_pool().acquire() as conn:
         cur = conn.cursor()
@@ -150,6 +199,8 @@ def create_user(usr_id: str, usr_nm: str | None, role: str, pages: list[str], by
                     "INSERT INTO T_ERP_WEB_USER_PAGE (USR_ID, PAGE_CD, INS_DAY, INS_USERID) VALUES (:id, :p, :d, :usr_by)",
                     {"id": usr_id, "p": page, "d": now, "usr_by": by},
                 )
+            if brands:
+                _sync_brands(cur, usr_id, brands, now, by)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -158,7 +209,8 @@ def create_user(usr_id: str, usr_nm: str | None, role: str, pages: list[str], by
 
 
 def update_user(usr_id: str, values: dict[str, Any], by: str) -> None:
-    """values 키: role, pages(list), ai_enabled(bool), daily_questions, daily_cost_usd, active(bool), usr_nm."""
+    """values 키: role, pages(list), ai_enabled(bool), daily_questions, daily_cost_usd, active(bool), usr_nm,
+    brands(list, 빈 목록 = 모든 브랜드)."""
     col_map = {"role": "ROLE_CD", "usr_nm": "USR_NM", "daily_questions": "DAY_QSTN_LMT",
                "daily_cost_usd": "DAY_COST_LMT"}
     sets, p = [], {"id": usr_id}
@@ -174,7 +226,7 @@ def update_user(usr_id: str, values: dict[str, Any], by: str) -> None:
     with db.get_pool().acquire() as conn:
         cur = conn.cursor()
         try:
-            if sets or "pages" in values:
+            if sets or "pages" in values or "brands" in values:
                 sets += ["UPT_DAY = :upt_d", "UPT_USERID = :upt_u"]
                 p.update({"upt_d": now, "upt_u": by})
                 cur.execute(f"UPDATE T_ERP_WEB_USER SET {', '.join(sets)} WHERE USR_ID = :id", p)
@@ -190,6 +242,8 @@ def update_user(usr_id: str, values: dict[str, Any], by: str) -> None:
                         "INSERT INTO T_ERP_WEB_USER_PAGE (USR_ID, PAGE_CD, INS_DAY, INS_USERID) VALUES (:id, :p, :d, :usr_by)",
                         {"id": usr_id, "p": page, "d": now, "usr_by": by},
                     )
+            if "brands" in values:
+                _sync_brands(cur, usr_id, values["brands"], now, by)
             conn.commit()
         except Exception:
             conn.rollback()

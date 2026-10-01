@@ -33,7 +33,7 @@ def list_users(q: str | None = None) -> list[dict]:
         me = auth.effective(u, settings)
         tq, tc = today.get(u["usr_id"], (0, 0.0))
         out.append({
-            **{k: me[k] for k in ("id", "name", "role", "superAdmin", "active", "pages", "ai")},
+            **{k: me[k] for k in ("id", "name", "role", "superAdmin", "active", "pages", "ai", "brands")},
             "rawAiEnabled": bool(u["ai_enabled"]),
             "rawDailyQuestions": u["daily_questions"],
             "rawDailyCostUsd": u["daily_cost_usd"],
@@ -86,7 +86,8 @@ def _snap(usr_id: str) -> dict | None:
     u = userdb.get_user(usr_id, fresh=True)
     if not u:
         return None
-    return {"role": u.get("role"), "pages": list(json.loads(u.get("pages") or "[]")), "ai_enabled": bool(u.get("ai_enabled", 1)),
+    return {"role": u.get("role"), "pages": list(json.loads(u.get("pages") or "[]")),
+            "brands": json.loads(u.get("brands") or "[]") or "모든 브랜드", "ai_enabled": bool(u.get("ai_enabled", 1)),
             "daily_questions": u.get("daily_questions"), "daily_cost_usd": u.get("daily_cost_usd"), "active": bool(u.get("active", 1))}
 
 
@@ -100,10 +101,12 @@ def create_user(admin: dict, body: dict) -> dict:
     pages = v.get("pages", [])
     if not pages:
         _bad("메뉴 권한을 하나 이상 선택하세요.")
+    if "brands" not in body:
+        _bad("브랜드 권한(모든 브랜드 또는 브랜드 선택)을 지정하세요.")
     userdb.create_user(
         usr_id, emp["USR_NM"], v.get("role", "USER"), pages, by=admin["id"],
         ai_enabled=v.get("ai_enabled", True), daily_questions=v.get("daily_questions"),
-        daily_cost_usd=v.get("daily_cost_usd"), active=v.get("active", True),
+        daily_cost_usd=v.get("daily_cost_usd"), active=v.get("active", True), brands=v.get("brands") or None,
     )
     after = _snap(usr_id)
     audit.record(admin, "USER_CREATE", usr_id, None, after,
@@ -156,7 +159,35 @@ def _validate(usr_id: str, body: dict) -> dict:
         if super_admin and not body["active"]:
             _bad("최고 관리자는 비활성화할 수 없습니다.")
         updates["active"] = bool(body["active"])
+    if "brands" in body:
+        updates["brands"] = _validate_brands(body["brands"], super_admin)
     return updates
+
+
+def brand_options() -> list[str]:
+    from . import sale_dashboard as sd
+
+    try:
+        return list(sd.brand_teams())
+    except Exception:  # noqa: BLE001 - 판매 데이터에 접근할 수 없으면 선택지 없음
+        return []
+
+
+def _validate_brands(v, super_admin: bool) -> list[str]:
+    """None = 모든 브랜드(저장 시 빈 목록). 목록 = 그 브랜드만."""
+    if v is None:
+        return []
+    if not isinstance(v, list) or not v or any(not isinstance(x, str) for x in v):
+        _bad("브랜드 권한은 '모든 브랜드' 이거나 브랜드를 하나 이상 선택해야 합니다.")
+    if super_admin:
+        _bad("최고 관리자는 항상 모든 브랜드를 봅니다.")
+    if not userdb.brand_table_ready():
+        _bad("브랜드 권한 테이블이 없습니다. db/create_erp_web_user_brand.sql 을 먼저 실행하세요.")
+    options = brand_options()
+    bad = [x for x in v if x not in options]
+    if bad:
+        _bad(f"없는 브랜드입니다: {', '.join(bad)} (선택지: {', '.join(options)})")
+    return sorted(set(v), key=options.index)
 
 
 def page_meta() -> list[dict]:

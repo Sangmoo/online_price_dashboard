@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   Activity,
+  BarChart3,
   History,
   Bot,
   Check,
@@ -16,6 +17,7 @@ import {
   Wrench,
   Search,
   ShieldCheck,
+  Tags,
   Unlock,
   UserPlus,
   Users,
@@ -40,8 +42,9 @@ import AiToolsTab from './admin/AiToolsTab'
 import AuditTab from './admin/AuditTab'
 import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
 import ServerStatusTab from './admin/ServerStatusTab'
+import MenuUsageTab from './admin/MenuUsageTab'
 
-export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'logins' | 'sessions' | 'audit' | 'status' | 'serverlogs'
+export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'logins' | 'sessions' | 'audit' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -49,6 +52,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'ai', label: 'AI 사용 설정', icon: Bot },
   { key: 'aitools', label: 'AI 도구', icon: Wrench },
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
+  { key: 'menuusage', label: '메뉴 이용', icon: BarChart3 },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
   { key: 'audit', label: '변경 이력', icon: History },
@@ -79,6 +83,7 @@ export default function AdminView({ me, initialTab }: { me: User; initialTab?: T
       {tab === 'ai' && <AiTab notify={notify} />}
       {tab === 'aitools' && <AiToolsTab notify={notify} />}
       {tab === 'usage' && <UsageTab />}
+      {tab === 'menuusage' && <MenuUsageTab notify={notify} />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
       {tab === 'audit' && <AuditTab notify={notify} />}
@@ -97,6 +102,8 @@ type Notify = (text: string, error?: boolean) => void
 function UsersTab({ me, notify }: { me: User; notify: Notify }) {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [pages, setPages] = useState<PageMeta[]>([])
+  const [brandInfo, setBrandInfo] = useState<{ options: string[]; ready: boolean }>({ options: [], ready: false })
+  const [brandFor, setBrandFor] = useState<AdminUser | null>(null)
   const [permFor, setPermFor] = useState<AdminUser | null>(null)
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
@@ -110,6 +117,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
       .then((r) => {
         setUsers(r.users)
         setPages(r.pages)
+        setBrandInfo({ options: r.brandOptions, ready: r.brandReady })
       })
       .catch((e) => notify(e.message, true))
       .finally(() => setLoading(false))
@@ -155,6 +163,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
               <th>사용자</th>
               <th>권한</th>
               <th>페이지 권한</th>
+              <th>브랜드 권한</th>
               <th>AI 사용</th>
               <th className="num">일일 질문 한도</th>
               <th className="num">일일 비용 한도($)</th>
@@ -203,6 +212,16 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
                     </div>
                   </td>
                   <td>
+                    <div className="perm-summary">
+                      <span className={`small ${u.brands ? 'strong' : 'muted'}`}>{u.brands ? u.brands.join(', ') : '모든 브랜드'}</span>
+                      {!u.superAdmin && (
+                        <button className="btn ghost sm" disabled={saving === u.id} onClick={() => setBrandFor(u)}>
+                          <Tags size={12} /> 설정
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td>
                     <Toggle on={u.rawAiEnabled} disabled={saving === u.id} onChange={(v) => save(u, { aiEnabled: v })} />
                   </td>
                   <td className="num">
@@ -226,7 +245,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
             })}
             {!loading && users.length === 0 && (
               <tr>
-                <td colSpan={9} className="empty">등록된 사용자가 없습니다.</td>
+                <td colSpan={10} className="empty">등록된 사용자가 없습니다.</td>
               </tr>
             )}
           </tbody>
@@ -245,9 +264,21 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
           }}
         />
       )}
+      {brandFor && (
+        <BrandModal
+          user={brandFor}
+          info={brandInfo}
+          onClose={() => setBrandFor(null)}
+          onSave={async (brands) => {
+            await save(brandFor, { brands })
+            setBrandFor(null)
+          }}
+        />
+      )}
       {adding && (
         <AddUserModal
           pages={pages}
+          brandInfo={brandInfo}
           onClose={() => setAdding(false)}
           onAdded={(name) => {
             notify(`${name} 사용자를 등록했습니다.`)
@@ -298,8 +329,87 @@ function LimitInput({ value, placeholder, step, onSave }: { value: number | null
   )
 }
 
-function AddUserModal({ pages, onClose, onAdded, notify }: {
+/** 브랜드 권한 선택: null = 모든 브랜드, 목록 = 그 브랜드만, undefined = 아직 고르지 않음 */
+function BrandPicker({ options, value, onChange, ready }: {
+  options: string[]
+  value: string[] | null | undefined
+  onChange: (v: string[] | null) => void
+  ready: boolean
+}) {
+  const sel = value ?? []
+  return (
+    <div className="brand-picker">
+      <div className="page-chips">
+        <button className={`page-chip ${value === null ? 'on' : ''}`} onClick={() => onChange(null)}>
+          {value === null && <Check size={11} />} 모든 브랜드
+        </button>
+        {options.map((b) => {
+          const on = !!value && sel.includes(b)
+          return (
+            <button
+              key={b}
+              className={`page-chip ${on ? 'on' : ''}`}
+              disabled={!ready}
+              onClick={() => {
+                const next = on ? sel.filter((x) => x !== b) : [...sel, b]
+                onChange(next.length ? options.filter((o) => next.includes(o)) : null)
+              }}
+            >
+              {on && <Check size={11} />} {b}
+            </button>
+          )
+        })}
+      </div>
+      <div className="muted small">
+        {ready
+          ? '판매 현황 · 월별 매장별 판매 집계 · AI 판매 답변에 적용됩니다. 브랜드를 고르면 그 브랜드만 보입니다.'
+          : '브랜드를 제한하려면 먼저 db/create_erp_web_user_brand.sql 을 실행하세요 (그 전에는 모두 모든 브랜드).'}
+      </div>
+    </div>
+  )
+}
+
+function BrandModal({ user, info, onClose, onSave }: {
+  user: AdminUser
+  info: { options: string[]; ready: boolean }
+  onClose: () => void
+  onSave: (brands: string[] | null) => Promise<void>
+}) {
+  const [value, setValue] = useState<string[] | null>(user.brands)
+  const [saving, setSaving] = useState(false)
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>브랜드 권한 · {user.name}</h3>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <BrandPicker options={info.options} value={value} onChange={setValue} ready={info.ready} />
+        <div className="setting-actions">
+          <button className="btn ghost" onClick={onClose}>취소</button>
+          <button
+            className="btn primary"
+            disabled={saving || JSON.stringify(value) === JSON.stringify(user.brands)}
+            onClick={async () => {
+              setSaving(true)
+              try {
+                await onSave(value)
+              } finally {
+                setSaving(false)
+              }
+            }}
+          >
+            {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />} 저장
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AddUserModal({ pages, brandInfo, onClose, onAdded, notify }: {
   pages: PageMeta[]
+  brandInfo: { options: string[]; ready: boolean }
   onClose: () => void
   onAdded: (name: string) => void
   notify: Notify
@@ -311,6 +421,7 @@ function AddUserModal({ pages, onClose, onAdded, notify }: {
   const [role, setRole] = useState<'ADMIN' | 'USER'>('USER')
   const [sel, setSel] = useState<PageKey[]>(pages.map((p) => p.key))
   const [aiEnabled, setAiEnabled] = useState(true)
+  const [brands, setBrands] = useState<string[] | null | undefined>(brandInfo.ready ? undefined : null)
   const [dq, setDq] = useState('')
   const [dc, setDc] = useState('')
   const [saving, setSaving] = useState(false)
@@ -337,6 +448,7 @@ function AddUserModal({ pages, onClose, onAdded, notify }: {
     const q_ = num(dq)
     const c_ = num(dc)
     if (sel.length === 0) return notify('메뉴 권한을 하나 이상 선택하세요.', true)
+    if (brands === undefined) return notify('브랜드 권한을 선택하세요 (모든 브랜드 또는 브랜드 선택).', true)
     if ((q_ !== null && (isNaN(q_) || q_ < 0)) || (c_ !== null && (isNaN(c_) || c_ < 0))) return notify('한도는 0 이상 숫자로 입력하세요.', true)
     setSaving(true)
     try {
@@ -348,6 +460,7 @@ function AddUserModal({ pages, onClose, onAdded, notify }: {
         dailyQuestions: q_ === null ? null : Math.round(q_),
         dailyCostUsd: c_,
         active: true,
+        brands,
       })
       onAdded(picked.name)
     } catch (e) {
@@ -392,6 +505,10 @@ function AddUserModal({ pages, onClose, onAdded, notify }: {
                   )
                 })}
               </div>
+            </div>
+            <div className="form-row">
+              <span>브랜드 권한</span>
+              <BrandPicker options={brandInfo.options} value={brands} onChange={setBrands} ready={brandInfo.ready} />
             </div>
             <div className="form-row">
               <span>AI 사용</span>

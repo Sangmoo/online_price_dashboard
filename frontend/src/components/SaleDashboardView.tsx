@@ -49,6 +49,7 @@ type Dash = {
   extra: { label: string; period: string }
   brand: string | null
   brandOptions: string[]
+  brandLimited?: boolean // 브랜드 권한이 제한된 사용자 (선택지 = 허용 브랜드)
   kpi: Kpi
   trend: Trend[]
   brands: Brand[]
@@ -215,7 +216,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
           )}
           <span className="filter-label">브랜드</span>
           <select className="input select small" value={draft.brand} onChange={(e) => set({ brand: e.target.value })} aria-label="브랜드">
-            <option value="">전체</option>
+            <option value="">{data.brandLimited ? `내 브랜드 전체 (${data.brandOptions.join(', ')})` : '전체'}</option>
             {data.brandOptions.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
           <div className="toolbar-actions">

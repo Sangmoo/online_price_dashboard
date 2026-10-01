@@ -87,6 +87,7 @@ export class MockApi {
     )
     this.on('POST', '/api/auth/logout', () => ({ json: { ok: true } }))
     this.on('POST', '/api/auth/touch', () => ({ json: { sessionExpiresAt: Math.floor(Date.now() / 1000) + 3600 } }))
+    this.on('POST', '/api/usage/menu', () => ({ json: { ok: true } }))
     this.on('GET', '/api/dates', () => ({ json: { dates: [] } }))
     this.on('GET', /^\/api\/prefs\//, () => ({ json: { value: null } }))
     this.on('GET', '/api/chat/usage', () => ({ json: usage }))

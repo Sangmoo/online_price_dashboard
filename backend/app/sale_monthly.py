@@ -80,7 +80,76 @@ def _split(v: str | None) -> list[str]:
     return [x.strip() for x in (v or "").split(",") if x.strip()]
 
 
-def _where(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None) -> tuple[str, dict]:
+MAX_IN = 1000  # Oracle IN 목록 최대 개수
+
+
+def brand_filter(teams: list[str] | None, ym_from: str, ym_to: str, prefix: str = "bf") -> tuple[list[str], dict]:
+    """브랜드 권한(허용 팀) 조건. teams=None 이면 조건 없음, [] 이면 아무 행도 없음.
+
+    TEAM_CD 조건만 걸면 인덱스(판매년월, 매장코드…)만으로 끝나던 건수·합계가 테이블을 읽게 되어 느려진다.
+    그래서 사전 집계 뷰가 최신이고 기간을 모두 담고 있으면, 허용 팀에서 팔린 매장코드를 먼저 찾아
+    (판매년월 목록, 매장코드 목록) 조건으로 바꾼다. 결과가 같도록:
+    - 기간 안에 허용 팀으로만 팔린 매장만 있으면 매장코드 조건만 쓴다 (팀 조건과 같은 행).
+    - 다른 팀으로도 팔린 매장이 하나라도 있으면 팀 조건을 함께 건다.
+    - 뷰를 쓸 수 없으면 팀 조건만 건다."""
+    if teams is None:
+        return [], {}
+    if not teams:
+        return ["1 = 0"], {}
+    tb = {f"{prefix}t{i}": t for i, t in enumerate(teams)}
+    team_cond = f"TEAM_CD IN ({', '.join(':' + k for k in tb)})"
+    from . import chat_tools_sale as cts  # 순환 import 방지
+
+    st = cts.mv_state()
+    if not (st["usable"] and st["mv_max"] and ym_to <= st["mv_max"]):
+        return [team_cond], tb
+    rows = db.query(
+        f"""SELECT SHOP_ID, MIN(CASE WHEN TEAM_CD IN ({', '.join(':' + k for k in tb)}) THEN 1 ELSE 0 END)
+              FROM {cts.MV_NAME} WHERE MAKE_YYMM BETWEEN :{prefix}f AND :{prefix}t
+             GROUP BY SHOP_ID HAVING MAX(CASE WHEN TEAM_CD IN ({', '.join(':' + k for k in tb)}) THEN 1 ELSE 0 END) = 1""",
+        {**tb, f"{prefix}f": ym_from, f"{prefix}t": ym_to})[1]
+    if not rows:
+        return ["1 = 0"], {}
+    shop_ids = sorted(r[0] for r in rows)
+    mixed = any(int(r[1]) == 0 for r in rows)
+    if len(shop_ids) > MAX_IN:
+        return [team_cond], tb
+    mb = {f"{prefix}m{i}": m for i, m in enumerate(_month_list(ym_from, ym_to))}
+    sb = {f"{prefix}s{i}": v for i, v in enumerate(shop_ids)}
+    conds = [f"MAKE_YYMM IN ({', '.join(':' + k for k in mb)})", f"SHOP_ID IN ({', '.join(':' + k for k in sb)})"]
+    binds = {**mb, **sb}
+    if mixed:
+        conds.append(team_cond)
+        binds.update(tb)
+    return conds, binds
+
+
+_brand_shops_cache: dict[tuple, tuple[float, set[str]]] = {}
+
+
+def brand_shop_ids(teams: list[str]) -> set[str]:
+    """허용 팀에서 판매 기록이 있는 매장코드 (매장 선택 팝업 거르기용, 사전 집계 뷰 전체 기간, 10분 캐시)"""
+    key = tuple(sorted(teams))
+    hit = _brand_shops_cache.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
+    from . import chat_tools_sale as cts
+
+    if not teams:
+        out: set[str] = set()
+    else:
+        tb = {f"t{i}": t for i, t in enumerate(teams)}
+        out = {r[0] for r in db.query(f"SELECT DISTINCT SHOP_ID FROM {cts.MV_NAME} WHERE TEAM_CD IN ({', '.join(':' + k for k in tb)})",
+                                      tb)[1]}
+    if len(_brand_shops_cache) > 50:
+        _brand_shops_cache.clear()
+    _brand_shops_cache[key] = (time.time() + 600, out)
+    return out
+
+
+def _where(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None,
+           teams: list[str] | None = None) -> tuple[str, dict]:
+    """teams: 브랜드 권한으로 허용된 팀 (None = 모든 브랜드)"""
     ym_from, ym_to = (ym_from or "").replace("-", ""), (ym_to or "").replace("-", "")
     if not (_YYMM.match(ym_from) and _YYMM.match(ym_to)) or not (1 <= int(ym_from[4:]) <= 12 and 1 <= int(ym_to[4:]) <= 12):
         _bad("판매년월은 YYYY-MM 형식으로 입력하세요.")
@@ -116,6 +185,9 @@ def _where(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, se
         if any(s not in SEASONS for s in sess_list):
             _bad("시즌이 올바르지 않습니다.")
         _in(SESS_EXPR, "sess", sess_list, len(SEASONS))
+    bconds, bbinds = brand_filter(teams, ym_from, ym_to)
+    conds += bconds
+    p.update(bbinds)
     return " AND ".join(conds), p
 
 
@@ -156,10 +228,10 @@ def _month_stats(where: str, p: dict) -> list[tuple[str, int, int, int]]:
 
 
 def search(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None,
-           page: int = 1, with_total: bool = True) -> dict:
+           page: int = 1, with_total: bool = True, teams: list[str] | None = None) -> dict:
     """정렬(판매년월 → 매장코드 …)의 첫 키가 판매년월이므로, 월별 건수로 페이지가 걸친 월을 찾아 그 월만 정렬해 가져온다.
     전체 기간을 한 번에 정렬하면 36개월(1,400만 행)에서 페이지마다 수십 초가 걸린다."""
-    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons, teams)
     page = max(1, int(page))
     months = _month_stats(where, p)
     total = sum(m[1] for m in months)
@@ -191,9 +263,10 @@ def search(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, se
     return out
 
 
-def dsct_total(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None) -> dict:
+def dsct_total(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None,
+               teams: list[str] | None = None) -> dict:
     """할인금액 합계는 인덱스에 없어 테이블을 읽어야 하므로(36개월 약 40초) 화면에서 따로 요청한다."""
-    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons, teams)
     val = _cached("dsct", where, p, lambda: int(db.query(
         f"SELECT NVL(SUM(DSCT_AMT), 0) FROM T_CLOSE_SALE_BASE WHERE {where}", p)[1][0][0] or 0))
     return {"dsctAmt": val}
@@ -240,16 +313,17 @@ def _rate(cost: int, amt: int) -> float | None:
     return round(cost * 100 / amt, 1) if amt else None
 
 
-def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None, dim: str) -> dict:
+def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, seasons: str | None, dim: str,
+            teams: list[str] | None = None) -> dict:
     """전년 동기 = 판매년월을 12개월 앞당기고, 기획년도 조건이 있으면 기획년도도 1년 앞당긴 같은 조건.
     (예: 2026-01~08 · 2026 기획 ↔ 2025-01~08 · 2025 기획)"""
     if dim not in SUMMARY_DIMS:
         _bad(f"요약 기준은 {list(SUMMARY_DIMS)} 중 하나입니다.")
     col, label = SUMMARY_DIMS[dim]
-    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons, teams)
     prev_from, prev_to = _shift_ym(p["ym_from"], -12), _shift_ym(p["ym_to"], -12)
     prev_yys = ",".join(str(int(y) - 1) for y in _split(plan_yys)) or None
-    pwhere, pp = _where(prev_from, prev_to, shops, prev_yys, seasons)
+    pwhere, pp = _where(prev_from, prev_to, shops, prev_yys, seasons, teams)
     with ThreadPoolExecutor(max_workers=2) as ex:
         cur_f, prev_f = ex.submit(_group, where, p, col), ex.submit(_group, pwhere, pp, col)
         cur, prev = cur_f.result(), prev_f.result()
@@ -308,7 +382,7 @@ def summary(ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None, s
     }
 
 
-def shop_trend(shop_id: str, months: int = 12) -> dict:
+def shop_trend(shop_id: str, months: int = 12, teams: list[str] | None = None) -> dict:
     """매장 최근 N개월(지난달까지) 월별 판매와 전년 같은 달 비교. (판매년월, 매장코드) 인덱스로 빠르게 조회."""
     shop_id = (shop_id or "").strip().upper()
     if not shop_id or len(shop_id) > 6:
@@ -317,9 +391,14 @@ def shop_trend(shop_id: str, months: int = 12) -> dict:
     first = _shift_ym(last, -(months - 1))
     # 기간을 BETWEEN 으로 주면 24개월치 모든 매장 인덱스를 훑어 약 2초, 월 목록(IN)으로 주면 월별로 바로 찾아 수십 ms
     binds = {f"m{i}": ym for i, ym in enumerate(_month_list(_shift_ym(first, -12), last))}
+    team_sql = ""
+    if teams is not None:  # 브랜드 권한: 허용 팀의 판매만
+        tb = {f"t{i}": t for i, t in enumerate(teams or ["-"])}
+        team_sql = f" AND TEAM_CD IN ({', '.join(':' + k for k in tb)})"
+        binds.update(tb)
     rows = db.query(
         "SELECT MAKE_YYMM, NVL(SUM(QTY), 0), NVL(SUM(REAL_SALE_AMT), 0) FROM T_CLOSE_SALE_BASE "
-        f"WHERE MAKE_YYMM IN ({', '.join(':' + k for k in binds)}) AND SHOP_ID = :shop GROUP BY MAKE_YYMM",
+        f"WHERE MAKE_YYMM IN ({', '.join(':' + k for k in binds if k.startswith('m'))}) AND SHOP_ID = :shop{team_sql} GROUP BY MAKE_YYMM",
         {**binds, "shop": shop_id})[1]
     by = {ym: (int(q), int(a)) for ym, q, a in rows}
     out, ym = [], first
@@ -380,8 +459,8 @@ def cleanup_exports() -> None:
 
 
 def start_export(usr_id: str, ym_from: str, ym_to: str, shops: str | None, plan_yys: str | None,
-                 seasons: str | None) -> dict:
-    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons)
+                 seasons: str | None, teams: list[str] | None = None) -> dict:
+    where, p = _where(ym_from, ym_to, shops, plan_yys, seasons, teams)
     cleanup_exports()
     with _jobs_lock:
         mine = [j for j in _jobs.values() if j["usr_id"] == usr_id and j["status"] == "running"]

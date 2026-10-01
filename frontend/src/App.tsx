@@ -306,6 +306,11 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
     }
   }, [remain, onLogout])
 
+  // ---- 메뉴 이용 기록 (관리자 > 메뉴 이용 통계): 메뉴를 열 때 한 번 ----
+  useEffect(() => {
+    if (view) api.menuOpen(view).catch(() => undefined)
+  }, [view])
+
   // ---- URL 동기화 (현재 화면/조건을 링크로 공유) ----
   useEffect(() => {
     if (view === 'dashboard' && range) writeUrl({ view, start: range.start, end: range.end })

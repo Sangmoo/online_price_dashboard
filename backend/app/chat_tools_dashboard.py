@@ -104,7 +104,8 @@ def _kpi_table(d: dict) -> list[dict]:
     return [{"ITEM": a, "CUR": b, "BASE_LABEL": c, "BASE": e, "CHANGE": f} for a, b, c, e, f in rows]
 
 
-def run(name: str, inp: dict) -> dict:
+def run(name: str, inp: dict, allowed: list[str] | None = None) -> dict:
+    """allowed: 브랜드 권한 (None = 모든 브랜드)"""
     if name != "get_sales_dashboard":
         raise DashToolError(f"알 수 없는 도구: {name}")
     ym, ym_from = _ym_arg(inp, "ym"), _ym_arg(inp, "ym_from")
@@ -120,7 +121,7 @@ def run(name: str, inp: dict) -> dict:
         raise DashToolError(f"sections 는 {list(SECTIONS)} 중에서 고릅니다.")
     sections = list(dict.fromkeys(sections))
     try:
-        d = sd.dashboard(ym, ym_from, compare, cmp_from, cmp_to, brand)
+        d = sd.dashboard(ym, ym_from, compare, cmp_from, cmp_to, brand, allowed=allowed)
     except HTTPException as ex:
         raise DashToolError(ex.detail.get("message", str(ex.detail)) if isinstance(ex.detail, dict) else str(ex.detail))
 

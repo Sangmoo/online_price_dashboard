@@ -22,6 +22,7 @@ export type User = {
   active: boolean
   pages: PageKey[]
   ai: AiLimits
+  brands?: string[] | null // 판매 데이터 브랜드 권한 (null = 모든 브랜드)
   sessionExpiresAt?: number
 }
 
@@ -155,6 +156,8 @@ export const api = {
   logout: () => sendJson<{ ok: boolean }>('POST', '/api/auth/logout'),
   me: () => getJson<{ user: User; usage: Usage; sessionTtl: number }>('/api/auth/me'),
   touch: () => sendJson<{ sessionExpiresAt: number }>('POST', '/api/auth/touch'),
+  // 메뉴를 열 때 알림 (관리자 > 메뉴 이용 통계)
+  menuOpen: (page: string) => sendJson<{ ok: boolean }>('POST', '/api/usage/menu', { page }),
 
   // 개인 설정
   getPref: <T>(key: string) => getJson<{ value: T | null }>(`/api/prefs/${key}`),
@@ -188,6 +191,7 @@ export const api = {
     dataStatus: () => getJson<DataStatus>('/api/admin/data-status'),
     // 10분마다 자동 확인 → 세션 연장 안 함 (화면을 열어만 둬도 1시간 뒤 로그아웃되도록)
     dataFreshness: async () => (await apiFetch('/api/admin/data-freshness', { headers: BACKGROUND_HEADERS })).json() as Promise<DataFreshness>,
+    menuUsage: (days: number) => getJson<MenuUsage>(`/api/admin/menu-usage?${qs({ days })}`),
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
     cleanupLogs: () => sendJson<{ deleted: string[]; freedBytes: number; keepDays: number }>('POST', '/api/admin/logs/cleanup'),
     refreshState: () => getJson<{ refresh: MvRefresh }>('/api/admin/data-status/refresh'),
@@ -215,6 +219,7 @@ export type Favorite = { id: number; text: string; createdAt: string }
 export type StoredConversation = { id: string; title: string; messages: unknown[]; updatedAt: string }
 
 export type AdminUser = Pick<User, 'id' | 'name' | 'role' | 'superAdmin' | 'active' | 'pages' | 'ai'> & {
+  brands: string[] | null
   rawAiEnabled: boolean
   rawDailyQuestions: number | null
   rawDailyCostUsd: number | null
@@ -234,9 +239,10 @@ export type AdminUserUpdate = {
   dailyQuestions: number | null
   dailyCostUsd: number | null
   active: boolean
+  brands: string[] | null
 }
 export type PageMeta = { key: PageKey; label: string; group: string }
-export type AdminUsersResponse = { users: AdminUser[]; pages: PageMeta[]; superAdminId: string }
+export type AdminUsersResponse = { users: AdminUser[]; pages: PageMeta[]; superAdminId: string; brandOptions: string[]; brandReady: boolean }
 export type ToolParam = { name: string; type: string; required: boolean; description: string; enum?: string[]; default?: string | number | null }
 export type CustomToolDef = {
   name: string
@@ -306,6 +312,16 @@ export type AdminSettings = {
   envModel: string
   envEffort: string
   logKeepDays: number
+}
+export type MenuUsageCell = { granted: boolean; opens: number; days: number; last: string | null }
+export type MenuUsage = {
+  days: number
+  since: string
+  storage: 'oracle' | 'sqlite'
+  pages: { page: string; label: string; opens: number; users: number; grantedUsers: number; activeDays: number; last: string | null }[]
+  users: { id: string; name: string; active: boolean; lastLoginAt: string | null; opens: number; cells: Record<string, MenuUsageCell>; unusedPages: string[] }[]
+  daily: { day: string; opens: number }[]
+  unusedGrants: number
 }
 export type ServerStatus = {
   days: number

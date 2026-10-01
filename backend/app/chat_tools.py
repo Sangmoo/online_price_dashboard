@@ -10,7 +10,7 @@ from typing import Any
 
 from . import data_service as ds
 from . import db
-from . import tool_limits
+from . import brand_scope, tool_limits
 
 TABLE = ds.TABLE
 DC_RATE_SQL = ds.DC_RATE_SQL
@@ -331,8 +331,16 @@ def tools_for(me: dict) -> list[dict]:
     out = [_with_admin_note(t, cfg["builtin"].get(t["name"])) for t in base
            if cfg["builtin"].get(t["name"], {}).get("enabled", True)]
     pages = set(me.get("pages") or [])
-    out += [ai_tools.tool_schema(c) for c in cfg["custom"] if c["enabled"] and c["page"] in pages]
+    out += [ai_tools.tool_schema(c) for c in cfg["custom"] if c["enabled"] and c["page"] in pages and not _custom_blocked(c, me)]
     return out
+
+
+# 관리자 정의 도구는 SQL 을 그대로 실행해 브랜드로 거를 수 없으므로, 브랜드가 제한된 사용자에게 판매 메뉴 도구는 주지 않는다
+_BRAND_SCOPED_PAGES = {"sale_dashboard", "sale_monthly"}
+
+
+def _custom_blocked(c: dict, me: dict) -> bool:
+    return c["page"] in _BRAND_SCOPED_PAGES and brand_scope.brands_of(me) is not None
 
 
 def tool_label(name: str) -> str:
@@ -369,7 +377,7 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
         if not (sc["dash"] or sc["sale"]):
             raise ToolInputError("이 사용자는 판매 현황 메뉴 권한이 없어 조회할 수 없습니다.")
         try:
-            return dash.run(name, inp)
+            return dash.run(name, inp, allowed=brand_scope.brands_of(me))
         except dash.DashToolError as ex:
             raise ToolInputError(str(ex))
     if name in _SALE_TOOL_NAMES:
@@ -377,7 +385,7 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
         if not allowed:
             raise ToolInputError("이 사용자는 월별 매장별 판매 집계 메뉴 권한이 없어 조회할 수 없습니다.")
         try:
-            return sale.run(name, inp)
+            return sale.run(name, inp, teams=brand_scope.teams_of(me))
         except sale.SaleToolError as ex:
             raise ToolInputError(str(ex))
     custom = next((c for c in cfg["custom"] if c["name"] == name), None)
@@ -386,6 +394,8 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
             raise ToolInputError("관리자가 사용 중지한 도구입니다.")
         if custom["page"] not in set(me.get("pages") or []):
             raise ToolInputError("이 사용자는 이 도구에 연결된 메뉴 권한이 없어 조회할 수 없습니다.")
+        if _custom_blocked(custom, me):
+            raise ToolInputError("브랜드 권한이 제한된 사용자는 관리자 정의 판매 도구를 쓸 수 없습니다. 기본 판매 도구를 쓰세요.")
         try:
             return ai_tools.run_custom(custom, inp)
         except ai_tools.ToolArgError as ex:

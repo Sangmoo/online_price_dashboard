@@ -16,7 +16,7 @@ from . import logs
 
 logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
 
-from . import admin, appdb, auth, chat_service, config, data_service as ds, invt_plan, mv_refresh, sale_dashboard, sale_monthly, server_status, store, usage, userdb  # noqa: E402
+from . import admin, appdb, auth, brand_scope, chat_service, menu_usage, config, data_service as ds, invt_plan, mv_refresh, sale_dashboard, sale_monthly, server_status, store, usage, userdb  # noqa: E402
 from .auth import current_user, require_admin, require_page  # noqa: E402
 
 _log = logs.get("request")
@@ -280,6 +280,7 @@ def chat(req: ChatRequest, request: Request, user: dict = Depends(current_user))
         raise HTTPException(400, {"message": "메시지가 비어 있습니다.", "code": "BAD_REQUEST"})
     if len(msg) > 2000:
         raise HTTPException(400, {"message": "질문은 2,000자 이내로 입력하세요.", "code": "BAD_REQUEST"})
+    menu_usage.record(user["id"], menu_usage.AI_PAGE)
     return StreamingResponse(
         chat_service.stream_chat(user, req.conversationId, msg, req.context),
         media_type="text/event-stream",
@@ -352,7 +353,7 @@ def delete_favorite(fav_id: int, user: dict = Depends(current_user)):
 @app.get("/api/admin/users")
 def admin_users(q: str | None = None, _: dict = Depends(require_admin)):
     return {"users": admin.list_users(q), "pages": admin.page_meta(),
-            "superAdminId": config.SUPER_ADMIN_ID}
+            "superAdminId": config.SUPER_ADMIN_ID, "brandOptions": admin.brand_options(), "brandReady": userdb.brand_table_ready()}
 
 
 @app.get("/api/admin/directory")
@@ -383,6 +384,23 @@ def admin_audit(action: str | None = None, q: str | None = None, days: int = 90,
 @app.get("/api/admin/data-status")
 def admin_data_status(_: dict = Depends(require_admin)):
     return admin.data_status()
+
+
+class MenuOpen(BaseModel):
+    page: str
+
+
+@app.post("/api/usage/menu")
+def usage_menu_open(body: MenuOpen, user: dict = Depends(current_user)):
+    """메뉴를 열 때 화면이 알린다 (관리자 > 메뉴 이용 통계). 권한 있는 메뉴만 기록."""
+    if body.page in user["pages"]:
+        menu_usage.record(user["id"], body.page)
+    return {"ok": True}
+
+
+@app.get("/api/admin/menu-usage")
+def admin_menu_usage(days: int = 30, _: dict = Depends(require_admin)):
+    return menu_usage.report(days, admin.list_users())
 
 
 @app.get("/api/admin/server-status")
@@ -504,21 +522,21 @@ def _dash_args(ym: str | None = Query(None), from_: str | None = Query(None, ali
 
 
 @app.get("/api/sale-dashboard")
-def sale_dashboard_get(args: dict = Depends(_dash_args), _: dict = Depends(sale_dash_page)):
-    return sale_dashboard.dashboard(**args)
+def sale_dashboard_get(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
+    return sale_dashboard.dashboard(**args, allowed=brand_scope.brands_of(me))
 
 
 @app.get("/api/sale-dashboard/export")
-def sale_dashboard_export(args: dict = Depends(_dash_args), _: dict = Depends(sale_dash_page)):
+def sale_dashboard_export(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
     from . import sale_dashboard_report as rpt
 
-    d = sale_dashboard.dashboard(**args, full=True)
+    d = sale_dashboard.dashboard(**args, full=True, allowed=brand_scope.brands_of(me))
     return _xlsx_response(rpt.build(d), rpt.filename(d))
 
 
 @app.get("/api/sale-dashboard/shops/{shop_id}/trend")
-def sale_dashboard_trend(shop_id: str, _: dict = Depends(sale_dash_page)):
-    return sale_monthly.shop_trend(shop_id)
+def sale_dashboard_trend(shop_id: str, me: dict = Depends(sale_dash_page)):
+    return sale_monthly.shop_trend(shop_id, teams=brand_scope.teams_of(me))
 
 
 @app.get("/api/sale-monthly/options")
@@ -528,25 +546,25 @@ def sale_options(_: dict = Depends(sale_page)):
 
 @app.get("/api/sale-monthly")
 def sale_search(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
-                seasons: str | None = None, page: int = 1, total: bool = True, _: dict = Depends(sale_page)):
-    return sale_monthly.search(ymFrom, ymTo, shops, planYys, seasons, page, total)
+                seasons: str | None = None, page: int = 1, total: bool = True, me: dict = Depends(sale_page)):
+    return sale_monthly.search(ymFrom, ymTo, shops, planYys, seasons, page, total, teams=brand_scope.teams_of(me))
 
 
 @app.get("/api/sale-monthly/summary")
 def sale_summary(ymFrom: str, ymTo: str, dim: str = "month", shops: str | None = None, planYys: str | None = None,
-                 seasons: str | None = None, _: dict = Depends(sale_page)):
-    return sale_monthly.summary(ymFrom, ymTo, shops, planYys, seasons, dim)
+                 seasons: str | None = None, me: dict = Depends(sale_page)):
+    return sale_monthly.summary(ymFrom, ymTo, shops, planYys, seasons, dim, teams=brand_scope.teams_of(me))
 
 
 @app.get("/api/sale-monthly/shops/{shop_id}/trend")
-def sale_shop_trend(shop_id: str, _: dict = Depends(sale_page)):
-    return sale_monthly.shop_trend(shop_id)
+def sale_shop_trend(shop_id: str, me: dict = Depends(sale_page)):
+    return sale_monthly.shop_trend(shop_id, teams=brand_scope.teams_of(me))
 
 
 @app.get("/api/sale-monthly/dsct")
 def sale_dsct(ymFrom: str, ymTo: str, shops: str | None = None, planYys: str | None = None,
-              seasons: str | None = None, _: dict = Depends(sale_page)):
-    return sale_monthly.dsct_total(ymFrom, ymTo, shops, planYys, seasons)
+              seasons: str | None = None, me: dict = Depends(sale_page)):
+    return sale_monthly.dsct_total(ymFrom, ymTo, shops, planYys, seasons, teams=brand_scope.teams_of(me))
 
 
 class SaleExportReq(BaseModel):
@@ -559,7 +577,8 @@ class SaleExportReq(BaseModel):
 
 @app.post("/api/sale-monthly/exports")
 def sale_export_start(req: SaleExportReq, me: dict = Depends(sale_page)):
-    return sale_monthly.start_export(me["id"], req.ymFrom, req.ymTo, req.shops, req.planYys, req.seasons)
+    return sale_monthly.start_export(me["id"], req.ymFrom, req.ymTo, req.shops, req.planYys, req.seasons,
+                                     teams=brand_scope.teams_of(me))
 
 
 @app.get("/api/sale-monthly/exports/current")
@@ -585,8 +604,13 @@ def sale_export_file(job_id: str, me: dict = Depends(sale_page)):
 
 
 @app.get("/api/sale-monthly/shops")
-def sale_shops(q: str, _: dict = Depends(sale_page)):
-    return {"shops": invt_plan.search_shops(q)}
+def sale_shops(q: str, me: dict = Depends(sale_page)):
+    shops = invt_plan.search_shops(q)
+    teams = brand_scope.teams_of(me)
+    if teams is not None:  # 브랜드 권한: 허용 브랜드에서 판매 기록이 있는 매장만
+        allowed = sale_monthly.brand_shop_ids(teams)
+        shops = [s for s in shops if s["shopId"] in allowed]
+    return {"shops": shops}
 
 
 @app.get("/api/invt-plans/options")

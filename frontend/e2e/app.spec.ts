@@ -199,3 +199,53 @@ test('관리자 화면을 열어만 두면 1시간 뒤 로그아웃된다 (자�
   await expect(page.getByText('1시간 동안 사용하지 않아 로그아웃되었습니다.')).toBeVisible()
   await expect(page.getByPlaceholder('사번 ID')).toBeVisible()
 })
+
+const adminUser = (brands: string[] | null) => ({
+  id: '170046', name: '홍길동', role: 'USER', superAdmin: false, active: true, pages: ['sale_dashboard'], brands,
+  ai: { enabled: true, globalEnabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2, customLimits: false },
+  rawAiEnabled: true, rawDailyQuestions: null, rawDailyCostUsd: null, lastLoginAt: null, createdAt: '2026-09-01 10:00:00',
+  updatedAt: null, updatedBy: null, todayQuestions: 0, todayCostUsd: 0, online: false,
+})
+
+test('관리자: 사용자 브랜드 권한을 바꾸면 선택한 브랜드로 저장한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/users', () => ({
+    json: { users: [adminUser(null)], pages: [], superAdminId: '250016', brandOptions: ['리스트', '쉬즈미스', '시스티나'], brandReady: true },
+  }))
+  api.on('PUT', '/api/admin/users/170046', (req) => ({ json: { user: adminUser((req.postDataJSON() as { brands: string[] | null }).brands) } }))
+  await page.goto('/?view=admin')
+  const row = page.getByRole('row', { name: /홍길동/ })
+  await expect(row).toContainText('모든 브랜드')
+  await row.getByRole('button', { name: '설정' }).nth(1).click()
+  await page.getByRole('button', { name: '리스트' }).click()
+  await page.getByRole('button', { name: '시스티나' }).click()
+  await page.getByRole('button', { name: '저장' }).click()
+  await expect(row).toContainText('리스트, 시스티나')
+  expect(api.find('PUT', '/api/admin/users/170046')[0].body).toEqual({ brands: ['리스트', '시스티나'] })
+})
+
+test('메뉴를 열면 이용 기록을 보내고, 관리자는 메뉴 이용 통계를 본다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
+  api.on('GET', '/api/admin/menu-usage', (_, url) => ({
+    json: {
+      days: Number(url.searchParams.get('days')), since: '2026-09-02', storage: 'oracle', unusedGrants: 1,
+      pages: [
+        { page: 'sale_dashboard', label: '판매 현황', opens: 42, users: 3, grantedUsers: 4, activeDays: 20, last: '2026-10-01 09:00' },
+        { page: 'invt_plan', label: '매장 재고 실사계획', opens: 0, users: 0, grantedUsers: 1, activeDays: 0, last: null },
+      ],
+      users: [{ id: '170046', name: '홍길동', active: true, lastLoginAt: null, opens: 42, unusedPages: ['invt_plan'],
+                cells: { sale_dashboard: { granted: true, opens: 42, days: 20, last: '2026-10-01 09:00' },
+                         invt_plan: { granted: true, opens: 0, days: 0, last: null } } }],
+      daily: [{ day: '2026-09-30', opens: 20 }, { day: '2026-10-01', opens: 22 }],
+    },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.getByText('2026-08 실판금액')).toBeVisible()
+  await page.locator('.side-nav').getByText('관리자').click()
+  await page.getByRole('button', { name: '메뉴 이용' }).click()
+  await expect(page.getByRole('row', { name: /판매 현황 42/ })).toContainText('75%') // 이용자 3 / 권한 4
+  await expect(page.getByRole('row', { name: /홍길동/ })).toContainText('미사용')
+  expect(api.find('POST', '/api/usage/menu').map((c) => (c.body as { page: string }).page)).toEqual(['sale_dashboard', 'admin'])
+  expect(api.find('GET', '/api/admin/menu-usage')[0].query.get('days')).toBe('30')
+})

@@ -29,12 +29,19 @@ FAKE = {
 }
 
 
+seen_allowed_ref: list = []
+
+
 @pytest.fixture
 def fake_dash(monkeypatch):
     seen = []
+    seen_allowed = []
+    seen_allowed_ref.clear()
+    seen_allowed = seen_allowed_ref
 
-    def dashboard(ym=None, frm=None, cmp=None, cmp_from=None, cmp_to=None, brand=None, full=False):
+    def dashboard(ym=None, frm=None, cmp=None, cmp_from=None, cmp_to=None, brand=None, full=False, allowed=None):
         seen.append({"ym": ym, "frm": frm, "cmp": cmp, "cmp_from": cmp_from, "cmp_to": cmp_to, "brand": brand})
+        seen_allowed.append(allowed)
         if ym == "209912":
             raise HTTPException(400, {"message": "2099-12 판매 데이터가 없습니다.", "code": "BAD_REQUEST"})
         return FAKE
@@ -91,3 +98,9 @@ def test_validation(fake_dash, inp, msg):
 
 def test_sum_tool_available_to_dashboard_only_user():
     assert "sum_sales_shop_month" in [t["name"] for t in ct.tools_for(DASH_ONLY)]
+
+
+def test_brand_scope_is_passed_to_dashboard(fake_dash):
+    ct.run_tool("get_sales_dashboard", {}, {"pages": ["sale_dashboard"], "brands": ["리스트"]})
+    ct.run_tool("get_sales_dashboard", {}, {"pages": ["sale_dashboard"], "brands": None})
+    assert seen_allowed_ref[-2:] == [["리스트"], None]

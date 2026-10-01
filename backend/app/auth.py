@@ -73,6 +73,8 @@ def effective(u: dict, settings: dict | None = None) -> dict:
         "superAdmin": super_admin,
         "active": bool(u["active"]) or super_admin,
         "pages": pages,
+        # 브랜드 데이터 권한: None = 모든 브랜드 (최고 관리자, 브랜드 미지정 사용자)
+        "brands": None if super_admin else (json.loads(u.get("brands") or "[]") or None),
         "ai": {
             "enabled": bool(s["ai_enabled"]) and bool(u["ai_enabled"]),
             "globalEnabled": bool(s["ai_enabled"]),

@@ -217,7 +217,7 @@ def mv_state() -> dict:
     return st
 
 
-def _run_mv(inp: dict) -> dict:
+def _run_mv(inp: dict, teams: list[str] | None = None) -> dict:
     f, t = _ym(inp, "ym_from"), _ym(inp, "ym_to")
     if f > t:
         raise SaleToolError("ym_from 이 ym_to 보다 늦습니다.")
@@ -237,6 +237,10 @@ def _run_mv(inp: dict) -> dict:
     limit = _limit(inp, 50)
 
     conds, p = ["MAKE_YYMM BETWEEN :ym_from AND :ym_to"], {"ym_from": f, "ym_to": t}
+    if teams is not None:  # 브랜드 권한 (뷰에도 팀이 있어 그대로 거른다)
+        tb = {f"bt{i}": x for i, x in enumerate(teams or ["-"])}
+        conds.append(f"TEAM_CD IN ({', '.join(':' + k for k in tb)})")
+        p.update(tb)
     if shops := _list(inp, "shop_ids", 500):
         binds = {f"shop{i}": s.upper() for i, s in enumerate(shops)}
         conds.append(f"SHOP_ID IN ({', '.join(':' + k for k in binds)})")
@@ -343,7 +347,7 @@ def _narrow_by_shop_name(conds: list[str], p: dict, f: str, t: str) -> None:
     p.update(sb)
 
 
-def _where(inp: dict) -> tuple[str, dict]:
+def _where(inp: dict, teams: list[str] | None = None) -> tuple[str, dict]:
     f, t = _ym(inp, "ym_from"), _ym(inp, "ym_to")
     if f > t:
         raise SaleToolError("ym_from 이 ym_to 보다 늦습니다.")
@@ -382,6 +386,9 @@ def _where(inp: dict) -> tuple[str, dict]:
     if (v := _text(inp, "prdt_cd")) is not None:
         conds.append("PRDT_CD LIKE :prdt_cd")
         p["prdt_cd"] = v.upper().replace("%", "").replace("_", "") + "%"
+    bconds, bbinds = sm.brand_filter(teams, f, t)  # 브랜드 권한 (화면 판매 집계와 같은 방식)
+    conds += bconds
+    p.update(bbinds)
     return " AND ".join(conds), p
 
 
@@ -408,12 +415,13 @@ def _clean(rows: list[dict]) -> list[dict]:
     return [{k: num(v) for k, v in r.items()} for r in rows]
 
 
-def run(name: str, inp: dict) -> dict:
+def run(name: str, inp: dict, teams: list[str] | None = None) -> dict:
+    """teams: 브랜드 권한으로 허용된 팀 (None = 모든 브랜드)"""
     if name == "sum_sales_shop_month":
-        return _run_mv(inp)
+        return _run_mv(inp, teams)
 
     if name == "aggregate_sales":
-        where, p = _where(inp)
+        where, p = _where(inp, teams)
         group_by = inp.get("group_by") or []
         if not isinstance(group_by, list) or any(g not in GROUP_COLS for g in group_by) or len(group_by) > 3:
             raise SaleToolError(f"group_by 는 {list(GROUP_COLS)} 중 최대 3개입니다.")
@@ -449,7 +457,7 @@ def run(name: str, inp: dict) -> dict:
         }
 
     if name == "search_sales":
-        where, p = _where(inp)
+        where, p = _where(inp, teams)
         order_by = inp.get("order_by")
         if order_by is not None and order_by not in NUM_ROW_KEYS + ["MAKE_YYMM", "SHOP_ID"]:
             raise SaleToolError("order_by 값이 올바르지 않습니다.")

@@ -1,6 +1,7 @@
 """판매 현황 보고용 엑셀: 화면과 같은 조건·같은 숫자를 시트별로 정리한다.
 
-시트: 요약 · 월별 추이 · 브랜드별 · 팀별 · 매장 순위(매출 상위/성장/하락/목표 미달) · 전체 매장
+시트: 요약(차트 포함) · 월별 추이 · 브랜드별 · 팀별 · 매장 순위(매출 상위/성장/하락/목표 미달) · 전체 매장
+차트는 엑셀 차트라 데이터 시트 값을 그대로 참조한다 (엑셀에서 바로 편집·복사 가능).
 금액은 원 단위(#,##0), 비율은 % (0.0). 인쇄·보고에 바로 쓰도록 제목·조건·작성 시각을 위에 적는다.
 """
 from __future__ import annotations
@@ -9,6 +10,7 @@ import io
 from datetime import datetime
 
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -137,6 +139,7 @@ def build(d: dict) -> bytes:
     row = _table(ws, row, shop_cols, ranked(d["fallers"]), f"{d['base']['kindLabel']} 대비 하락 상위 10 {rule}")
     if d["hasGoals"]:
         _table(ws, row, shop_cols, ranked(d["laggards"]), "목표 달성률 하위 10 (목표·매출이 있는 영업 매장)")
+    _charts(wb, d, base_label)
     # 6) 전체 매장
     ws = wb.create_sheet("전체 매장")
     row = _header(ws, d, f"전체 매장 ({len(d['allShops']):,}개, 실판금액 순)")
@@ -148,6 +151,52 @@ def build(d: dict) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+DATA_ROW = 5  # 데이터 시트의 첫 데이터 행 (1 제목, 2 조건, 4 머리글)
+MIL_FMT = '#,##0,,"백만"'
+
+
+def _axes(chart) -> None:
+    # openpyxl 3.1 은 축을 기본으로 숨긴다 → 보이게
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+
+
+def _charts(wb: Workbook, d: dict, base_label: str) -> None:
+    """요약 시트 오른쪽에 월별 추이(막대 당해 + 선 전년)와 브랜드별(당기·비교·목표) 차트"""
+    ws = wb["요약"]
+    n = len(d["trend"])
+    if n:
+        src = wb["월별 추이"]
+        cats = Reference(src, min_col=1, min_row=DATA_ROW, max_row=DATA_ROW + n - 1)
+        bar = BarChart()
+        bar.title = "최근 13개월 실판금액 (막대 당해 · 선 전년 같은 달)"
+        bar.add_data(Reference(src, min_col=2, min_row=DATA_ROW - 1, max_row=DATA_ROW + n - 1), titles_from_data=True)
+        bar.set_categories(cats)
+        bar.y_axis.number_format = MIL_FMT
+        bar.y_axis.majorGridlines = None
+        line = LineChart()
+        line.add_data(Reference(src, min_col=3, min_row=DATA_ROW - 1, max_row=DATA_ROW + n - 1), titles_from_data=True)
+        line.set_categories(cats)
+        bar += line
+        _axes(bar)
+        bar.height, bar.width = 8, 18
+        bar.legend.position = "b"
+        ws.add_chart(bar, "G4")
+    m = len(d["brands"])
+    if m:
+        src = wb["브랜드별"]
+        chart = BarChart()
+        chart.title = f"브랜드별 실판금액 ({d['period']['label']} · {base_label}{' · 목표' if d['hasGoals'] else ''})"
+        for col in (2, 3) + ((8,) if d["hasGoals"] else ()):  # 실판금액, 비교, 목표금액
+            chart.add_data(Reference(src, min_col=col, min_row=DATA_ROW - 1, max_row=DATA_ROW + m - 1), titles_from_data=True)
+        chart.set_categories(Reference(src, min_col=1, min_row=DATA_ROW, max_row=DATA_ROW + m - 1))
+        chart.y_axis.number_format = MIL_FMT
+        _axes(chart)
+        chart.height, chart.width = 8, 18
+        chart.legend.position = "b"
+        ws.add_chart(chart, "G21")
 
 
 def filename(d: dict) -> str:

@@ -103,18 +103,25 @@ def clear_cache() -> None:
 
 
 def brand_teams() -> dict[str, list[str]]:
-    """브랜드 → 팀 목록 (최근 3년 판매 기준, 10분 캐시)"""
+    """브랜드 → 팀 목록 (10분 캐시). 최근 3년 판매 + 사전 집계 뷰 전체 기간의 팀 (브랜드 권한이 옛 기간에도 맞게)."""
     global _teams_cache
     with _lock:
         if _teams_cache and _teams_cache[0] > time.time():
             return _teams_cache[1]
     months = available_months()[:36]
-    out: dict[str, list[str]] = {}
+    found: set[str] = set()
     if months:
         inl, b = _in(months)
-        for (team,) in db.query(f"SELECT DISTINCT TEAM_CD FROM T_CLOSE_SALE_BASE WHERE MAKE_YYMM IN ({inl})", b)[1]:
-            if team:
-                out.setdefault(brand_of(team), []).append(team)
+        found |= {t for (t,) in db.query(f"SELECT DISTINCT TEAM_CD FROM T_CLOSE_SALE_BASE WHERE MAKE_YYMM IN ({inl})", b)[1] if t}
+    try:
+        from .chat_tools_sale import MV_NAME
+
+        found |= {t for (t,) in db.query(f"SELECT DISTINCT TEAM_CD FROM {MV_NAME}")[1] if t}
+    except Exception:  # noqa: BLE001 - 뷰가 없으면 최근 3년 팀만
+        pass
+    out: dict[str, list[str]] = {}
+    for team in found:
+        out.setdefault(brand_of(team), []).append(team)
     out = {k: sorted(v) for k, v in sorted(out.items())}
     with _lock:
         _teams_cache = (time.time() + CACHE_TTL, out)
@@ -131,7 +138,8 @@ def _ym(v: str | None, name: str) -> str | None:
 
 
 def resolve(ym: str | None = None, frm: str | None = None, cmp: str | None = None, cmp_from: str | None = None,
-            cmp_to: str | None = None, brand: str | None = None) -> dict:
+            cmp_to: str | None = None, brand: str | None = None, allowed: list[str] | None = None) -> dict:
+    """allowed: 사용자가 볼 수 있는 브랜드 (None = 모든 브랜드). 브랜드 조건이 없으면 허용 브랜드 전체로 거른다."""
     """조회 조건 검증 → 기간·비교 기간·보조 비교 기간(KPI 에 함께 표시)·연 누계 월 목록"""
     months = available_months()
     if not months:
@@ -165,16 +173,24 @@ def resolve(ym: str | None = None, frm: str | None = None, cmp: str | None = Non
     extra, extra_label = (prev, "전월" if len(period) == 1 else "직전 기간") if kind == "yoy" else (yoy, "전년 동기")
     brand = (brand or "").strip() or None
     brand = BRAND_ALIASES.get(brand, brand) if brand else None
-    teams = None
+    bt = brand_teams()
+    allowed_set = set(allowed) if allowed is not None else None
+    teams, scope = None, None
     if brand:
-        bt = brand_teams()
         if brand not in bt:
-            _bad(f"브랜드 '{brand}' 가 없습니다. 선택지: {', '.join(bt)}")
-        teams = bt[brand]
+            _bad(f"브랜드 '{brand}' 가 없습니다. 선택지: {', '.join(b for b in bt if allowed_set is None or b in allowed_set)}")
+        if allowed_set is not None and brand not in allowed_set:
+            raise HTTPException(status_code=403, detail={"message": f"'{brand}' 브랜드 조회 권한이 없습니다.", "code": "FORBIDDEN"})
+        scope = {brand}
+    elif allowed_set is not None:
+        scope = allowed_set
+    if scope is not None:
+        teams = sorted({t for b in scope for t in bt.get(b, [])})
     ytd = [f"{to[:4]}{m:02d}" for m in range(1, int(to[4:]) + 1)]
     return {
         "months": months, "to": to, "from": frm, "period": period, "kind": kind, "base": base, "extra": extra,
-        "extraLabel": extra_label, "ytd": ytd, "ytdPrev": [_shift_ym(m, -12) for m in ytd], "brand": brand, "teams": teams,
+        "extraLabel": extra_label, "ytd": ytd, "ytdPrev": [_shift_ym(m, -12) for m in ytd], "brand": brand, "teams": teams, "scope": scope, "allowedSet": allowed_set,
+        "brandOptions": [b for b in bt if allowed_set is None or b in allowed_set],
     }
 
 
@@ -196,10 +212,10 @@ def _goals(period: list[str]) -> dict[str, tuple[int, str | None]]:
 
 
 def dashboard(ym: str | None = None, frm: str | None = None, cmp: str | None = None, cmp_from: str | None = None,
-              cmp_to: str | None = None, brand: str | None = None, full: bool = False) -> dict:
+              cmp_to: str | None = None, brand: str | None = None, full: bool = False, allowed: list[str] | None = None) -> dict:
     """화면·AI·엑셀 공통 계산. full=True 면 전체 매장 목록(allShops)까지 (엑셀용)."""
-    r = resolve(ym, frm, cmp, cmp_from, cmp_to, brand)
-    key = (r["to"], r["from"], r["kind"], tuple(r["base"]), r["brand"])
+    r = resolve(ym, frm, cmp, cmp_from, cmp_to, brand, allowed)
+    key = (r["to"], r["from"], r["kind"], tuple(r["base"]), r["brand"], tuple(sorted(r["scope"])) if r["scope"] is not None else None)
     hit = _cache.get(key)
     if hit and hit[0] > time.time():
         out = hit[1]
@@ -216,15 +232,16 @@ def dashboard(ym: str | None = None, frm: str | None = None, cmp: str | None = N
 
 def _compute(r: dict) -> dict:
     to, period, base, extra = r["to"], r["period"], r["base"], r["extra"]
-    team_set = set(r["teams"]) if r["teams"] else None
+    team_set = set(r["teams"]) if r["teams"] is not None else None
+    bset = r["scope"]  # 보이는 브랜드 (None = 전체)
     zero = {"amt": 0, "qty": 0, "dsct": 0, "cost": 0, "shops": 0}
 
     # 1) 월별 합계 (13개월 추이 + 전년 같은 달 + 연 누계): 브랜드 조건은 SQL 로
     series = [_shift_ym(to, -i) for i in range(24, -1, -1)]
     inl, b = _in(series)
     team_sql = ""
-    if team_set:
-        tinl, tb = _in(sorted(team_set), "t")
+    if team_set is not None:
+        tinl, tb = _in(sorted(team_set) or ["-"], "t")
         team_sql, b = f" AND TEAM_CD IN ({tinl})", {**b, **tb}
     monthly = {row[0]: {"amt": int(row[1] or 0), "qty": int(row[2] or 0), "dsct": int(row[3] or 0), "cost": int(row[4] or 0),
                         "shops": int(row[5] or 0)}
@@ -318,13 +335,13 @@ def _compute(r: dict) -> dict:
                                                   "goalAmt": 0, "goalSalesAmt": 0})
             br["goalAmt"] += g_amt
         # 조건(브랜드)에 맞는 매장 행
-        if r["brand"] and brand != r["brand"] and not (s and any(t in team_set for t in s["teams"])):
+        if bset is not None and brand not in bset and not (s and any(t in team_set for t in s["teams"])):
             continue
         teams_ok = team_set
         pa = agg(s, "p", teams_ok) if s else {**zero, "present": False}
         ba = agg(s, "b", teams_ok) if s else {**zero, "present": False}
         ea = agg(s, "e", teams_ok) if s else {**zero, "present": False}
-        goal_here = g_amt if (not r["brand"] or brand == r["brand"]) else 0
+        goal_here = g_amt if (bset is None or brand in bset) else 0
         if not (pa["present"] or ba["present"] or ea["present"] or goal_here):
             continue
         rows.append({
@@ -373,13 +390,15 @@ def _compute(r: dict) -> dict:
         g["achieve"] = _achieve(g["goalSalesAmt"], g["goalAmt"])
         return g
 
-    total_all = sum(x["amt"] for x in all_brand_rows.values())
+    # 비중: 보이는 브랜드 합계 기준 (브랜드 하나만 고르면 전체 대비, 권한이 제한된 사용자는 허용 브랜드 합계 대비)
+    total_all = sum(x["amt"] for x in all_brand_rows.values()
+                    if r["allowedSet"] is None or x["brand"] in r["allowedSet"])
     brands = []
     for g in all_brand_rows.values():
         g = finish(g)
         g["teams"] = len(g["teams"])
         g["share"] = round(g["amt"] * 100 / total_all, 1) if total_all else None
-        if not r["brand"] or g["brand"] == r["brand"]:
+        if bset is None or g["brand"] in bset:
             if g["amt"] or g["baseAmt"] or g["goalAmt"]:
                 brands.append(g)
     teams = [finish(t) for t in team_rows.values() if (not team_set or t["team"] in team_set) and (t["amt"] or t["baseAmt"])]
@@ -400,7 +419,7 @@ def _compute(r: dict) -> dict:
         "base": {"from": r["base"][0], "to": r["base"][-1], "months": r["base"], "label": period_label(r["base"]),
                  "kind": r["kind"], "kindLabel": CMP_KINDS[r["kind"]]},
         "extra": {"label": r["extraLabel"], "period": period_label(r["extra"])},
-        "brand": r["brand"], "brandOptions": list(brand_teams()),
+        "brand": r["brand"], "brandOptions": r["brandOptions"], "brandLimited": r["allowedSet"] is not None,
         "kpi": kpi, "trend": trend,
         "brands": sorted(brands, key=lambda x: x["amt"], reverse=True),
         "teams": sorted(teams, key=lambda x: (x["brand"], x["team"])),

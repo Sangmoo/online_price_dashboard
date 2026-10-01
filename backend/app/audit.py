@@ -34,7 +34,7 @@ ACTIONS = {
 }
 FIELD_LABELS = {
     "role": "권한", "pages": "메뉴 권한", "ai_enabled": "AI 사용", "daily_questions": "일일 질문 한도",
-    "daily_cost_usd": "일일 비용 한도($)", "active": "계정 사용", "usr_nm": "이름",
+    "daily_cost_usd": "일일 비용 한도($)", "active": "계정 사용", "usr_nm": "이름", "brands": "브랜드 권한",
     "ai_enabled_global": "AI 기능", "default_daily_questions": "기본 질문 한도", "default_daily_cost_usd": "기본 비용 한도($)",
     "model": "모델", "effort": "effort", "enabled": "사용", "extraDesc": "추가 안내", "description": "설명",
     "label": "표시 이름", "page": "연결 메뉴", "sql": "SQL", "params": "입력값", "maxRows": "최대 행",
@@ -108,6 +108,8 @@ def _show(k: str, v) -> str:
         return "기본값" if k in ("daily_questions", "daily_cost_usd") else "(없음)"
     if isinstance(v, bool):
         return "예" if v else "아니오"
+    if k == "brands" and isinstance(v, list):
+        return ", ".join(v) or "모든 브랜드"
     if k == "pages" and isinstance(v, list):
         return ", ".join(auth.PAGE_LABELS.get(p, p) for p in v) or "(없음)"
     if k == "page":
