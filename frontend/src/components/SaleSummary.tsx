@@ -230,7 +230,7 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
                     <tr key={r.key ?? '(없음)'}>
                       <td>
                         {isShop && r.key ? (
-                          <button className="btn-link" title="최근 12개월 판매 추이" onClick={() => setTrendShop({ id: r.key!, name: r.label })}>
+                          <button className="btn-link" title="매장 정보 · 최근 12개월 판매 추이" onClick={() => setTrendShop({ id: r.key!, name: r.label })}>
                             {r.label} <span className="muted mono">{r.key}</span>
                           </button>
                         ) : (
@@ -260,6 +260,7 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
       {trendShop && (
         <ShopTrendModal
           url={`/api/sale-monthly/shops/${encodeURIComponent(trendShop.id)}/trend`}
+          shopId={trendShop.id}
           title={trendShop.name}
           onClose={() => setTrendShop(null)}
         />

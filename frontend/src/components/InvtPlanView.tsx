@@ -384,7 +384,7 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
                       }
                     >
                       {c.key === 'shopId' && p.shopId ? (
-                        <button className="btn-link mono" title="최근 12개월 판매 추이" onClick={() => setTrend(p)}>{p.shopId}</button>
+                        <button className="btn-link mono" title="매장 정보 · 최근 12개월 판매 추이" onClick={() => setTrend(p)}>{p.shopId}</button>
                       ) : (
                         <Cell col={c} plan={p} />
                       )}
@@ -417,6 +417,8 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
       {trend && (
         <ShopTrendModal
           url={`/api/invt-plans/shops/${encodeURIComponent(trend.shopId)}/sales-trend`}
+          shopId={trend.shopId}
+          ctx="invt"
           title={trend.shopNm ?? trend.shopId}
           onClose={() => setTrend(null)}
         />

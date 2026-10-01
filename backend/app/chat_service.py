@@ -51,12 +51,17 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
   시즌·기획년도·품군·아이템·판매형태 등이 조건이나 묶음에 들어가거나 상품 수·원가가 필요할 때만 aggregate_sales 를 씁니다.
 - 매출은 '실판금액 합계'를 기준으로 합니다. 할인율·원가율처럼 도구에 없는 비율은 반환된 합계로 계산하고 계산식을 밝힙니다.
 
+[E] 매장 정보 (판매·실사계획 메뉴 권한) — 도구: search_shops
+- 매장의 브랜드·팀·담당 영업직원(사번·이름)·운영상태(정상/가폐점/폐점)·오픈일·폐점일. 기본은 영업 중 매장만입니다.
+- '○○ 매장 담당자', '김○○ 담당 매장', '영업직원별 매장 수' 같은 질문에 쓰고, 담당자 기준 판매를 물으면
+  search_shops 로 매장코드를 찾은 뒤 판매 도구(shop_ids)로 실적을 조회합니다.
+
 [D] 관리자 정의 조회 도구 — 설명 끝에 '(관리자 정의 조회 도구 …)' 가 붙은 도구
 - 관리자가 이 서비스 데이터 조회용으로 추가한 도구입니다. 도구 설명에 적힌 범위의 질문에 사용하고, 결과 컬럼명 그대로 해석하되 모호하면 그렇다고 밝힙니다.
 
 답변 원칙:
 1. 반드시 도구로 조회한 결과만 근거로 답합니다. 일반 지식, 추측, 외부 정보로 수치를 만들지 않습니다.
-2. 이 서비스의 데이터(A, B, C, D)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
+2. 이 서비스의 데이터(A, B, C, D, E)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
 3. 대화마다 [화면 컨텍스트]로 오늘 날짜, 사용자가 보고 있는 화면, 사용자가 조회 권한을 가진 데이터가 주어집니다.
    권한이 없는 데이터는 조회할 수 없으며, 요청받으면 해당 메뉴 권한이 필요하다고 안내합니다.
 4. 질문이 어느 데이터에 관한 것인지 불분명하면 사용자가 보고 있는 화면의 데이터를 우선합니다.
@@ -120,7 +125,7 @@ def _context_text(ctx: dict | None, me: dict) -> str:
     sc = data_scopes(me)
     allowed = [n for n, ok in (("온라인 가격(A)", sc["price"]), ("매장 재고 실사계획(B)", sc["invt"]),
                                ("판매 현황(C)", sc["dash"] or sc["sale"]),
-                               ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"])) if ok]
+                               ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"]), ("매장 정보·담당 영업직원(E)", sc["shop"])) if ok]
     parts = [f"오늘 날짜: {date.today():%Y%m%d}", f"조회 권한이 있는 데이터: {', '.join(allowed) or '없음'}"]
     if (sc["dash"] or sc["sale"]) and me.get("brands"):
         parts.append(f"판매 데이터 브랜드 권한: {', '.join(me['brands'])} 만 조회됩니다 (도구 결과도 이 브랜드로만 계산됨). "
@@ -391,6 +396,9 @@ def export_full(tool: str, inp: dict, me: dict) -> dict:
 
 
 def _table_title(name: str, inp: dict) -> str:
+    if name == "search_shops":
+        cond = [f"{k}={','.join(v) if isinstance(v, list) else v}" for k, v in inp.items() if v not in (None, "", [], False)]
+        return "매장 정보" + (f" · {', '.join(cond)}" if cond else "")
     if name in ("aggregate_invt_plans", "search_invt_plans"):
         cond = [f"{k}={v}" for k, v in inp.items()
                 if k not in ("group_by", "order_by", "order_dir", "limit") and v not in (None, "")]

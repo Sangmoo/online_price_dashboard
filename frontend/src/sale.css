@@ -41,6 +41,7 @@
 .sale-summary-head .grow { flex: 1; }
 .trend-loading { display: flex; align-items: center; gap: 8px; padding: 18px; color: var(--primary); flex-wrap: wrap; }
 .trend-modal { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.modal.trend-modal { width: min(940px, calc(100vw - 32px)); max-width: none; } /* .modal 기본 최대 폭(480px) 해제: 목표·달성률 열까지 보이도록 */
 .trend-table { max-height: 300px; }
 
 /* 판매 현황 대시보드 */

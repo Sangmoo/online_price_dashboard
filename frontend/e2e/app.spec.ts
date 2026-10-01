@@ -249,3 +249,34 @@ test('메뉴를 열면 이용 기록을 보내고, 관리자는 메뉴 이용 �
   expect(api.find('POST', '/api/usage/menu').map((c) => (c.body as { page: string }).page)).toEqual(['sale_dashboard', 'admin'])
   expect(api.find('GET', '/api/admin/menu-usage')[0].query.get('days')).toBe('30')
 })
+
+test('판매 현황에서 매장을 누르면 매장 정보·담당 영업직원·목표 대비 판매 추이를 보여준다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER'))
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(2025, 9 + i, 1)
+    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`
+  })
+  api.on('GET', '/api/sale-dashboard/shops/S41001/trend', () => ({
+    json: {
+      shopId: 'S41001', shopNm: '테스트매장1', from: months[0], to: months[11],
+      months: months.map((m) => ({ ym: m, qty: 100, amt: 200_000_000, prevQty: 90, prevAmt: 180_000_000, growth: 11.1 })),
+      total: { qty: 1200, amt: 2_400_000_000, prevQty: 1080, prevAmt: 2_160_000_000, growth: 11.1 },
+    },
+  }))
+  api.on('GET', '/api/shops/S41001/profile', () => ({
+    json: {
+      shop: { shopId: 'S41001', shopNm: '테스트매장1', status: '정상', teamNm: '쉬즈4팀', repId: '230038', repNm: '양성규', openDt: '2014-09-05',
+              closeDt: null, brands: [{ brdCd: 'S', brand: '쉬즈미스' }], addr: '서울 영등포구', tel: '02-123-4567', found: true },
+      goals: Object.fromEntries(months.map((m) => [m, 250_000_000])),
+    },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: '테스트매장1' }).click()
+  const modal = page.locator('.trend-modal')
+  await expect(modal).toContainText('양성규')
+  await expect(modal).toContainText('쉬즈미스 · 쉬즈4팀')
+  await expect(modal.locator('.shop-status')).toHaveText('정상')
+  await expect(modal.getByRole('columnheader', { name: '달성률' })).toBeVisible()
+  await expect(modal.locator('.pill', { hasText: '목표 달성률' })).toContainText('80%')
+  await expect(modal).not.toContainText('현재 매니저') // 실사계획 권한이 없으면 실사·매니저 정보 없음
+})

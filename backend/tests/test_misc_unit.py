@@ -17,10 +17,10 @@ def _names(pages):
 def test_tools_follow_menu_permissions():
     assert _names([]) == set()
     assert _names(["dashboard"]) == {"list_collection_dates", "aggregate_prices", "search_price_rows"}
-    assert _names(["sale_monthly"]) == {"get_sales_dashboard", "sum_sales_shop_month", "aggregate_sales", "search_sales"}
-    assert _names(["sale_dashboard"]) == {"get_sales_dashboard", "sum_sales_shop_month"}  # 판매 행 조회 도구는 없음
-    assert _names(["invt_plan"]) == {"aggregate_invt_plans", "search_invt_plans"}
-    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 9
+    assert _names(["sale_monthly"]) == {"get_sales_dashboard", "sum_sales_shop_month", "aggregate_sales", "search_sales", "search_shops"}
+    assert _names(["sale_dashboard"]) == {"get_sales_dashboard", "sum_sales_shop_month", "search_shops"}  # 판매 행 조회 도구는 없음
+    assert _names(["invt_plan"]) == {"aggregate_invt_plans", "search_invt_plans", "search_shops"}
+    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 10
 
 
 @pytest.mark.parametrize("name,inp", [

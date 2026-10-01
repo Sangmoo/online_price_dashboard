@@ -343,7 +343,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
       </section>
 
       {trendShop && (
-        <ShopTrendModal url={`/api/sale-dashboard/shops/${encodeURIComponent(trendShop.id)}/trend`} title={trendShop.name} onClose={() => setTrendShop(null)} />
+        <ShopTrendModal url={`/api/sale-dashboard/shops/${encodeURIComponent(trendShop.id)}/trend`} shopId={trendShop.id} title={trendShop.name} onClose={() => setTrendShop(null)} />
       )}
     </div>
   )
@@ -406,7 +406,7 @@ function ShopList({ title, hint, rows, mode, baseLbl, showGoal, onShop }: {
             <tr key={s.shopId}>
               <td className="muted">{i + 1}</td>
               <td>
-                <button className="btn-link" title="최근 12개월 판매 추이" onClick={() => onShop(s)}>{s.shopNm ?? s.shopId}</button>
+                <button className="btn-link" title="매장 정보 · 최근 12개월 판매 추이" onClick={() => onShop(s)}>{s.shopNm ?? s.shopId}</button>
                 <span className="muted mono small"> {s.shopId}</span>
               </td>
               <td className="num">{eok(s.amt)}</td>

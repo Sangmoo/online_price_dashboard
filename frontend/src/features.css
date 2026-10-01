@@ -333,3 +333,18 @@
 }
 :root[data-theme='dark'] .usage-unused, :root[data-theme='dark'] .usage-unused-sample { color: #fcd34d; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* 매장 정보 팝업 */
+.shop-info-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 14px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.shop-info-grid > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.shop-info-grid > div.wide { grid-column: 1 / -1; }
+.shop-info-grid > div > span { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
+.shop-info-grid b { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.shop-status { margin-left: 8px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; vertical-align: middle; }
+.shop-status.ok { background: rgba(16, 185, 129, 0.14); color: #047857; }
+.shop-status.warn { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.shop-status.closed { background: rgba(148, 163, 184, 0.22); color: var(--muted); }
+.shop-invt { display: flex; flex-direction: column; gap: 6px; }
+.shop-invt-head { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; }
+@media (max-width: 900px) { .shop-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -642,6 +642,32 @@ def invt_shop_detail(shop_id: str, _: dict = Depends(invt_page)):
     return invt_plan.shop_detail(shop_id)
 
 
+SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")
+
+
+@app.get("/api/shops/{shop_id}/profile")
+def shop_profile(shop_id: str, ctx: str | None = None, me: dict = Depends(current_user)):
+    """매장 정보 팝업: 기본 정보·담당 영업직원(판매·실사계획 메뉴 권한), 월별 목표(판매 메뉴), 실사 일정·매니저(실사계획 메뉴).
+    ctx=invt: 실사계획 화면에서 연 경우 — 실사계획은 브랜드 권한 대상이 아니므로 매장 정보는 거르지 않는다 (목표는 판매 데이터라 거름)."""
+    from . import shop_info
+
+    pages = set(me["pages"])
+    if not pages & set(SHOP_PROFILE_PAGES):
+        raise HTTPException(403, {"message": "매장 정보를 볼 수 있는 메뉴 권한이 없습니다.", "code": "FORBIDDEN"})
+    allowed = brand_scope.brands_of(me)
+    out: dict = {"shop": shop_info.profile(shop_id, None if ctx == "invt" and "invt_plan" in pages else allowed)}
+    sid = out["shop"]["shopId"]
+    if pages & {"sale_dashboard", "sale_monthly"}:
+        last = sale_monthly._shift_ym(time.strftime("%Y%m"), -1)
+        months = [sale_monthly._shift_ym(last, -i) for i in range(11, -1, -1)]
+        out["goals"] = shop_info.goals_by_month(sid, months, allowed)
+    if "invt_plan" in pages:
+        keys = ("planId", "invtPlanDt", "invtPlanNote", "lastInvtDt", "prevInvtType", "shopRankNm", "stockQty", "twiceYearYn")
+        out["invtPlans"] = [{k: p.get(k) for k in keys} for p in invt_plan.list_plans() if p.get("shopId") == sid]
+        out["managers"] = [m for m in invt_plan.shop_managers(sid) if m["current"]]
+    return out
+
+
 @app.get("/api/invt-plans/shops/{shop_id}/sales-trend")
 def invt_shop_trend(shop_id: str, _: dict = Depends(invt_page)):
     """실사계획 화면의 매장 판매 추이 (실사계획 메뉴 권한으로 해당 매장 월별 합계만 제공)."""
