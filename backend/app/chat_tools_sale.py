@@ -92,7 +92,8 @@ TOOLS: list[dict[str, Any]] = [
             "group_by 를 비우면 전체 합계 1행. 금액 단위는 원. SHOP_ID 로 묶으면 매장명(SHOP_NM)도 함께 반환됩니다. "
             f"metrics 를 생략하면 {DEFAULT_METRICS} 만 계산합니다. 이 기본 지표와 그룹(MAKE_YYMM, MAKE_YY, SHOP_ID)만 쓰고 "
             "다른 필터가 없으면 긴 기간도 빠릅니다. 그 밖의 지표·그룹·필터를 쓰면 기간이 길수록 느려지므로(36개월이면 2분 이상), "
-            "긴 기간에는 꼭 필요한 지표만 요청하세요."
+            "긴 기간에는 꼭 필요한 지표만 요청하세요. 매장 조건·매장 묶음 없이 기획년도·시즌·품군·아이템·판매형태·상품·팀·판매년월만 "
+            "쓰고 지표가 행 수·상품 수·수량·실판금액·할인금액·원가 금액이면 상품 사전 집계 뷰에서 같은 합계를 빠르게 계산합니다."
         ),
         "input_schema": {
             "type": "object",
@@ -347,7 +348,32 @@ def _narrow_by_shop_name(conds: list[str], p: dict, f: str, t: str) -> None:
     p.update(sb)
 
 
-def _where(inp: dict, teams: list[str] | None = None) -> tuple[str, dict]:
+# ----------------------------------------------------------------------------
+# aggregate_sales 의 상품 단위 묶음: 상품 사전 집계 뷰 MV_CLOSE_SALE_PRDT_YM (월 × 팀 × 상품 × 판매형태, 기획년도·시즌·아이템·품군 포함)
+# 매장 조건·매장 묶음이 없고, 뷰에 있는 열만 쓰는 질문이면 원본 대신 뷰에서 같은 합계를 읽는다 (시즌·품번 묶음 약 6초 → 0.3초).
+# ----------------------------------------------------------------------------
+PRDT_MV_GROUPS = {"MAKE_YYMM", "MAKE_YY", "TEAM_CD", "PLAN_YY", "SESS_NM", "PRDT_GRP_NM", "ITEM_NM", "DSCT_CLSBY_NM", "PRDT_CD"}
+PRDT_MV_FILTERS = {"ym_from", "ym_to", "team_cd", "plan_yys", "seasons", "prdt_grp_nm", "item_nm", "dsct_clsby_nm", "prdt_cd"}
+PRDT_MV_METRICS = {"ROW_CNT": "SUM(ROW_COUNT)", "PRDT_CNT": "COUNT(DISTINCT PRDT_CD)", "QTY_SUM": "SUM(TOTAL_QTY)",
+                   "REAL_SALE_AMT_SUM": "SUM(TOTAL_SALE_AMT)", "DSCT_AMT_SUM": "SUM(TOTAL_DSCT_AMT)", "COST_AMT_SUM": "SUM(TOTAL_COST_AMT)"}
+# 뷰의 시즌·품군 열은 이미 앱 식(SUBSTRB 100바이트)으로 만들어져 있다
+PRDT_MV_COLS = {**{g: g for g in PRDT_MV_GROUPS}, "MAKE_YY": "SUBSTR(MAKE_YYMM, 1, 4)"}
+
+
+def _use_prdt_mv(inp: dict, group_by: list[str], metrics: list[str], t: str) -> bool:
+    if any(k not in PRDT_MV_FILTERS for k, v in inp.items()
+           if k not in ("group_by", "metrics", "order_by", "order_dir", "limit") and v not in (None, "", [])):
+        return False
+    if any(g not in PRDT_MV_GROUPS for g in group_by) or any(m not in PRDT_MV_METRICS for m in metrics):
+        return False
+    from . import sale_products
+
+    st = sale_products.mv_state()
+    return bool(st["usable"] and st["mv_max"] and t <= st["mv_max"])
+
+
+def _where(inp: dict, teams: list[str] | None = None, prdt_mv: bool = False) -> tuple[str, dict]:
+    """prdt_mv=True: 상품 사전 집계 뷰용 조건 (시즌·품군은 뷰 열 그대로, 브랜드 권한은 팀 조건)"""
     f, t = _ym(inp, "ym_from"), _ym(inp, "ym_to")
     if f > t:
         raise SaleToolError("ym_from 이 ym_to 보다 늦습니다.")
@@ -369,7 +395,7 @@ def _where(inp: dict, teams: list[str] | None = None) -> tuple[str, dict]:
     if seasons := _list(inp, "seasons", len(sm.SEASONS)):
         if any(s not in sm.SEASONS for s in seasons):
             raise SaleToolError(f"seasons 는 {sm.SEASONS} 중에서 선택합니다.")
-        _in(sm.SESS_EXPR, "sess", seasons)
+        _in("SESS_NM" if prdt_mv else sm.SESS_EXPR, "sess", seasons)
     for key, col in (("shop_nm", "SHOP_NM"), ("team_cd", "TEAM_CD"), ("item_nm", "ITEM_NM")):
         if (v := _text(inp, key)) is not None:
             conds.append(f"INSTR({col}, :{key}) > 0")
@@ -377,6 +403,8 @@ def _where(inp: dict, teams: list[str] | None = None) -> tuple[str, dict]:
     if "shop_nm" in p:
         _narrow_by_shop_name(conds, p, f, t)
     for key, col in _EXACT.items():
+        if prdt_mv and key == "prdt_grp_nm":
+            col = "PRDT_GRP_NM"
         if (v := _text(inp, key)) is not None:
             allowed = _FILTER_PROPS[key].get("enum")
             if allowed and v not in allowed:
@@ -386,6 +414,10 @@ def _where(inp: dict, teams: list[str] | None = None) -> tuple[str, dict]:
     if (v := _text(inp, "prdt_cd")) is not None:
         conds.append("PRDT_CD LIKE :prdt_cd")
         p["prdt_cd"] = v.upper().replace("%", "").replace("_", "") + "%"
+    if prdt_mv:  # 뷰는 팀 열이 있어 팀 조건으로 바로 거른다
+        if teams is not None:
+            _in("TEAM_CD", "bft", teams or ["-"])
+        return " AND ".join(conds), p
     bconds, bbinds = sm.brand_filter(teams, f, t)  # 브랜드 권한 (화면 판매 집계와 같은 방식)
     conds += bconds
     p.update(bbinds)
@@ -421,7 +453,6 @@ def run(name: str, inp: dict, teams: list[str] | None = None) -> dict:
         return _run_mv(inp, teams)
 
     if name == "aggregate_sales":
-        where, p = _where(inp, teams)
         group_by = inp.get("group_by") or []
         if not isinstance(group_by, list) or any(g not in GROUP_COLS for g in group_by) or len(group_by) > 3:
             raise SaleToolError(f"group_by 는 {list(GROUP_COLS)} 중 최대 3개입니다.")
@@ -435,10 +466,18 @@ def run(name: str, inp: dict, teams: list[str] | None = None) -> dict:
         if order_by is not None and order_by not in metrics and order_by not in group_by:
             raise SaleToolError("order_by 는 요청한 지표이거나 group_by 에 포함된 컬럼이어야 합니다.")
         limit = _limit(inp, 50)
-        select = [f"{GROUP_COLS[g]} AS {g}" for g in group_by] + [f"{METRICS[a]} AS {a}" for a in metrics]
-        sql = f"SELECT {', '.join(select)} FROM {TABLE} WHERE {where}"
+        use_mv = _use_prdt_mv(inp, group_by, metrics, _ym(inp, "ym_to"))
+        where, p = _where(inp, teams, prdt_mv=use_mv)
+        if use_mv:
+            from . import sale_products
+
+            gcols, mexpr, table = PRDT_MV_COLS, PRDT_MV_METRICS, sale_products.MV_NAME
+        else:
+            gcols, mexpr, table = GROUP_COLS, METRICS, TABLE
+        select = [f"{gcols[g]} AS {g}" for g in group_by] + [f"{mexpr[a]} AS {a}" for a in metrics]
+        sql = f"SELECT {', '.join(select)} FROM {table} WHERE {where}"
         if group_by:
-            sql += " GROUP BY " + ", ".join(GROUP_COLS[g] for g in group_by)
+            sql += " GROUP BY " + ", ".join(gcols[g] for g in group_by)
         if order_by:
             sql += f" ORDER BY {order_by} {_dir(inp, 'desc')} NULLS LAST"
         rows = _clean(db.query_dicts(f"SELECT * FROM ({sql}) WHERE ROWNUM <= {limit + 1}", p))
@@ -452,7 +491,8 @@ def run(name: str, inp: dict, teams: list[str] | None = None) -> dict:
         cols = group_by + (["SHOP_NM"] if "SHOP_ID" in group_by else []) + metrics
         return {
             "result": {"row_count": len(rows), "truncated": truncated, "rows": rows,
-                       "period": f"{p['ym_from']}~{p['ym_to']}"},
+                       "period": f"{p['ym_from']}~{p['ym_to']}",
+                       "source": "상품 사전 집계 뷰(원본과 같은 합계)" if use_mv else "원본"},
             "table": {"columns": [{"key": c, "label": LABELS[c]} for c in cols], "rows": rows},
         }
 

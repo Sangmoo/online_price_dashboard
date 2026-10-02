@@ -26,6 +26,7 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "log_keep_days": ("LOG_KEEP_DAYS", "int"),
     "auto_model": ("AI_AUTO_MODEL", "yn"),
     "simple_model": ("AI_SIMPLE_MODEL", "str"),
+    "feedback_img_keep_months": ("FEEDBACK_IMG_KEEP_MONTHS", "int"),
 }
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
@@ -36,6 +37,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "log_keep_days": 7,
     "auto_model": False,
     "simple_model": None,
+    "feedback_img_keep_months": 12,   # 완료된 문의의 첨부 이미지 보관 개월 (0 = 계속 보관)
 }
 
 _lock = threading.Lock()

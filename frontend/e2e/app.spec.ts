@@ -342,7 +342,7 @@ test('판매 현황 아래에 판매형태 구성·상품 순위·아이템 비�
   }))
   await page.goto('/?view=sale_dashboard')
   await expect(page.getByRole('heading', { name: '판매형태 구성' })).toBeVisible()
-  await expect(page.getByRole('row', { name: /세일/ })).toContainText('+8.5%p')
+  await expect(page.getByRole('row', { name: /^세일/ }).first()).toContainText('+8.5%p')
   await page.getByRole('button', { name: '수량' }).click()
   await expect(page.getByRole('button', { name: 'SWWSTQ32150' })).toBeVisible()
   await page.getByRole('button', { name: '실판금액' }).click()
@@ -502,7 +502,9 @@ test('문의·신고: 현재 화면과 조회 조건을 붙여 보내고, 관리
   expect((body as unknown as { images: { data: string }[] }).images[0].data).toMatch(/^data:image\/png;base64,iVBORw0KGgo/)
   await modal.getByRole('button', { name: '닫기' }).first().click()
 
-  api.on('GET', '/api/admin/feedback', () => ({ json: { rows: [saved], counts: { NEW: 1, DOING: 0, DONE: 0 }, storage: 'sqlite' } }))
+  api.on('GET', '/api/admin/feedback', () => ({ json: { rows: [saved], counts: { NEW: 1, DOING: 0, DONE: 0 }, storage: 'oracle', images: { count: 4, bytes: 3_145_728 } } }))
+  api.on('GET', '/api/admin/settings', () => ({ json: { feedbackImageKeepMonths: 12 } }))
+  api.on('PUT', '/api/admin/settings', () => ({ json: { feedbackImageKeepMonths: 6 } }))
   api.on('PUT', '/api/admin/feedback/20261002101500AB12', () => ({ json: { ...saved, status: 'DONE', answer: '수정했습니다' } }))
   api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
   await page.locator('.side-nav').getByText('관리자').click()
@@ -513,5 +515,90 @@ test('문의·신고: 현재 화면과 조회 조건을 붙여 보내고, 관리
   await row.getByPlaceholder(/답변/).fill('수정했습니다')
   await row.getByRole('button', { name: '저장' }).click()
   await expect.poll(() => api.find('PUT', '/api/admin/feedback/20261002101500AB12').length).toBe(1)
+  await expect(page.locator('.fb-keep')).toContainText('이미지 4개 · 3.0MB')
+  await page.getByRole('spinbutton', { name: '이미지 보관 개월' }).fill('6')
+  await page.locator('.fb-keep').getByRole('button', { name: '저장' }).click()
+  await expect.poll(() => api.find('PUT', '/api/admin/settings').length).toBe(1)
+  expect(api.find('PUT', '/api/admin/settings')[0].body).toEqual({ feedbackImageKeepMonths: 6 })
   expect(api.find('PUT', '/api/admin/feedback/20261002101500AB12')[0].body).toEqual({ status: 'DONE', answer: '수정했습니다' })
+})
+
+test('문의·신고 배지: 사용자는 새 답변, 관리자는 미처리 건수를 본다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER'))
+  api.on('GET', '/api/feedback/badge', () => ({ json: { newAnswers: 2, open: null } }))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.getByRole('button', { name: /문의·신고/ })).toContainText('새 답변 2')
+  expect(api.find('GET', '/api/feedback/badge')[0].headers['x-background']).toBe('1') // 주기 확인은 세션 연장 안 함
+})
+
+test('관리자: 사이드바와 탭에 미처리 문의 건수를 보여준다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/feedback/badge', () => ({ json: { newAnswers: 0, open: 3 } }))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.locator('.side-nav .side-item', { hasText: '관리자' }).locator('.count-badge')).toHaveText('3')
+  await page.locator('.side-nav').getByText('관리자').click()
+  await expect(page.locator('.admin-tabs').getByRole('button', { name: /문의·신고/ }).locator('.count-badge')).toHaveText('3')
+})
+
+test('판매 현황: 시즌 진척 아이템별 보기, 세일 비중 높은 매장', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER'))
+  api.on('GET', '/api/sale-dashboard/season/items', () => ({
+    json: { items: [{ name: '가디건', amt: 1_180_970_200, qty: 12908, prevSameAmt: 717_786_981, prevFinalAmt: 989_656_750, change: 64.5,
+                      progress: 119.3, prevProgressSame: 72.5, share: 9.4 }] },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  const season = page.locator('.season-panel')
+  await season.getByRole('button', { name: '아이템별 보기' }).click()
+  await expect(season.getByRole('row', { name: /가디건/ })).toContainText('119.3%')
+  expect(Object.fromEntries(api.find('GET', '/api/sale-dashboard/season/items')[0].query)).toEqual({ ym: '202608', planYy: '2026', season: '여름' })
+
+  const heavy = page.locator('.sale-heavy-panel')
+  await expect(heavy.locator('.pill', { hasText: '리스트 평균' })).toContainText('37.9%')
+  await expect(heavy.getByRole('row', { name: /신세계의정부/ })).toContainText('+44.5%p')
+  await heavy.getByRole('checkbox', { name: /행사·특판 매장 포함/ }).check()
+  await expect.poll(() => api.find('GET', '/api/sale-dashboard/sale-heavy-shops').some((c) => c.query.get('includeEvent') === 'true')).toBe(true)
+})
+
+test('상품 팝업: 같은 아이템 품번 사이 순위를 보여주고, 다른 품번을 누르면 그 품번으로 바뀐다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER'))
+  const insight = (cd: string, rank: number) => ({
+    json: {
+      prdtCd: cd,
+      sales: { itemNm: '자켓', prdtGrpNm: '우븐', source: '사전 집계 뷰', months: [{ ym: '202608', amt: 1, qty: 1, dsctRate: 0 }] },
+      siblings: { planYy: '2026', season: '가을기획', itemNm: '자켓', brand: '리스트', count: 19, rank, topPct: 10.5, avgQty: 577,
+                  rows: [{ prdtCd: 'TWSJKQ72010', prdtGrpNm: 'SUIT', qty: 1933, amt: 365_273_900, dsctRate: 0.4, from: '202606', to: '202609', rank: 1 },
+                         { prdtCd: 'TWWJKQ72020', prdtGrpNm: '우븐', qty: 1838, amt: 340_719_340, dsctRate: 2.0, from: '202607', to: '202609', rank: 2 }] },
+    },
+  })
+  api.on('GET', '/api/products/TWWJKQ72020/insight', () => insight('TWWJKQ72020', 2))
+  api.on('GET', '/api/products/TWSJKQ72010/insight', () => insight('TWSJKQ72010', 1))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: 'TWWJKQ72020' }).first().click()
+  const modal = page.locator('.product-modal')
+  await expect(modal).toContainText('같은 아이템 비교 · 리스트 2026 가을기획 자켓')
+  await expect(modal).toContainText('19개 품번 중 수량 2위')
+  await modal.getByRole('button', { name: 'TWSJKQ72010' }).click()
+  await expect(modal).toContainText('19개 품번 중 수량 1위')
+  expect(api.find('GET', '/api/products/TWSJKQ72010/insight')).toHaveLength(1)
+})
+
+test('관리자: AI 사용 현황에서 도구별 호출·오류·응답 시간을 본다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
+  api.on('GET', '/api/admin/usage', () => ({ json: { since: '2026-09-03', days: 30, total: { questions: 2, cost: 0.24, input_tokens: 1, output_tokens: 1, users: 1 }, daily: [], byUser: [], byModel: [], storage: 'oracle' } }))
+  api.on('GET', '/api/admin/ai-tool-stats', () => ({
+    json: { days: 30, since: '2026-09-26', keepDays: 7, questions: 2, models: { 'claude-opus-5': 2 }, routes: { off: 2 }, modelSwitches: 0,
+            tools: [{ name: 'aggregate_sales', label: '판매 집계', calls: 4, ok: 2, inputErrors: 2, failures: 0, errorRate: 50, avgSec: 19.1, p95Sec: 32,
+                      maxSec: 32, users: 1, last: '2026-09-29 13:46:06', topErrors: [{ message: 'ym_from 은 N 형식', count: 2 }] }],
+            unusedTools: [{ name: 'get_season_progress', label: '시즌 판매 진척' }] },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await page.locator('.side-nav').getByText('관리자').click()
+  await page.locator('.admin-tabs').getByRole('button', { name: 'AI 사용 현황' }).click()
+  const card = page.locator('.ai-tool-stats')
+  await expect(card.getByRole('row', { name: /판매 집계/ })).toContainText('50%')
+  await expect(card).toContainText('ym_from 은 N 형식 (2)')
+  await expect(card).toContainText('로그 보관 기간이 7일이라')
+  await expect(card).toContainText('쓰이지 않은 기본 도구: 시즌 판매 진척')
 })

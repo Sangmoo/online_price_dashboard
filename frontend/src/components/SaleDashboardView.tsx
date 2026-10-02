@@ -7,6 +7,7 @@ import ShopTrendModal, { fmtGrowth, growthClass } from './ShopTrendModal'
 import SaleProductsPanel from './SaleProductsPanel'
 import SeasonProgressPanel from './SeasonProgressPanel'
 import OnlineAlertPanel from './OnlineAlertPanel'
+import SaleHeavyShopsPanel from './SaleHeavyShopsPanel'
 import ProductInsightModal from './ProductInsightModal'
 
 type Kpi = {
@@ -363,6 +364,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
       {applied && <SeasonProgressPanel key={`${applied.to}|${applied.brand}`} ym={applied.to} brand={applied.brand} />}
       {applied && <SaleProductsPanel query={condQuery(applied)} onProduct={setProductCd} />}
       {applied && canOnline && <OnlineAlertPanel query={condQuery(applied)} onProduct={setProductCd} />}
+      {applied && <SaleHeavyShopsPanel query={condQuery(applied)} onShop={(id, name) => setTrendShop({ id, name })} />}
 
       {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
       {trendShop && (

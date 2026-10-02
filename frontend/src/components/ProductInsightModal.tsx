@@ -23,6 +23,17 @@ type Insight = {
     shops: { shopId: string; shopNm: string | null; team: string | null; qty: number; amt: number; share: number | null; dsctRate: number | null }[]
     teams: { team: string; brand: string; qty: number; amt: number; shops: number }[]
   }
+  siblings?: {
+    planYy: string
+    season: string
+    itemNm: string
+    brand: string
+    count: number
+    rank: number | null
+    topPct: number | null
+    avgQty: number | null
+    rows: { prdtCd: string; prdtGrpNm: string | null; qty: number; amt: number; dsctRate: number | null; from: string; to: string; rank: number }[]
+  }
 }
 
 const dt = (v: string) => `${v.slice(4, 6)}-${v.slice(6, 8)}`
@@ -30,10 +41,13 @@ const ym = (v: string) => `${v.slice(0, 4)}-${v.slice(4)}`
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${Number(v).toFixed(1)}%`)
 
 /** 상품 팝업: 품번으로 온라인 가격(최근 31일)과 매장 판매(최근 12개월)를 나란히. 권한이 있는 쪽만 보인다. */
-export default function ProductInsightModal({ prdtCd, onClose }: { prdtCd: string; onClose: () => void }) {
+export default function ProductInsightModal({ prdtCd: initialCd, onClose }: { prdtCd: string; onClose: () => void }) {
+  const [prdtCd, setPrdtCd] = useState(initialCd) // 같은 아이템 비교에서 다른 품번을 누르면 그 품번으로
   const [data, setData] = useState<Insight | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
+    setData(null)
+    setError(null)
     apiFetch(`/api/products/${encodeURIComponent(prdtCd)}/insight`)
       .then((r) => r.json())
       .then(setData)
@@ -174,6 +188,39 @@ export default function ProductInsightModal({ prdtCd, onClose }: { prdtCd: strin
                   </tbody>
                 </table>
               </div>
+            </div>
+          </section>
+        )}
+        {data?.siblings && data.siblings.count > 1 && (
+          <section>
+            <div className="shop-invt-head">
+              <Package size={14} /> 같은 아이템 비교 · {data.siblings.brand} {data.siblings.planYy} {data.siblings.season} {data.siblings.itemNm}
+              <span className="muted small">
+                {data.siblings.count}개 품번 중 수량 <b>{data.siblings.rank}위</b>
+                {data.siblings.topPct !== null ? ` (상위 ${data.siblings.topPct}%)` : ''} · 품번 평균 {fmtNum(data.siblings.avgQty)}개 · 시즌 누적
+              </span>
+            </div>
+            <div className="table-wrap trend-table">
+              <table className="table">
+                <thead><tr><th>순위</th><th>품번</th><th>품군</th><th className="num">수량</th><th className="num">실판금액</th><th className="num">할인율</th><th>판매 기간</th></tr></thead>
+                <tbody>
+                  {data.siblings.rows.map((r) => (
+                    <tr key={r.prdtCd} className={r.prdtCd === prdtCd ? 'me-row' : ''}>
+                      <td className="muted">{r.rank}</td>
+                      <td>
+                        {r.prdtCd === prdtCd ? <b className="mono">{r.prdtCd}</b> : (
+                          <button className="btn-link mono" onClick={() => setPrdtCd(r.prdtCd)} title="이 품번으로 보기">{r.prdtCd}</button>
+                        )}
+                      </td>
+                      <td className="small">{r.prdtGrpNm ?? '-'}</td>
+                      <td className="num strong">{fmtNum(r.qty)}</td>
+                      <td className="num">{fmtNum(r.amt)}</td>
+                      <td className="num">{pct(r.dsctRate)}</td>
+                      <td className="small muted">{ym(r.from)}~{ym(r.to)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         )}

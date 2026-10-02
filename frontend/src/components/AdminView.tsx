@@ -47,6 +47,7 @@ import ServerStatusTab from './admin/ServerStatusTab'
 import MenuUsageTab from './admin/MenuUsageTab'
 import BackupTab from './admin/BackupTab'
 import FeedbackTab from './admin/FeedbackTab'
+import AiToolStatsCard from './admin/AiToolStatsCard'
 
 export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
@@ -66,7 +67,12 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
 
-export default function AdminView({ me, initialTab }: { me: User; initialTab?: Tab }) {
+export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedbackChange }: {
+  me: User
+  initialTab?: Tab
+  feedbackOpen?: number
+  onFeedbackChange?: () => void
+}) {
   const [tab, setTab] = useState<Tab>(initialTab ?? 'users')
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
 
@@ -81,6 +87,7 @@ export default function AdminView({ me, initialTab }: { me: User; initialTab?: T
         {TABS.map(({ key, label, icon: Icon }) => (
           <button key={key} className={`admin-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)}>
             <Icon size={16} /> {label}
+            {key === 'feedback' && feedbackOpen > 0 && <span className="count-badge danger">{feedbackOpen}</span>}
           </button>
         ))}
       </div>
@@ -90,7 +97,7 @@ export default function AdminView({ me, initialTab }: { me: User; initialTab?: T
       {tab === 'aitools' && <AiToolsTab notify={notify} />}
       {tab === 'usage' && <UsageTab />}
       {tab === 'menuusage' && <MenuUsageTab notify={notify} />}
-      {tab === 'feedback' && <FeedbackTab notify={notify} />}
+      {tab === 'feedback' && <FeedbackTab notify={notify} onChange={onFeedbackChange} />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
       {tab === 'audit' && <AuditTab notify={notify} />}
@@ -702,6 +709,7 @@ function UsageTab() {
         <MiniKpi label="토큰 (입력/출력)" value={t ? `${fmtNum(t.input_tokens)} / ${fmtNum(t.output_tokens)}` : '-'} />
         <MiniKpi label="사용자 수" value={t ? `${fmtNum(t.users)}명` : '-'} />
       </section>
+      <AiToolStatsCard days={days} />
       <section className="card panel">
         <div className="panel-head"><h3>일자별 사용량</h3><span className="panel-hint">막대: 비용($) · 선: 질문 수</span></div>
         <ResponsiveContainer width="100%" height={260}>

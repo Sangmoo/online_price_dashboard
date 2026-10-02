@@ -257,3 +257,46 @@ def product_shops(prdt_cd: str, months: list[str], teams: list[str] | None = Non
     return {"from": months[0], "to": months[-1], "shopCount": len(ranked), "qty": tot_qty, "amt": tot_amt,
             "shops": ranked[:top], "topShare": top_share,
             "teams": sorted(teams_out.values(), key=lambda t: t["qty"], reverse=True)}
+
+
+def product_siblings(prdt_cd: str, teams: list[str] | None = None, top: int = 10) -> dict | None:
+    """상품 팝업: 같은 브랜드·기획년도·시즌·아이템 품번들 사이에서 이 품번의 순위 (시즌 전체 기간 누적 수량 기준).
+    상품 사전 집계 뷰(기획년도·시즌 열 포함)가 최신일 때만 — 없으면 None (원본으로는 시즌 전체를 훑어야 해 느림)."""
+    st = mv_state()
+    if not st["usable"]:
+        return None
+    team_sql, tb = "", {}
+    if teams is not None:
+        tinl, tb = _in(teams or ["-"], "t")
+        team_sql = f" AND TEAM_CD IN ({tinl})"
+    try:
+        info = db.query(f"""SELECT PLAN_YY, SESS_NM, ITEM_NM, TEAM_CD, SUM(TOTAL_QTY) FROM {MV_NAME} WHERE PRDT_CD = :p{team_sql}
+                             GROUP BY PLAN_YY, SESS_NM, ITEM_NM, TEAM_CD ORDER BY 5 DESC""", {"p": prdt_cd, **tb})[1]
+    except Exception:  # noqa: BLE001 - 예전 뷰(기획년도·시즌 열 없음)
+        return None
+    if not info or not all(info[0][:3]):
+        return None
+    yy, ss, item, team = info[0][:4]
+    brand = sd.brand_of(team)   # 가장 많이 판 팀의 브랜드 안에서만 비교 (브랜드끼리 섞지 않음)
+    bteams = sd.brand_teams().get(brand) or [team]
+    if teams is not None:
+        bteams = [t for t in bteams if t in set(teams)] or ["-"]
+    tinl, tb = _in(bteams, "t")
+    team_sql = f" AND TEAM_CD IN ({tinl})"
+    rows = db.query(f"""SELECT PRDT_CD, MAX(PRDT_GRP_NM), SUM(TOTAL_QTY), SUM(TOTAL_SALE_AMT), SUM(TOTAL_DSCT_AMT), MIN(MAKE_YYMM), MAX(MAKE_YYMM)
+                          FROM {MV_NAME} WHERE PLAN_YY = :y AND SESS_NM = :s AND ITEM_NM = :i{team_sql}
+                         GROUP BY PRDT_CD""", {"y": yy, "s": ss, "i": item, **tb})[1]
+    prods = []
+    for cd, grp, qty, amt, dsct, f, t in rows:
+        qty, amt, dsct = int(qty or 0), int(amt or 0), int(dsct or 0)
+        prods.append({"prdtCd": cd, "prdtGrpNm": grp, "qty": qty, "amt": amt, "dsctRate": _dr(dsct, amt), "from": f, "to": t})
+    prods.sort(key=lambda p: (p["qty"], p["amt"]), reverse=True)
+    for i, p in enumerate(prods, 1):
+        p["rank"] = i
+    me = next((p for p in prods if p["prdtCd"] == prdt_cd), None)
+    n = len(prods)
+    avg_qty = round(sum(p["qty"] for p in prods) / n) if n else None
+    shown = prods[:top] + ([me] if me and me["rank"] > top else [])
+    return {"planYy": yy, "season": ss, "itemNm": item, "brand": brand, "count": n, "rank": me["rank"] if me else None,
+            "topPct": round(me["rank"] * 100 / n, 1) if me and n else None, "avgQty": avg_qty,
+            "me": me, "rows": shown}

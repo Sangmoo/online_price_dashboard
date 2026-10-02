@@ -39,12 +39,13 @@ def _clear_caches() -> None:
     from . import chat_tools_sale as cts
     from . import sale_dashboard, sale_monthly
 
-    from . import sale_products, sale_season
+    from . import sale_mix, sale_products, sale_season
 
     cts._mv_state = None
     sale_dashboard.clear_cache()
     sale_products.clear_cache()
     sale_season.clear_cache()
+    sale_mix.clear_cache()
     with sale_monthly._stats_lock:
         sale_monthly._stats_cache.clear()
 

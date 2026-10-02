@@ -27,6 +27,7 @@ TOOLS_SALE: list[dict[str, Any]] = [
             "결과: 시즌 시작 월부터 기준 월(ym)까지 월별·누적 실판금액과 수량, 전년 같은 시즌의 같은 시점(12개월 전 같은 달) 누적, "
             "증감률, 진척률(올해 누적 ÷ 전년 시즌 최종 누적), 할인율, 최근 12개월 판매가 있는 시즌 선택지. "
             "plan_yy 와 season 을 함께 주면 그 시즌, 생략하면 기준 월에 가장 많이 팔린 시즌입니다. "
+            "by_item=true 면 아이템(자켓·팬츠 등)별 누적·전년 같은 시점·증감·진척률·비중을 함께 줍니다('어느 아이템이 시즌을 끌고 있어?'). "
             "시즌은 " + "/".join(SEASONS) + ". 여러 시즌을 비교하려면 시즌마다 한 번씩 호출하세요."
         ),
         "input_schema": {
@@ -36,6 +37,7 @@ TOOLS_SALE: list[dict[str, Any]] = [
                 "plan_yy": {"type": "string", "description": "기획년도 YYYY (season 과 함께)"},
                 "season": {"type": "string", "enum": SEASONS, "description": "시즌 (plan_yy 와 함께)"},
                 "brand": {"type": "string", "description": "브랜드 하나 (쉬즈미스·리스트·시스티나, 생략 시 전체)"},
+                "by_item": {"type": "boolean", "description": "아이템별 진척도 함께 (기본 false)"},
             },
             "additionalProperties": False,
         },
@@ -71,7 +73,8 @@ TOOLS_PRODUCT: list[dict[str, Any]] = [
         "name": "get_product_insight",
         "description": (
             "품번 하나를 상품 팝업과 같은 내용으로 한 번에 조회합니다: 온라인 가격(최근 31일 일별 평균 할인율·최저가, 마지막 수집일의 사이트별 가격), "
-            "매장 판매(최근 12개월 월별 수량·실판금액·할인율), 많이 팔린 매장·팀(최근 3개월). "
+            "매장 판매(최근 12개월 월별 수량·실판금액·할인율), 많이 팔린 매장·팀(최근 3개월), "
+            "같은 브랜드·기획년도·시즌·아이템 품번 사이 순위(siblings, 시즌 누적 수량 기준 — '이 상품 잘 팔리는 편이야?'). "
             "'TWWJKQ72020 온라인 가격이랑 매장 판매 어때?', '이 상품 어느 매장에서 많이 팔려?' 같은 품번 하나에 대한 질문에 씁니다. "
             "사용자 메뉴 권한에 따라 온라인 쪽(온라인 가격 메뉴) 또는 매장 쪽(판매 메뉴)만 담길 수 있습니다. "
             "여러 상품 비교나 기간 조건이 필요하면 aggregate_prices / aggregate_sales 를 쓰세요."
@@ -80,7 +83,7 @@ TOOLS_PRODUCT: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "prdt_cd": {"type": "string", "description": "품번(상품코드) 정확히"},
-                "parts": {"type": "array", "items": {"type": "string", "enum": ["online", "sales", "shops"]},
+                "parts": {"type": "array", "items": {"type": "string", "enum": ["online", "sales", "shops", "siblings"]},
                           "description": "받을 부분 (생략 시 권한 있는 전부)"},
             },
             "required": ["prdt_cd"],
@@ -157,6 +160,15 @@ def _season(inp: dict, allowed: list[str] | None) -> dict:
         "kpi": d["kpi"], "months": rows,
         "seasonOptions": [f"{o['planYy']} {o['season']}" for o in d["options"]],
     }
+    by_item = inp.get("by_item")
+    if by_item is not None and not isinstance(by_item, bool):
+        raise InsightToolError("by_item 은 true/false 입니다.")
+    if by_item:
+        it = sale_season.items(_ym(inp, "ym"), _text(inp, "brand"), allowed, d["planYy"], d["season"])["items"]
+        result["items"] = it
+        cols = [("name", "아이템"), ("amt", "누적 실판금액"), ("share", "비중(%)"), ("prevSameAmt", "전년 같은 시점"), ("change", "증감(%)"),
+                ("progress", "진척률(%)"), ("prevProgressSame", "전년 같은 시점 진척(%)"), ("qty", "수량")]
+        return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in cols], "rows": it}}
     cols = [("ym", "판매년월"), ("prevYm", "전년 같은 달"), ("amt", "월 실판금액"), ("cum", "누적"), ("prevAmt", "전년 월 실판금액"),
             ("prevCum", "전년 누적")]
     return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in cols], "rows": rows}}
@@ -191,9 +203,9 @@ def _product(inp: dict, teams: list[str] | None, can_price: bool, can_sale: bool
     cd = (_text(inp, "prdt_cd") or "").upper()
     if not _CD.match(cd):
         raise InsightToolError("prdt_cd 는 품번(영문 대문자·숫자 2~20자)입니다.")
-    parts = inp.get("parts") or ["online", "sales", "shops"]
-    if not isinstance(parts, list) or any(p not in ("online", "sales", "shops") for p in parts):
-        raise InsightToolError("parts 는 online, sales, shops 중에서 고릅니다.")
+    parts = inp.get("parts") or ["online", "sales", "shops", "siblings"]
+    if not isinstance(parts, list) or any(p not in ("online", "sales", "shops", "siblings") for p in parts):
+        raise InsightToolError("parts 는 online, sales, shops, siblings 중에서 고릅니다.")
     result: dict[str, Any] = {"prdtCd": cd}
     notes = []
     table = None
@@ -214,7 +226,7 @@ def _product(inp: dict, teams: list[str] | None, can_price: bool, can_sale: bool
                 notes.append("최근 31일 온라인 수집 기록이 없습니다.")
         else:
             notes.append("온라인 가격 메뉴 권한이 없어 온라인 가격은 뺐습니다.")
-    if "sales" in parts or "shops" in parts:
+    if "sales" in parts or "shops" in parts or "siblings" in parts:
         if not can_sale:
             notes.append("판매 메뉴 권한이 없어 매장 판매는 뺐습니다.")
         else:
@@ -224,6 +236,12 @@ def _product(inp: dict, teams: list[str] | None, can_price: bool, can_sale: bool
                                    "totalQty": sum(m["qty"] for m in sa["months"]), "totalAmt": sum(m["amt"] for m in sa["months"])}
                 table = {"columns": [{"key": "ym", "label": "판매년월"}, {"key": "qty", "label": "수량"}, {"key": "amt", "label": "실판금액"},
                                      {"key": "dsctRate", "label": "할인율(%)"}], "rows": sa["months"]}
+            if "siblings" in parts:
+                sib = sale_products.product_siblings(cd, teams)
+                if sib:
+                    result["siblings"] = {k: v for k, v in sib.items() if k != "me"}
+                else:
+                    notes.append("같은 아이템 비교는 상품 사전 집계 뷰가 최신일 때만 됩니다.")
             if "shops" in parts:
                 sh = sale_products.product_shops(cd, months[-3:], teams)
                 result["shops"] = {"period": f"{sd.ym_label(sh['from'])}~{sd.ym_label(sh['to'])}", "shopCount": sh["shopCount"],

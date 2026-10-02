@@ -102,11 +102,14 @@ def test_prewarm_scopes_and_tick(monkeypatch):
     monkeypatch.setattr(sd, "dashboard", lambda **k: calls.append(("d", k["allowed"], k["ttl"])))
     monkeypatch.setattr(sp, "analyze", lambda **k: calls.append(("p", k["allowed"], k["ttl"])))
     monkeypatch.setattr(ss, "progress", lambda **k: calls.append(("s", k["allowed"], k["ttl"])))
+    from app import sale_mix
+
+    monkeypatch.setattr(sale_mix, "heavy_shops", lambda **k: calls.append(("m", k["allowed"], k["ttl"])))
     sig = {"v": ("FRESH", "t1")}
     monkeypatch.setattr(prewarm, "signature", lambda: sig["v"])
     prewarm._state.update({"signature": None, "day": None})
     assert prewarm.tick(datetime(2026, 10, 2, 6, 0)) == "서버 시작"
-    assert len(calls) == 6 and calls[0] == ("d", None, prewarm.WARM_TTL)
+    assert len(calls) == 8 and calls[0] == ("d", None, prewarm.WARM_TTL)
     assert prewarm.tick(datetime(2026, 10, 2, 6, 30)) is None  # 7시 전 · 변경 없음
     assert prewarm.tick(datetime(2026, 10, 2, 7, 5)) == "아침 계산"
     assert prewarm.tick(datetime(2026, 10, 2, 9, 0)) is None  # 그날은 한 번

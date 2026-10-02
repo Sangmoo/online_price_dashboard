@@ -25,6 +25,11 @@ type Season = {
   }
 }
 
+type SeasonItem = {
+  name: string; amt: number; qty: number; prevSameAmt: number; prevFinalAmt: number; change: number | null
+  progress: number | null; prevProgressSame: number | null; share: number | null
+}
+
 const eok = (v: number) =>
   Math.abs(v) >= 100_000_000 ? `${(v / 100_000_000).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${Math.round(v / 10_000).toLocaleString('ko-KR')}만`
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${v.toFixed(1)}%`)
@@ -37,6 +42,9 @@ export default function SeasonProgressPanel({ ym, brand }: { ym: string; brand: 
   const [data, setData] = useState<Season | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showItems, setShowItems] = useState(false)
+  const [items, setItems] = useState<{ key: string; rows: SeasonItem[] } | null>(null)
+  const [itemsError, setItemsError] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -58,6 +66,19 @@ export default function SeasonProgressPanel({ ym, brand }: { ym: string; brand: 
       alive = false
     }
   }, [ym, brand, sel])
+
+  // 아이템별: 펼칠 때 한 번 불러온다 (시즌·기준 월·브랜드가 같으면 다시 부르지 않음)
+  const itemsKey = data?.planYy ? `${data.to}|${data.brand ?? ''}|${data.planYy}|${data.season}` : ''
+  useEffect(() => {
+    if (!showItems || !itemsKey || items?.key === itemsKey || !data) return
+    const p = new URLSearchParams({ ym, planYy: data.planYy!, season: data.season! })
+    if (brand) p.set('brand', brand)
+    setItemsError(null)
+    apiFetch(`/api/sale-dashboard/season/items?${p}`)
+      .then((r) => r.json())
+      .then((d: { items: SeasonItem[] }) => setItems({ key: itemsKey, rows: d.items }))
+      .catch((e) => setItemsError(e.message))
+  }, [showItems, itemsKey, items, data, ym, brand])
 
   if (loading && !data) return <section className="card panel"><div className="trend-loading"><Loader2 size={18} className="spin" /> 시즌 판매 진척을 계산하는 중… (상품 뷰가 없으면 원본에서 10초 안팎)</div></section>
   if (error) return <div className="alert error">시즌 판매 진척: {error}</div>
@@ -122,6 +143,42 @@ export default function SeasonProgressPanel({ ym, brand }: { ym: string; brand: 
           <Line yAxisId="c" type="monotone" dataKey={`${prev} 누적`} stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
         </ComposedChart>
       </ResponsiveContainer>
+      <div className="row season-items-head">
+        <button className="btn ghost small" onClick={() => setShowItems((v) => !v)} aria-expanded={showItems}>
+          {showItems ? '아이템별 닫기' : '아이템별 보기'}
+        </button>
+        {showItems && <span className="muted small">아이템마다 같은 기준(전년 같은 시점 · 전년 시즌 최종 대비 진척)</span>}
+      </div>
+      {showItems && itemsError && <div className="alert error">아이템별: {itemsError}</div>}
+      {showItems && !itemsError && (!items || items.key !== itemsKey) && (
+        <div className="trend-loading"><Loader2 size={16} className="spin" /> 아이템별로 계산하는 중…</div>
+      )}
+      {showItems && items && items.key === itemsKey && (
+        <div className="table-wrap tall-ish">
+          <table className="table sd-table season-items">
+            <thead>
+              <tr>
+                <th>아이템</th><th className="num">누적 실판금액</th><th className="num">비중</th><th className="num">전년 같은 시점</th>
+                <th className="num">증감</th><th className="num">진척률</th><th className="num">전년 같은 시점 진척</th><th className="num">수량</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.rows.map((i) => (
+                <tr key={i.name}>
+                  <td className="strong">{i.name}</td>
+                  <td className="num">{eok(i.amt)}</td>
+                  <td className="num">{pct(i.share)}</td>
+                  <td className="num muted">{eok(i.prevSameAmt)}</td>
+                  <td className={`num ${growthClass(i.change)}`}>{fmtGrowth(i.change)}</td>
+                  <td className={`num strong ${i.progress !== null && i.prevProgressSame !== null ? growthClass(i.progress - i.prevProgressSame) : ''}`}>{pct(i.progress)}</td>
+                  <td className="num muted">{pct(i.prevProgressSame)}</td>
+                  <td className="num">{fmtNum(i.qty)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div className="muted small">선: 누적(왼쪽) · 막대: 월 판매(오른쪽) · 단위 백만원 · 전년 선은 시즌이 끝날 때까지 이어져 남은 기간 흐름을 보여줍니다.</div>
     </section>
   )

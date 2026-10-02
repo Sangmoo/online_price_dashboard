@@ -53,7 +53,7 @@ def signature() -> tuple:
 
 def warm(reason: str) -> dict:
     """기본 조건 판매 현황 + 상품 패널 계산 (동시에 한 번만). 실패한 조합은 건너뛴다."""
-    from . import sale_dashboard, sale_products, sale_season
+    from . import sale_dashboard, sale_mix, sale_products, sale_season
 
     if not _lock.acquire(blocking=False):
         return state()
@@ -66,6 +66,7 @@ def warm(reason: str) -> dict:
                 sale_dashboard.dashboard(allowed=allowed, ttl=WARM_TTL)
                 sale_products.analyze(allowed=allowed, ttl=WARM_TTL)
                 sale_season.progress(allowed=allowed, ttl=WARM_TTL)
+                sale_mix.heavy_shops(allowed=allowed, ttl=WARM_TTL)
             except Exception as ex:  # noqa: BLE001 - 한 조합 실패가 나머지를 막지 않게
                 errors.append(f"{allowed or '전체'}: {str(ex).splitlines()[0][:120]}")
         sec = round(time.time() - t0, 1)
@@ -89,7 +90,7 @@ def after_refresh() -> None:
 
 def tick(now: datetime | None = None) -> str | None:
     """주기 점검 1회: 데이터 상태가 바뀌었거나 그날 아침 계산을 아직 안 했으면 계산. 실행한 이유를 돌려준다."""
-    from . import sale_dashboard, sale_products, sale_season
+    from . import sale_dashboard, sale_mix, sale_products, sale_season
 
     now = now or datetime.now()
     sig = signature()
@@ -101,6 +102,7 @@ def tick(now: datetime | None = None) -> str | None:
         sale_dashboard.clear_cache()
         sale_products.clear_cache()
         sale_season.clear_cache()
+        sale_mix.clear_cache()
     elif now.hour >= WARM_HOUR and _state["day"] != now.strftime("%Y%m%d"):
         reason = "아침 계산"
     if reason:

@@ -21,7 +21,7 @@ APP_ID = "erp-sales-web"
 VERSION = 1
 SECTIONS = ("users", "settings", "aiTools")
 USER_KEYS = ("role", "pages", "brands", "aiEnabled", "dailyQuestions", "dailyCostUsd", "active")
-SETTING_KEYS = ("aiEnabled", "defaultDailyQuestions", "defaultDailyCostUsd", "model", "effort", "logKeepDays", "autoModel", "simpleModel")
+SETTING_KEYS = ("aiEnabled", "defaultDailyQuestions", "defaultDailyCostUsd", "model", "effort", "logKeepDays", "autoModel", "simpleModel", "feedbackImageKeepMonths")
 CUSTOM_KEYS = ("label", "description", "page", "sql", "params", "maxRows", "enabled")
 
 

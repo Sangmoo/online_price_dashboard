@@ -54,6 +54,7 @@ const FeedbackModal = lazyView(() => import('./components/FeedbackModal'))
 type Theme = 'light' | 'dark'
 
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000 // 화면 조작 시 세션 연장 호출 최소 간격
+const BADGE_INTERVAL_MS = 5 * 60 * 1000 // 문의·신고 배지 확인 주기 (새 답변 · 관리자 미처리 건수)
 const FRESHNESS_INTERVAL_MS = 10 * 60 * 1000 // 관리자: 새 월 마감 데이터 확인 주기 (서버는 1분 캐시)
 const WARN_BEFORE_SEC = 5 * 60 // 만료 5분 전 경고
 
@@ -217,6 +218,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [saleCtx, setSaleCtx] = useState<Record<string, string>>({})
   const [saleDashCtx, setSaleDashCtx] = useState<Record<string, string>>({})
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [badge, setBadge] = useState<{ newAnswers: number; open: number | null }>({ newAnswers: 0, open: null })
   const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const lastTouch = useRef(0)
@@ -237,6 +239,24 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   }, [isAdmin, view])
 
   useEffect(() => writeStorage('sidebar', collapsed ? 'collapsed' : 'expanded'), [collapsed])
+
+  // 문의·신고 배지: 사용자는 새 답변, 관리자는 미처리 건수. 탭으로 돌아오거나 창을 닫을 때도 다시 확인
+  const checkBadge = useCallback(() => {
+    api.feedbackBadge().then(setBadge).catch(() => undefined)
+  }, [])
+  useEffect(() => {
+    checkBadge()
+    const t = setInterval(checkBadge, BADGE_INTERVAL_MS)
+    const onVisible = () => document.visibilityState === 'visible' && checkBadge()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [checkBadge])
+  useEffect(() => {
+    if (!feedbackOpen) checkBadge()
+  }, [feedbackOpen, view, checkBadge])
 
   useEffect(() => {
     lastTouch.current = Date.now()
@@ -381,6 +401,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               </span>
               <span className="side-text">
                 <span className="side-label">{label}</span>
+                {key === 'admin' && !!badge.open && <span className="count-badge danger" title={`처리하지 않은 문의·신고 ${badge.open}건`}>{badge.open}</span>}
                 <span className="side-desc">{desc}</span>
               </span>
               {collapsed && <span className="side-tooltip">{label}</span>}
@@ -432,6 +453,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </div>
             <button className="btn ghost feedback-btn" onClick={() => setFeedbackOpen(true)} title="오류 신고 · 기능 요청 · 문의 (현재 화면과 조회 조건이 함께 전달됩니다)">
               <MessageSquareWarning size={15} /> 문의·신고
+              {badge.newAnswers > 0 && <span className="count-badge danger" title="새 답변이 있습니다">새 답변 {badge.newAnswers}</span>}
             </button>
           </div>
         </header>
@@ -497,7 +519,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </div>
           )}
           {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
-          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} />}
+          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge} />}
           {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
           </Suspense>
         </main>

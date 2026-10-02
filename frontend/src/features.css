@@ -435,3 +435,10 @@
 .fb-thumb button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border-radius: 999px; background: rgba(15, 23, 42, 0.65); color: #fff; }
 .fb-thumb span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10.5px; color: #fff; background: rgba(15, 23, 42, 0.55); padding: 1px 6px; }
 .feedback-admin-row textarea { min-height: 120px; }
+.count-badge.danger { background: var(--danger); color: #fff; }
+.side-item .count-badge { margin-left: auto; }
+.feedback-btn .count-badge { margin-left: 2px; }
+.admin-tab .count-badge { margin-left: 4px; min-width: 18px; height: 18px; font-size: 11px; }
+.season-items-head { margin: 4px 0; gap: 8px; align-items: center; }
+.table tr.me-row td { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.fb-keep .num-input { width: 72px; text-align: right; } .fb-keep .row { gap: 6px; align-items: center; }

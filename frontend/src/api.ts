@@ -193,6 +193,9 @@ export const api = {
   sendFeedback: (body: { type: FeedbackType; content: string; page: string; context: Record<string, unknown>; images?: { name: string; data: string }[] }) =>
     sendJson<Feedback>('POST', '/api/feedback', body),
   myFeedback: () => getJson<{ rows: Feedback[]; limits?: FeedbackLimits }>('/api/feedback/mine'),
+  // 주기 확인 → 세션 연장 안 함
+  feedbackBadge: async () =>
+    (await apiFetch('/api/feedback/badge', { headers: BACKGROUND_HEADERS })).json() as Promise<{ newAnswers: number; open: number | null }>,
 
   // 관리자
   admin: {
@@ -209,7 +212,8 @@ export const api = {
     restoreApply: (data: unknown, sections: string[]) =>
       sendJson<{ applied: string[]; failed: { item: string; reason: string }[] }>('POST', '/api/admin/restore/apply', { data, sections }),
     menuUsage: (days: number) => getJson<MenuUsage>(`/api/admin/menu-usage?${qs({ days })}`),
-    feedback: (status?: string) => getJson<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string }>(`/api/admin/feedback?${qs({ status })}`),
+    aiToolStats: (days: number) => getJson<AiToolStats>(`/api/admin/ai-tool-stats?${qs({ days })}`),
+    feedback: (status?: string) => getJson<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string; images?: { count: number; bytes: number } }>(`/api/admin/feedback?${qs({ status })}`),
     answerFeedback: (id: string, body: { status?: FeedbackStatus; answer?: string }) =>
       sendJson<Feedback>('PUT', `/api/admin/feedback/${encodeURIComponent(id)}`, body),
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
@@ -303,6 +307,21 @@ export type DataStatus = {
   productMv?: { exists: boolean; staleness: string | null; mvMaxMonth: string | null }
   prewarm?: { last: string | null; elapsedSec: number | null; scopes: number; error: string | null; reason?: string; running: boolean }
 }
+export type AiToolStats = {
+  days: number
+  since: string
+  keepDays: number
+  questions: number
+  models: Record<string, number>
+  routes: Record<string, number>
+  modelSwitches: number
+  tools: {
+    name: string; label: string; calls: number; ok: number; inputErrors: number; failures: number; errorRate: number | null
+    avgSec: number | null; p95Sec: number | null; maxSec: number | null; users: number; last: string | null
+    topErrors: { message: string; count: number }[]
+  }[]
+  unusedTools: { name: string; label: string }[]
+}
 export type FeedbackType = 'BUG' | 'REQ' | 'ASK'
 export type FeedbackStatus = 'NEW' | 'DOING' | 'DONE'
 export type Feedback = {
@@ -355,6 +374,7 @@ export type AdminSettings = {
   envModel: string
   envEffort: string
   logKeepDays: number
+  feedbackImageKeepMonths?: number
   autoModel: boolean
   simpleModel: string
 }

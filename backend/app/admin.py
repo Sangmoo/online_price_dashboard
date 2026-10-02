@@ -373,6 +373,7 @@ def get_settings() -> dict:
         "logKeepDays": s.get("log_keep_days") or logs.DEFAULT_KEEP_DAYS,
         "autoModel": bool(s.get("auto_model")),
         "simpleModel": s.get("simple_model") or model_router.DEFAULT_SIMPLE_MODEL,
+        "feedbackImageKeepMonths": s.get("feedback_img_keep_months") if s.get("feedback_img_keep_months") is not None else 12,
     }
 
 
@@ -409,13 +410,18 @@ def save_settings(body: dict, admin: dict) -> dict:
         if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 365:
             _bad("로그 보관 기간은 1~365일입니다.")
         values["log_keep_days"] = v
+    if "feedbackImageKeepMonths" in body:
+        v = body["feedbackImageKeepMonths"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 120:
+            _bad("문의 첨부 이미지 보관 기간은 0~120개월입니다 (0 = 계속 보관).")
+        values["feedback_img_keep_months"] = v
     before = userdb.get_settings()
     userdb.save_settings(values, by=admin["id"])
     if "log_keep_days" in values:
         logs.cleanup(values["log_keep_days"])
     after = userdb.get_settings()
     rename = {"ai_enabled": "ai_enabled_global"}
-    audit.record(admin, "SETTING_UPDATE", "운영 설정" if set(values) == {"log_keep_days"} else "AI 설정", {rename.get(k, k): before.get(k) for k in values},
+    audit.record(admin, "SETTING_UPDATE", "운영 설정" if values and set(values) <= {"log_keep_days", "feedback_img_keep_months"} else "AI 설정", {rename.get(k, k): before.get(k) for k in values},
                  {rename.get(k, k): after.get(k) for k in values})
     return get_settings()
 

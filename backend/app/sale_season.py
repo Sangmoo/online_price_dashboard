@@ -152,3 +152,69 @@ def progress(ym: str | None = None, brand: str | None = None, allowed: list[str]
             "lastAmt": cur.get(to, (0, 0, 0))[0], "prevLastAmt": prev.get(to, (0, 0, 0))[0],
         },
     }
+
+
+def items(ym: str | None = None, brand: str | None = None, allowed: list[str] | None = None,
+          plan_yy: str | None = None, season: str | None = None) -> dict:
+    """시즌 진척을 아이템별로: 아이템마다 누적 · 전년 같은 시점 · 증감 · 전년 시즌 최종 대비 진척률 · 비중.
+    시즌·시작 월·기준 월은 progress() 와 같다. 상품 뷰에 아이템 열이 있어 뷰면 즉시, 없으면 원본(시즌 2개 × 최대 30개월)."""
+    p = progress(ym, brand, allowed, plan_yy, season)
+    if not p.get("planYy"):
+        return {**p, "items": []}
+    yy, ss, start, to = p["planYy"], p["season"], p["start"], p["to"]
+    prev_yy = str(int(yy) - 1) if yy.isdigit() else None
+    teams = sd.resolve(ym, None, None, None, None, brand, allowed)["teams"]
+    key = ("items", to, yy, ss, tuple(teams) if teams is not None else None)
+    hit = _cache.get(key)
+    if hit and hit[0] > time.time():
+        return {**{k: v for k, v in p.items() if k != "months"}, **hit[1]}
+    frm = sm._shift_ym(start, -12)
+    team_sql, tb = "", {}
+    if teams is not None:
+        tinl, tb = sp._in(teams or ["-"], "t")
+        team_sql = f" AND TEAM_CD IN ({tinl})"
+    st = sp.mv_state()
+    binds = {"f": frm, "t": to, "y": yy, "py": prev_yy or "-", "s": ss, **tb}
+    rows = None
+    if st["usable"] and st["mv_max"] and to <= st["mv_max"]:
+        try:
+            rows = db.query(f"""SELECT PLAN_YY, ITEM_NM, MAKE_YYMM, SUM(TOTAL_SALE_AMT), SUM(TOTAL_QTY) FROM {sp.MV_NAME}
+                                 WHERE PLAN_YY IN (:y, :py) AND SESS_NM = :s AND MAKE_YYMM BETWEEN :f AND :t{team_sql}
+                                 GROUP BY PLAN_YY, ITEM_NM, MAKE_YYMM""", binds)[1]
+        except Exception:  # noqa: BLE001 - 예전 뷰(기획년도·시즌 열 없음)면 원본
+            rows = None
+    if rows is None:
+        minl, mb = sp._in(sd.month_range(frm, to), "m")
+        rows = db.query(f"""SELECT PLAN_YY, ITEM_NM, MAKE_YYMM, SUM(REAL_SALE_AMT), SUM(QTY) FROM T_CLOSE_SALE_BASE
+                             WHERE MAKE_YYMM IN ({minl}) AND PLAN_YY IN (:y, :py) AND {sm.SESS_EXPR} = :s{team_sql}
+                             GROUP BY PLAN_YY, ITEM_NM, MAKE_YYMM""", {**mb, **{k: v for k, v in binds.items() if k not in ("f", "t")}})[1]
+    agg: dict[str, dict] = {}
+    for py, item, m, amt, qty in rows:
+        name = item or "(없음)"
+        a = agg.setdefault(name, {"name": name, "amt": 0, "qty": 0, "prevSameAmt": 0, "prevSameQty": 0, "prevFinalAmt": 0})
+        amt, qty = int(amt or 0), int(qty or 0)
+        if str(py) == yy and start <= m <= to:
+            a["amt"] += amt
+            a["qty"] += qty
+        elif str(py) == prev_yy:
+            m12 = sm._shift_ym(m, 12)   # 전년 달을 올해 달 위치로
+            if m12 >= start:
+                a["prevFinalAmt"] += amt
+                if m12 <= to:
+                    a["prevSameAmt"] += amt
+                    a["prevSameQty"] += qty
+    tot = sum(a["amt"] for a in agg.values())
+    out = []
+    for a in agg.values():
+        if not (a["amt"] or a["prevSameAmt"]):
+            continue
+        a["change"] = sd._rate(a["amt"], a["prevSameAmt"])
+        a["progress"] = round(a["amt"] * 100 / a["prevFinalAmt"], 1) if a["prevFinalAmt"] else None
+        a["prevProgressSame"] = round(a["prevSameAmt"] * 100 / a["prevFinalAmt"], 1) if a["prevFinalAmt"] else None
+        a["share"] = round(a["amt"] * 100 / tot, 1) if tot else None
+        out.append(a)
+    out.sort(key=lambda a: a["amt"], reverse=True)
+    res = {"items": out}
+    with _lock:
+        _cache[key] = (time.time() + CACHE_TTL, res)
+    return {**{k: v for k, v in p.items() if k != "months"}, **res}

@@ -119,6 +119,14 @@ export const alertsData = {
   ],
 }
 
+export const heavyData = {
+  period: '2026-08', base: '2025-08', baseKind: '전년 동기', brand: null, minMonthlyAmt: 10_000_000, includeEvent: false,
+  rule: "세일 비중 = 판매형태에 '세일'이 들어간 판매 ÷ 매장 실판금액", candidateCount: 455, eventShops: 11,
+  brandAverages: [{ brand: '리스트', share: 37.9, baseShare: 8.2, amt: 8_172_284_836 }],
+  shops: [{ shopId: 'T31001', shopNm: '신세계의정부', event: false, team: '리스트3팀', brand: '리스트', amt: 30_633_300, discAmt: 25_000_000,
+            share: 82.4, brandShare: 37.9, diff: 44.5, baseShare: 13.6, shareChange: 68.8 }],
+}
+
 export class MockApi {
   calls: Call[] = []
   unhandled: string[] = []
@@ -141,6 +149,8 @@ export class MockApi {
     this.on('GET', '/api/sale-dashboard/season', () => ({ json: seasonData }))
     this.on('GET', '/api/sale-dashboard/online-alerts', () => ({ json: alertsData }))
     this.on('GET', '/api/feedback/mine', () => ({ json: { rows: [] } }))
+    this.on('GET', '/api/feedback/badge', () => ({ json: { newAnswers: 0, open: null } }))
+    this.on('GET', '/api/sale-dashboard/sale-heavy-shops', () => ({ json: heavyData }))
     // 판매 집계 화면은 권한이 있으면 숨김 상태로 미리 떠 있어 기본 응답이 필요하다
     this.on('GET', '/api/sale-monthly/options', () => ({ json: saleOptions }))
     this.on('GET', '/api/sale-monthly', () => ({ json: { rows: [], summary: { rows: 0, qty: 0, realSaleAmt: 0 } } }))

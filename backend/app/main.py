@@ -39,12 +39,15 @@ except Exception:  # noqa: BLE001
 
 
 def _housekeeping() -> None:
-    """6시간마다: 보관 기간이 지난 로그 파일·엑셀 임시 파일 정리 (보관 일수는 관리자 설정, 기본 7일)"""
+    """6시간마다: 보관 기간이 지난 로그 파일·엑셀 임시 파일·완료된 문의의 첨부 이미지 정리 (보관 기간은 관리자 설정)"""
     time.sleep(30)
     while True:
         try:
             logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
             sale_monthly.cleanup_exports()
+            from . import feedback
+
+            feedback.purge_images(userdb.get_settings().get("feedback_img_keep_months"))
         except Exception:  # noqa: BLE001
             logs.get("app").exception("정리 작업 실패")
         time.sleep(6 * 3600)
@@ -413,7 +416,17 @@ def feedback_create(body: dict, me: dict = Depends(current_user)):
 def feedback_mine(me: dict = Depends(current_user)):
     from . import feedback
 
-    return {"rows": feedback.mine(me["id"]), "limits": feedback.limits()}
+    rows = feedback.mine(me["id"])
+    feedback.mark_seen(me["id"])  # 창을 열어 답변을 봤으므로 '새 답변' 표시를 지운다
+    return {"rows": rows, "limits": feedback.limits()}
+
+
+@app.get("/api/feedback/badge")
+def feedback_badge(me: dict = Depends(current_user)):
+    """화면 배지 (주기 확인: 화면은 X-Background 로 보내 세션을 연장하지 않는다)"""
+    from . import feedback
+
+    return feedback.badge(me)
 
 
 @app.get("/api/feedback/{fb_id}/files/{no}")
@@ -444,6 +457,14 @@ def admin_feedback_answer(fb_id: str, body: dict, me: dict = Depends(require_adm
 @app.get("/api/admin/menu-usage")
 def admin_menu_usage(days: int = 30, _: dict = Depends(require_admin)):
     return menu_usage.report(days, admin.list_users())
+
+
+@app.get("/api/admin/ai-tool-stats")
+def admin_ai_tool_stats(days: int = 7, _: dict = Depends(require_admin)):
+    """AI 도구별 호출·실패·응답 시간, 모델 선택 (서버 로그 기준)"""
+    from . import ai_tool_stats
+
+    return {**ai_tool_stats.report(days), "keepDays": userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS}
 
 
 @app.get("/api/admin/server-status")
@@ -629,6 +650,24 @@ def sale_dashboard_season(ym: str | None = None, brand: str | None = None, planY
     return sale_season.progress(ym, brand, brand_scope.brands_of(me), planYy, season)
 
 
+@app.get("/api/sale-dashboard/season/items")
+def sale_dashboard_season_items(ym: str | None = None, brand: str | None = None, planYy: str | None = None,  # noqa: N803
+                                season: str | None = None, me: dict = Depends(sale_dash_page)):
+    """시즌 판매 진척 아이템별 (아이템마다 누적 · 전년 같은 시점 · 진척률)"""
+    from . import sale_season
+
+    return sale_season.items(ym, brand, brand_scope.brands_of(me), planYy, season)
+
+
+@app.get("/api/sale-dashboard/sale-heavy-shops")
+def sale_dashboard_sale_heavy(args: dict = Depends(_dash_args), includeEvent: bool = False,  # noqa: N803
+                              me: dict = Depends(sale_dash_page)):
+    """세일 비중이 같은 브랜드 평균보다 높은 매장 (판매 현황과 같은 조건)"""
+    from . import sale_mix
+
+    return sale_mix.heavy_shops(**args, allowed=brand_scope.brands_of(me), include_event=includeEvent)
+
+
 @app.get("/api/sale-dashboard/online-alerts")
 def sale_dashboard_online_alerts(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
     """온라인 할인 주의 상품: 매장 상위 상품 중 최근 온라인 할인율이 오른 상품 (온라인 가격 메뉴 권한도 필요)"""
@@ -664,6 +703,12 @@ def product_insight(prdt_cd: str, me: dict = Depends(current_user)):
             out["shops"] = sale_products.product_shops(cd, months[-3:], brand_scope.teams_of(me))
         except Exception:  # noqa: BLE001 - 매장 분포가 실패해도 나머지는 보여준다
             logs.get("app").exception("상품 팝업 매장 분포 실패 %s", cd)
+        try:  # 같은 기획년도·시즌·아이템 품번 사이 순위
+            sib = sale_products.product_siblings(cd, brand_scope.teams_of(me))
+            if sib:
+                out["siblings"] = sib
+        except Exception:  # noqa: BLE001
+            logs.get("app").exception("상품 팝업 같은 아이템 비교 실패 %s", cd)
     return out
 
 

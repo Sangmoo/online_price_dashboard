@@ -299,8 +299,73 @@ def get_file(fb_id: str, no: int, me: dict) -> tuple[bytes, str, str]:
     _bad("첨부 이미지를 찾을 수 없습니다.", 404)
 
 
+def image_stats() -> dict:
+    if use_oracle():
+        n, size = db.query(f"SELECT COUNT(*), NVL(SUM(FILE_SIZE), 0) FROM {ORA_FILE_TABLE}")[1][0]
+    else:
+        _sqlite()
+        r = store.rows("SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM feedback_file")[0]
+        n, size = r["n"], r["s"]
+    return {"count": int(n), "bytes": int(size)}
+
+
+def purge_images(months: int | None, now: datetime | None = None) -> dict:
+    """완료(DONE)된 지 months 개월이 지난 문의의 첨부 이미지를 지운다 (글·답변은 남김). months 가 0/None 이면 하지 않음.
+    완료 시점 = 마지막 수정 일시(UPT_DAY). 정리 작업(main._housekeeping)이 6시간마다 부른다."""
+    if not months:
+        return {"deleted": 0, "bytes": 0}
+    now = now or datetime.now()
+    y, m = divmod(now.year * 12 + now.month - 1 - int(months), 12)
+    cutoff = now.replace(year=y, month=m + 1, day=min(now.day, 28)).strftime("%Y%m%d%H%M%S")
+    if use_oracle():
+        sub = f"SELECT FB_ID FROM {ORA_TABLE} WHERE STATUS = 'DONE' AND UPT_DAY < :c"
+        n, size = db.query(f"SELECT COUNT(*), NVL(SUM(FILE_SIZE), 0) FROM {ORA_FILE_TABLE} WHERE FB_ID IN ({sub})", {"c": cutoff})[1][0]
+        if n:
+            db.execute(f"DELETE FROM {ORA_FILE_TABLE} WHERE FB_ID IN ({sub})", {"c": cutoff})
+    else:
+        _sqlite()
+        sub = "SELECT fb_id FROM feedback WHERE status = 'DONE' AND upt_day < :c"
+        r = store.rows(f"SELECT COUNT(*) AS n, COALESCE(SUM(file_size), 0) AS s FROM feedback_file WHERE fb_id IN ({sub})", {"c": cutoff})[0]
+        n, size = r["n"], r["s"]
+        if n:
+            store.execute(f"DELETE FROM feedback_file WHERE fb_id IN ({sub})", {"c": cutoff})
+    if n:
+        _log.info("문의 첨부 이미지 정리: 완료 후 %d개월 지난 이미지 %d개 (%.1fMB) 삭제", months, n, int(size) / 1024 / 1024)
+    return {"deleted": int(n), "bytes": int(size)}
+
+
 def mine(usr_id: str) -> list[dict]:
     return _select("USR_ID = :u", {"u": usr_id}, 50)
+
+
+SEEN_PREF = "feedback.answerSeen"   # 사용자가 '내 문의'를 마지막으로 본 시각 (새 답변 표시용)
+
+
+def mark_seen(usr_id: str) -> None:
+    from . import appdb
+
+    try:
+        appdb.pref_set(usr_id, SEEN_PREF, _now())
+    except Exception:  # noqa: BLE001 - 표시용이라 실패해도 조회는 계속
+        _log.exception("문의 확인 시각 저장 실패 user=%s", usr_id)
+
+
+def badge(me: dict) -> dict:
+    """화면 배지: 관리자는 미처리(접수·처리 중) 건수, 사용자는 마지막으로 본 뒤 새로 달린 답변 수"""
+    from . import appdb
+
+    seen = None
+    try:
+        seen = appdb.pref_get(me["id"], SEEN_PREF)
+    except Exception:  # noqa: BLE001
+        pass
+    seen = seen or "00000000000000"
+    if use_oracle():
+        n = int(db.query(f"SELECT COUNT(*) FROM {ORA_TABLE} WHERE USR_ID = :u AND ANSWER_DAY > :s", {"u": me["id"], "s": seen})[1][0][0])
+    else:
+        _sqlite()
+        n = int(store.rows("SELECT COUNT(*) AS n FROM feedback WHERE usr_id = :u AND answer_day > :s", {"u": me["id"], "s": seen})[0]["n"])
+    return {"newAnswers": n, "open": open_count() if me.get("role") == "ADMIN" else None}
 
 
 def list_all(status: str | None = None) -> dict:
@@ -309,7 +374,7 @@ def list_all(status: str | None = None) -> dict:
     for r in every:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     rows = [r for r in every if r["status"] == status] if status in STATUSES else every
-    return {"rows": rows, "counts": counts, "storage": backend_name()}
+    return {"rows": rows, "counts": counts, "storage": backend_name(), "images": image_stats()}
 
 
 def open_count() -> int:
