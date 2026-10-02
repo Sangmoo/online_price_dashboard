@@ -50,7 +50,8 @@ export function dashboardData(q: URLSearchParams) {
     kpi: {
       amt: 19_433_666_108, baseAmt: 20_829_973_950, change: -6.7, extraAmt: 21_083_281_765, extraChange: -7.8,
       qty: 120_000, baseQty: 130_000, qtyChange: -7.7, dsct: 3_000_000_000, baseDsct: 3_100_000_000, dsctChange: -3.2,
-      cost: 5_849_533_498, costRate: 30.1, baseCostRate: 33.2, costRateDiff: -3.1, shops: 537, baseShops: 572,
+      cost: 5_849_533_498, costRate: 30.1, baseCostRate: 33.2, costRateDiff: -3.1, dsctRate: 3.1, baseDsctRate: 3.8, dsctRateDiff: -0.7,
+      shops: 537, baseShops: 572,
       avgPerShop: 36_189_322, ytdAmt: 199_196_885_900, prevYtdAmt: 218_210_448_485, ytdYoy: -8.7,
       goalAmt: 23_410_000_000, goalSalesAmt: 18_997_274_816, achieve: 81.2, goalGap: -4_412_725_184, goalShops: 483,
       noGoalShops: 46, noGoalAmt: 436_769_692,

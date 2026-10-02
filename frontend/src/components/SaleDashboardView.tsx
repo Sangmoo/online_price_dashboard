@@ -21,6 +21,9 @@ type Kpi = {
   costRate: number | null
   baseCostRate: number | null
   costRateDiff: number | null
+  dsctRate: number | null
+  baseDsctRate: number | null
+  dsctRateDiff: number | null
   shops: number
   baseShops: number
   avgPerShop: number | null
@@ -35,8 +38,8 @@ type Kpi = {
   noGoalShops: number
   noGoalAmt: number
 }
-type Trend = { ym: string; amt: number; prevAmt: number; yoy: number | null; costRate: number | null; shops: number }
-type Brand = { brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; shops: number; share: number | null; teams: number; goalAmt: number; achieve: number | null }
+type Trend = { ym: string; amt: number; prevAmt: number; yoy: number | null; costRate: number | null; dsctRate: number | null; shops: number }
+type Brand = { brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; dsctRate: number | null; shops: number; share: number | null; teams: number; goalAmt: number; achieve: number | null }
 type Shop = { shopId: string; shopNm: string | null; brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; goalAmt: number; achieve: number | null }
 type Period = { from: string; to: string; months: string[]; label: string }
 type CmpKind = 'yoy' | 'prev' | 'custom'
@@ -151,7 +154,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
 
   const tick = { fill: '#8b93a7', fontSize: 12 }
   const trendChart = useMemo(
-    () => (data?.trend ?? []).map((t) => ({ name: ymLabel(t.ym).slice(2), 당해: mil(t.amt), 전년: mil(t.prevAmt), 원가율: t.costRate })),
+    () => (data?.trend ?? []).map((t) => ({ name: ymLabel(t.ym).slice(2), 당해: mil(t.amt), 전년: mil(t.prevAmt), 원가율: t.costRate, 할인율: t.dsctRate })),
     [data],
   )
   const baseName = data ? `비교(${data.base.label})` : '비교'
@@ -261,7 +264,15 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
           deltaLabel={baseLbl}
           title="원가율 = 원가 금액(제조원가×수량) ÷ 실판금액"
         />
-        <SdKpi label="할인금액" value={eok(k.dsct)} sub={`${fmtNum(k.dsct)}원`} delta={k.dsctChange} deltaLabel={baseLbl} />
+        <SdKpi
+          label="할인율"
+          value={pct(k.dsctRate)}
+          sub={`할인금액 ${eok(k.dsct)} (${fmtGrowth(k.dsctChange)}) · ${baseLbl} ${pct(k.baseDsctRate)}`}
+          deltaText={pp(k.dsctRateDiff)}
+          deltaClass={growthClass(k.dsctRateDiff)}
+          deltaLabel={baseLbl}
+          title="할인율 = 할인금액 ÷ (실판금액 + 할인금액) · 할인 전 금액 대비 깎아 준 비율"
+        />
         <SdKpi
           label="판매 매장"
           value={`${fmtNum(k.shops)}개`}
@@ -277,7 +288,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
         <div className="card panel sd-wide">
           <div className="panel-head">
             <h3>최근 13개월 실판금액{data.brand ? ` · ${data.brand}` : ''}</h3>
-            <span className="panel-hint">{ymLabel(data.ym)}까지 · 막대: 당해 · 선: 전년 같은 달 · 점선: 원가율(오른쪽) · 단위 백만원</span>
+            <span className="panel-hint">{ymLabel(data.ym)}까지 · 막대: 당해 · 선: 전년 같은 달 · 점선: 원가율·할인율(오른쪽) · 단위 백만원</span>
           </div>
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={trendChart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -290,6 +301,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
               <Bar yAxisId="l" dataKey="당해" fill="#6366f1" radius={[5, 5, 0, 0]} maxBarSize={30} />
               <Line yAxisId="l" dataKey="전년" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
               <Line yAxisId="r" dataKey="원가율" stroke="#10b981" strokeWidth={2} strokeDasharray="4 3" dot={false} />
+              <Line yAxisId="r" dataKey="할인율" stroke="#ef4444" strokeWidth={2} strokeDasharray="2 3" dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -311,7 +323,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
           <table className="table sd-table">
             <thead>
               <tr>
-                <th>브랜드</th><th className="num">실판금액</th><th className="num">비중</th><th className="num" title={`${baseLbl} 대비`}>증감</th><th className="num">원가율</th>
+                <th>브랜드</th><th className="num">실판금액</th><th className="num">비중</th><th className="num" title={`${baseLbl} 대비`}>증감</th><th className="num">원가율</th><th className="num" title="할인금액 ÷ (실판금액 + 할인금액)">할인율</th>
                 {data.hasGoals && <th className="num">달성률</th>}
               </tr>
             </thead>
@@ -323,6 +335,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
                   <td className="num muted">{pct(b.share)}</td>
                   <td className={`num ${growthClass(b.change)}`}>{fmtGrowth(b.change)}</td>
                   <td className="num">{pct(b.costRate)}</td>
+                  <td className="num">{pct(b.dsctRate)}</td>
                   {data.hasGoals && <td className={`num ${achieveClass(b.achieve)}`} title={b.goalAmt ? `목표 ${eok(b.goalAmt)}` : '목표 없음'}>{pct(b.achieve)}</td>}
                 </tr>
               ))}

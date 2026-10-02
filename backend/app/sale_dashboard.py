@@ -51,6 +51,16 @@ def _cost_rate(cost: float, amt: float) -> float | None:
     return round(cost * 100 / amt, 1) if amt else None
 
 
+def _dsct_rate(dsct: float, amt: float) -> float | None:
+    """할인율(%) = 할인금액 ÷ (실판금액 + 할인금액) — 할인 전 금액 대비 깎아 준 비율"""
+    gross = amt + dsct
+    return round(dsct * 100 / gross, 1) if gross else None
+
+
+def _diff(a: float | None, b: float | None) -> float | None:
+    return round(a - b, 1) if a is not None and b is not None else None
+
+
 def _achieve(amt: float, goal: float) -> float | None:
     return round(amt * 100 / goal, 1) if goal else None
 
@@ -253,7 +263,7 @@ def _compute(r: dict) -> dict:
     for m in series[-13:]:
         c, p = monthly.get(m, zero), monthly.get(_shift_ym(m, -12), zero)
         trend.append({"ym": m, "amt": c["amt"], "prevAmt": p["amt"], "yoy": _rate(c["amt"], p["amt"]),
-                      "costRate": _cost_rate(c["cost"], c["amt"]), "shops": c["shops"]})
+                      "costRate": _cost_rate(c["cost"], c["amt"]), "dsctRate": _dsct_rate(c["dsct"], c["amt"]), "shops": c["shops"]})
 
     # 2) 매장 × 팀 × 월 (기간 · 비교 기간 · 보조 비교 기간): 브랜드별 표는 전체 기준이 필요해 SQL 은 거르지 않고 여기서 거른다
     need = sorted(set(period) | set(base) | set(extra))
@@ -309,20 +319,24 @@ def _compute(r: dict) -> dict:
         # 브랜드별 표 (전체 기준)
         if s:
             pa, ba = agg(s, "p", None), agg(s, "b", None)
-            br = all_brand_rows.setdefault(brand, {"brand": brand, "amt": 0, "baseAmt": 0, "cost": 0, "shops": 0, "teams": set(),
+            br = all_brand_rows.setdefault(brand, {"brand": brand, "amt": 0, "baseAmt": 0, "cost": 0, "dsct": 0, "baseDsct": 0, "shops": 0, "teams": set(),
                                                   "goalAmt": 0, "goalSalesAmt": 0})
             br["amt"] += pa["amt"]
             br["baseAmt"] += ba["amt"]
             br["cost"] += pa["cost"]
+            br["dsct"] += pa["dsct"]
+            br["baseDsct"] += ba["dsct"]
             br["shops"] += 1 if pa["present"] else 0
             for team, t in s["teams"].items():
                 if t["inP"]:
                     br["teams"].add(team)
-                tr = team_rows.setdefault(team, {"team": team, "brand": brand_of(team), "amt": 0, "baseAmt": 0, "cost": 0, "shops": 0,
+                tr = team_rows.setdefault(team, {"team": team, "brand": brand_of(team), "amt": 0, "baseAmt": 0, "cost": 0, "dsct": 0, "baseDsct": 0, "shops": 0,
                                                  "goalAmt": 0, "goalSalesAmt": 0})
                 tr["amt"] += t["p"]["amt"]
                 tr["baseAmt"] += t["b"]["amt"]
                 tr["cost"] += t["p"]["cost"]
+                tr["dsct"] += t["p"]["dsct"]
+                tr["baseDsct"] += t["b"]["dsct"]
                 tr["shops"] += 1 if t["inP"] else 0
             if g_amt:
                 tr = team_rows[s["team"]]
@@ -331,7 +345,7 @@ def _compute(r: dict) -> dict:
                 br["goalAmt"] += g_amt
                 br["goalSalesAmt"] += pa["amt"]
         elif g_amt:
-            br = all_brand_rows.setdefault(brand, {"brand": brand, "amt": 0, "baseAmt": 0, "cost": 0, "shops": 0, "teams": set(),
+            br = all_brand_rows.setdefault(brand, {"brand": brand, "amt": 0, "baseAmt": 0, "cost": 0, "dsct": 0, "baseDsct": 0, "shops": 0, "teams": set(),
                                                   "goalAmt": 0, "goalSalesAmt": 0})
             br["goalAmt"] += g_amt
         # 조건(브랜드)에 맞는 매장 행
@@ -381,13 +395,16 @@ def _compute(r: dict) -> dict:
         "goalShops": sum(1 for x in rows if x["goalAmt"] > 0),
         "noGoalShops": len(no_goal), "noGoalAmt": sum(x["amt"] for x in no_goal),
     }
-    kpi["costRateDiff"] = (round(kpi["costRate"] - kpi["baseCostRate"], 1)
-                           if kpi["costRate"] is not None and kpi["baseCostRate"] is not None else None)
+    kpi["costRateDiff"] = _diff(kpi["costRate"], kpi["baseCostRate"])
+    kpi["dsctRate"], kpi["baseDsctRate"] = _dsct_rate(kpi["dsct"], amt), _dsct_rate(kpi["baseDsct"], base_amt)
+    kpi["dsctRateDiff"] = _diff(kpi["dsctRate"], kpi["baseDsctRate"])
 
     def finish(g: dict) -> dict:
         g = {k: (sorted(v) if isinstance(v, set) else v) for k, v in g.items()}
         g["change"], g["costRate"] = _rate(g["amt"], g["baseAmt"]), _cost_rate(g["cost"], g["amt"])
         g["achieve"] = _achieve(g["goalSalesAmt"], g["goalAmt"])
+        g["dsctRate"], g["baseDsctRate"] = _dsct_rate(g.get("dsct", 0), g["amt"]), _dsct_rate(g.get("baseDsct", 0), g["baseAmt"])
+        g["dsctRateDiff"] = _diff(g["dsctRate"], g["baseDsctRate"])
         return g
 
     # 비중: 보이는 브랜드 합계 기준 (브랜드 하나만 고르면 전체 대비, 권한이 제한된 사용자는 허용 브랜드 합계 대비)

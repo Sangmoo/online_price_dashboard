@@ -35,7 +35,7 @@ TOOLS: list[dict[str, Any]] = [
             "brand 로 브랜드 하나만 볼 수 있습니다(쉬즈미스·리스트·시스티나. 쉬즈미스는 팀명 '쉬즈N팀', 나머지는 팀명에서 숫자·'팀'을 뺀 이름). "
             "sections 로 필요한 부분만 고르면 빠르고 간결합니다 (생략 시 kpi, trend, brands, top_shops). 선택지: "
             + "; ".join(f"{k}={v}" for k, v in SECTIONS.items())
-            + ". 금액은 원, 비율은 %, 원가율 = 원가 금액(제조원가×수량) ÷ 실판금액, "
+            + ". 금액은 원, 비율은 %, 원가율 = 원가 금액(제조원가×수량) ÷ 실판금액, 할인율 = 할인금액 ÷ (실판금액 + 할인금액), "
             "달성률 = 목표가 있는 매장의 실판금액 ÷ 목표금액(T_SHOP_SELL_MGOAL, 매장 단위로 합산해 매장의 판매 브랜드로 집계). "
             "특정 매장들의 합계나 여러 달 매장 비교는 sum_sales_shop_month 를 쓰세요."
         ),
@@ -95,6 +95,7 @@ def _kpi_table(d: dict) -> list[dict]:
         (f"{d['ym'][:4]}년 누계(원)", k["ytdAmt"], "전년 같은 기간", k["prevYtdAmt"], _fmt(k["ytdYoy"], "%")),
         ("판매 수량", k["qty"], bl, k["baseQty"], _fmt(k["qtyChange"], "%")),
         ("할인금액(원)", k["dsct"], bl, k["baseDsct"], _fmt(k["dsctChange"], "%")),
+        ("할인율(%)", k.get("dsctRate"), bl, k.get("baseDsctRate"), _fmt(k.get("dsctRateDiff"), "%p")),
         ("원가율(%)", k["costRate"], bl, k["baseCostRate"], _fmt(k["costRateDiff"], "%p")),
         ("판매 매장 수", k["shops"], bl, k["baseShops"], _fmt(k["shops"] - k["baseShops"], "개")),
     ]

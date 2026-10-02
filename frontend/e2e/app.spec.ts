@@ -280,3 +280,46 @@ test('판매 현황에서 매장을 누르면 매장 정보·담당 영업직원
   await expect(modal.locator('.pill', { hasText: '목표 달성률' })).toContainText('80%')
   await expect(modal).not.toContainText('현재 매니저') // 실사계획 권한이 없으면 실사·매니저 정보 없음
 })
+
+test('판매 현황에 할인율을 보여준다', async ({ page, mockApi }) => {
+  await mockApi(makeUser('USER'))
+  await page.goto('/?view=sale_dashboard')
+  const card = page.locator('.sd-kpi', { hasText: '할인율' })
+  await expect(card).toContainText('3.1%')
+  await expect(card).toContainText('-0.7%p')
+  await expect(page.getByRole('columnheader', { name: '할인율' })).toBeVisible()
+})
+
+test('AI 답변의 도구 표시를 누르면 조회 조건(답변 근거)을 펼쳐 보여준다', async ({ page, mockApi }) => {
+  const user = makeUser('USER', ['sale_dashboard'])
+  user.ai = { ...user.ai, enabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2 }
+  const api = await mockApi(user)
+  const events = [
+    { type: 'conversation', id: 'c1', title: '지난달 판매' },
+    { type: 'tool', id: 't1', name: 'get_sales_dashboard', label: '판매 현황',
+      input: { ym: '202608', compare: 'prev', brand: '쉬즈미스', sections: ['kpi', 'brands'] } },
+    { type: 'tool_done', id: 't1', ok: true },
+    { type: 'text_start' },
+    { type: 'text', text: '2026-08 쉬즈미스 실판금액은 98.3억입니다.' },
+    { type: 'done' },
+  ]
+  api.on('GET', '/api/chat/usage', () => ({ json: { questions: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, questionLimit: 10, costLimitUsd: 2, enabled: true } }))
+  api.on('POST', '/api/chat', () => ({
+    body: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')),
+    headers: { 'Content-Type': 'text/event-stream' },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: 'AI 데이터 어시스턴트' }).click()
+  await page.getByPlaceholder(/데이터에 대해 질문하세요/).fill('지난달 쉬즈미스 판매 알려줘')
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('98.3억입니다')).toBeVisible()
+  const chip = page.getByRole('button', { name: /판매 현황/ }).filter({ has: page.locator('svg') }).last()
+  await chip.click()
+  const basis = page.locator('.tool-args')
+  await expect(basis).toContainText('get_sales_dashboard')
+  await expect(basis).toContainText('기준 월')
+  await expect(basis).toContainText('2026-08')
+  await expect(basis).toContainText('직전 기간')
+  await expect(basis).toContainText('쉬즈미스')
+  await expect(basis).toContainText('kpi, brands')
+})

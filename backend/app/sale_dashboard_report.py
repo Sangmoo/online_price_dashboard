@@ -91,9 +91,10 @@ def build(d: dict) -> bytes:
     row = _header(ws, d, "판매 현황 보고")
     row = _table(ws, row, [("item", "항목", "text", 22), ("cur", d["period"]["label"], "amt", 18), ("basis", "비교 기준", "text", 26),
                            ("base", "비교 값", "amt", 18), ("chg", "증감(%)", "chg", 11)], _kpi_rows(d), "핵심 지표")
-    rate_rows = [{"item": "원가율", "cur": k["costRate"], "base": k["baseCostRate"], "chg": k["costRateDiff"]}]
+    rate_rows = [{"item": "원가율", "cur": k["costRate"], "base": k["baseCostRate"], "chg": k["costRateDiff"]},
+                 {"item": "할인율", "cur": k.get("dsctRate"), "base": k.get("baseDsctRate"), "chg": k.get("dsctRateDiff")}]
     row = _table(ws, row, [("item", "항목", "text", 22), ("cur", d["period"]["label"], "pct", 18), ("base", base_label, "pct", 26),
-                           ("chg", "증감(%p)", "pp", 11)], rate_rows, "원가율 (원가 금액 ÷ 실판금액)")
+                           ("chg", "증감(%p)", "pp", 11)], rate_rows, "원가율 (원가 금액 ÷ 실판금액) · 할인율 (할인금액 ÷ (실판금액 + 할인금액))")
     if d["hasGoals"]:
         goal_rows = [
             {"item": "목표금액(원)", "v": k["goalAmt"]},
@@ -111,11 +112,12 @@ def build(d: dict) -> bytes:
     row = _header(ws, d, f"최근 13개월 실판금액 ({sd.ym_label(d['ym'])}까지)")
     trend = [{**t, "ymLabel": sd.ym_label(t["ym"])} for t in d["trend"]]
     _table(ws, row, [("ymLabel", "판매년월", "text", 12), ("amt", "실판금액", "amt", 18), ("prevAmt", "전년 같은 달", "amt", 18),
-                     ("yoy", "전년 대비(%)", "chg", 12), ("costRate", "원가율(%)", "pct", 11), ("shops", "판매 매장 수", "int", 12)], trend)
+                     ("yoy", "전년 대비(%)", "chg", 12), ("costRate", "원가율(%)", "pct", 11), ("dsctRate", "할인율(%)", "pct", 11),
+                     ("shops", "판매 매장 수", "int", 12)], trend)
 
     grp_cols = [("amt", "실판금액", "amt", 18), ("baseAmt", base_label, "amt", 18), ("change", "증감(%)", "chg", 11),
                 ("share", "비중(%)", "pct", 10), ("costRate", "원가율(%)", "pct", 11), ("shops", "매장 수", "int", 9),
-                ("goalAmt", "목표금액", "amt", 18), ("achieve", "달성률(%)", "pct", 11)]
+                ("goalAmt", "목표금액", "amt", 18), ("achieve", "달성률(%)", "pct", 11), ("dsctRate", "할인율(%)", "pct", 10)]
     # 3) 브랜드별
     ws = wb.create_sheet("브랜드별")
     row = _header(ws, d, "브랜드별 실적")

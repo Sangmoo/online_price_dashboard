@@ -65,8 +65,9 @@ def start(admin: dict) -> dict:
 
 
 def _refresh() -> None:
+    # 11g 는 PL/SQL BOOLEAN 바인드를 지원하지 않아(ORA-03115) callproc 로 True 를 넘기지 않고 리터럴 TRUE 로 쓴다
     with db.get_pool().acquire() as conn, conn.cursor() as cur:
-        cur.callproc("DBMS_MVIEW.REFRESH", keyword_parameters={"list": _mv_name(), "method": "C", "atomic_refresh": True})
+        cur.execute("BEGIN DBMS_MVIEW.REFRESH(list => :l, method => 'C', atomic_refresh => TRUE); END;", {"l": _mv_name()})
 
 
 def _run(admin: dict) -> None:

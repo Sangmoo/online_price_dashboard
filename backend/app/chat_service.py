@@ -182,7 +182,8 @@ class _Display:
             else:
                 self.parts.append({"kind": "text", "text": e["text"]})
         elif t == "tool":
-            self.parts.append({"kind": "tool", "id": e["id"], "label": e["label"], "status": "running"})
+            self.parts.append({"kind": "tool", "id": e["id"], "label": e["label"], "status": "running",
+                               "name": e.get("name"), "input": e.get("input")})
         elif t == "tool_done":
             for p in self.parts:
                 if p["kind"] == "tool" and p["id"] == e["id"]:

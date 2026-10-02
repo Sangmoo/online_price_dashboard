@@ -348,3 +348,12 @@
 .shop-invt { display: flex; flex-direction: column; gap: 6px; }
 .shop-invt-head { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; }
 @media (max-width: 900px) { .shop-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* AI 답변 근거 (도구 조회 조건) */
+.tool-basis { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.tool-chip.clickable { cursor: pointer; border: 0; font: inherit; }
+.tool-args { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; max-width: 100%; }
+.tool-args dl { margin: 4px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+.tool-args dl > div { display: contents; }
+.tool-args dt { color: var(--muted); white-space: nowrap; }
+.tool-args dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }

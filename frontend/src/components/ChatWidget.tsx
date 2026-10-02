@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
+  ChevronDown,
+  ChevronUp,
   AlertCircle,
   BarChart3,
   Bot,
@@ -40,7 +42,7 @@ import { compact, fmtNum } from '../format'
 
 type Part =
   | { kind: 'text'; text: string }
-  | { kind: 'tool'; id: string; label: string; status: 'running' | 'ok' | 'fail' }
+  | { kind: 'tool'; id: string; label: string; status: 'running' | 'ok' | 'fail'; name?: string; input?: Record<string, unknown> }
   | {
       kind: 'table'
       id: string
@@ -156,7 +158,7 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
         })
         break
       case 'tool':
-        updateLast((p) => [...p, { kind: 'tool', id: e.id, label: e.label, status: 'running' }])
+        updateLast((p) => [...p, { kind: 'tool', id: e.id, label: e.label, status: 'running', name: e.name, input: (e.input ?? undefined) as Record<string, unknown> | undefined }])
         break
       case 'tool_done':
         updateLast((p) => p.map((x) => (x.kind === 'tool' && x.id === e.id ? { ...x, status: e.ok ? 'ok' : 'fail' } : x)))
@@ -415,15 +417,58 @@ function PartView({ part }: { part: Part }) {
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
       </div>
     ) : null
-  if (part.kind === 'tool')
-    return (
-      <div className={`tool-chip ${part.status}`}>
-        {part.status === 'running' ? <Loader2 size={13} className="spin" /> : part.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
-        {part.label}
-      </div>
-    )
+  if (part.kind === 'tool') return <ToolChip part={part} />
   if (part.kind === 'notice') return <div className={`notice ${part.error ? 'error' : ''}`}>{part.text}</div>
   return <TableCard part={part} />
+}
+
+// AI 가 도구에 넘긴 조회 조건 이름 (답변 근거 보기)
+const ARG_LABELS: Record<string, string> = {
+  ym: '기준 월', ym_from: '시작 판매년월', ym_to: '끝 판매년월', compare: '비교 기준', compare_from: '비교 시작 월', compare_to: '비교 끝 월',
+  brand: '브랜드', sections: '조회 부분', group_by: '묶음', metrics: '지표', order_by: '정렬', order_dir: '정렬 방향', limit: '최대 행 수',
+  shop_ids: '매장코드', shop_nm: '매장명', team_cd: '팀', team: '팀', rep: '담당 영업직원', include_closed: '폐점 포함',
+  plan_yys: '기획년도', seasons: '시즌', prdt_grp_nm: '품군', item_nm: '아이템', prdt_cd: '상품코드', date_from: '시작일', date_to: '끝일',
+  mall_nm: '사이트', title_contains: '제목 포함', min_dc_rate: '최소 할인율', max_dc_rate: '최대 할인율', q: '검색어',
+}
+const CMP_LABELS: Record<string, string> = { yoy: '전년 동기', prev: '직전 기간', custom: '직접 선택' }
+
+function fmtArg(k: string, v: unknown): string {
+  if (Array.isArray(v)) return v.join(', ')
+  if (typeof v === 'boolean') return v ? '예' : '아니오'
+  if (k === 'compare' && typeof v === 'string') return CMP_LABELS[v] ?? v
+  if (typeof v === 'string' && /^\d{6}$/.test(v) && /ym/.test(k)) return `${v.slice(0, 4)}-${v.slice(4)}`
+  return String(v)
+}
+
+/** 도구 실행 표시. 누르면 AI 가 어떤 조건으로 조회했는지(답변 근거) 펼친다. */
+function ToolChip({ part }: { part: Extract<Part, { kind: 'tool' }> }) {
+  const [open, setOpen] = useState(false)
+  const args = Object.entries(part.input ?? {}).filter(([, v]) => v !== null && v !== '' && !(Array.isArray(v) && v.length === 0))
+  const icon = part.status === 'running' ? <Loader2 size={13} className="spin" /> : part.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />
+  if (!part.input) return <div className={`tool-chip ${part.status}`}>{icon}{part.label}</div>
+  return (
+    <div className="tool-basis">
+      <button className={`tool-chip ${part.status} clickable`} onClick={() => setOpen((o) => !o)} title="조회 조건 보기" aria-expanded={open}>
+        {icon}
+        {part.label}
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div className="tool-args">
+          <div className="muted small">조회 조건{part.name ? ` · 도구 ${part.name}` : ''}</div>
+          {args.length ? (
+            <dl>
+              {args.map(([k, v]) => (
+                <div key={k}><dt>{ARG_LABELS[k] ?? k}</dt><dd>{fmtArg(k, v)}</dd></div>
+              ))}
+            </dl>
+          ) : (
+            <div className="small">조건 없음 (도구 기본값)</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TableCard({ part }: { part: Extract<Part, { kind: 'table' }> }) {
