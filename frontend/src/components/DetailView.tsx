@@ -20,6 +20,7 @@ import {
 import { api, downloadFile, type Column, type DateInfo, type RowsResponse } from '../api'
 import { dtLabel, fmtNum, fmtPct, insDay } from '../format'
 import { RateBadge } from './DashboardView'
+import ProductInsightModal from './ProductInsightModal'
 
 export type DetailState = {
   dt: string
@@ -46,6 +47,7 @@ const PREF_KEY = 'detail.columns'
 const toNum = (s: string) => (s.trim() === '' || isNaN(Number(s)) ? undefined : Number(s))
 
 export default function DetailView({ userId, dates, initial, onStateChange }: Props) {
+  const [productCd, setProductCd] = useState<string | null>(null)
   const [dt, setDt] = useState(initial.dt)
   const [qInput, setQInput] = useState(initial.q)
   const [q, setQ] = useState(initial.q)
@@ -312,7 +314,7 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
                 <tr key={`${data.page}-${i}`}>
                   {visibleCols.map((c) => (
                     <td key={c.key} className={`${NUMERIC.has(c.key) ? 'num' : ''} col-${c.key}`}>
-                      <CellValue k={c.key} v={r[c.key]} />
+                      <CellValue k={c.key} v={r[c.key]} onProduct={setProductCd} />
                     </td>
                   ))}
                 </tr>
@@ -352,6 +354,7 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
           </div>
         )}
       </section>
+      {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
     </div>
   )
 }
@@ -365,7 +368,7 @@ function Pill({ label, value, strong }: { label: string; value: string; strong?:
   )
 }
 
-function CellValue({ k, v }: { k: string; v: string | number | null | undefined }) {
+function CellValue({ k, v, onProduct }: { k: string; v: string | number | null | undefined; onProduct?: (cd: string) => void }) {
   if (v === null || v === undefined || v === '') return <span className="muted">-</span>
   switch (k) {
     case 'PRICE':
@@ -387,7 +390,11 @@ function CellValue({ k, v }: { k: string; v: string | number | null | undefined 
     case 'RMK':
       return <span className="ellipsis-inline" title={String(v)}>{v}</span>
     case 'PRDT_CD':
-      return <span className="mono">{v}</span>
+      return onProduct ? (
+        <button className="btn-link mono" title="온라인 가격 · 매장 판매 비교" onClick={() => onProduct(String(v))}>{v}</button>
+      ) : (
+        <span className="mono">{v}</span>
+      )
     default:
       return <>{v}</>
   }

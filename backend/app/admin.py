@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from . import ai_tools, appdb, audit, auth, config, db, logs, mv_refresh, usage, userdb
+from . import ai_tools, appdb, audit, auth, config, db, logs, model_router, mv_refresh, usage, userdb
 
 MODELS = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -361,6 +361,8 @@ def get_settings() -> dict:
         "envModel": config.ANTHROPIC_MODEL,
         "envEffort": config.ANTHROPIC_EFFORT,
         "logKeepDays": s.get("log_keep_days") or logs.DEFAULT_KEEP_DAYS,
+        "autoModel": bool(s.get("auto_model")),
+        "simpleModel": s.get("simple_model") or model_router.DEFAULT_SIMPLE_MODEL,
     }
 
 
@@ -386,6 +388,12 @@ def save_settings(body: dict, admin: dict) -> dict:
         if body["effort"] not in EFFORTS:
             _bad("지원하지 않는 effort 입니다.")
         values["effort"] = body["effort"]
+    if "autoModel" in body:
+        values["auto_model"] = bool(body["autoModel"])
+    if "simpleModel" in body:
+        if body["simpleModel"] not in MODELS:
+            _bad("지원하지 않는 모델입니다.")
+        values["simple_model"] = body["simpleModel"]
     if "logKeepDays" in body:
         v = body["logKeepDays"]
         if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 365:
@@ -412,7 +420,7 @@ def usage_report(days: int = 30) -> dict:
     names = _names()
     by_user = [{**r, "usr_nm": names.get(r["usr_id"])} for r in rep_["byUser"]]
     return {"since": since, "days": days, "total": rep_["total"], "daily": rep_["daily"], "byUser": by_user,
-            "storage": usage.backend_name()}
+            "byModel": rep_.get("byModel", []), "storage": usage.backend_name()}
 
 
 # ----------------------------------------------------------------------------

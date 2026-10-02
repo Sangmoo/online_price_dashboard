@@ -9,7 +9,7 @@ from typing import Iterator
 
 import anthropic
 
-from . import appdb, config, logs, tool_limits, usage, userdb
+from . import appdb, config, logs, model_router, tool_limits, usage, userdb
 
 _log = logs.get("ai")
 from .chat_tools import BUILTIN_NAMES, ToolInputError, data_scopes, run_tool, tool_label, tools_for
@@ -48,6 +48,8 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - 수량, 최초가, 판매단가, 실판단가, 실판금액(원), 할인금액(원), 제조원가(V+, 단가)
 - 판매년월 기간(ym_from~ym_to)은 반드시 지정하며 최대 36개월입니다. 반품은 수량·금액이 음수로 들어 있을 수 있습니다.
 - 월별·매장별·팀별 수량/실판금액/할인금액 합계처럼 판매년월·매장·팀만 쓰는 질문은 sum_sales_shop_month(사전 집계, 매우 빠름)를 먼저 씁니다.
+- 베스트 상품·상품 순위, 아이템/품군 전년 비교, 판매형태(행사/정상/세일) 구성 질문은 get_sales_dashboard 의
+  sections=products / items / sales_types 를 씁니다. 품번은 시즌마다 새로 나오므로 상품의 전년 비교는 아이템·품군 단위로 답합니다.
   시즌·기획년도·품군·아이템·판매형태 등이 조건이나 묶음에 들어가거나 상품 수·원가가 필요할 때만 aggregate_sales 를 씁니다.
 - 매출은 '실판금액 합계'를 기준으로 합니다. 할인율·원가율처럼 도구에 없는 비율은 반환된 합계로 계산하고 계산식을 밝힙니다.
 
@@ -255,8 +257,11 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
     answered = False
 
     settings = userdb.get_settings()
-    model = settings.get("model") or config.ANTHROPIC_MODEL
-    effort = settings.get("effort") or config.ANTHROPIC_EFFORT
+    base_model = settings.get("model") or config.ANTHROPIC_MODEL
+    base_effort = settings.get("effort") or config.ANTHROPIC_EFFORT
+    # 모델 자동 선택(관리자 설정): 단순 조회는 저렴한 모델, 분석·판단은 기본 모델
+    model, effort, route = model_router.choose(text, settings, base_model, base_effort)
+    tool_errors = 0
     cost_limit = me["ai"]["dailyCostUsd"]
 
     checkpoint = len(messages)
@@ -281,21 +286,24 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
     client = _client()
     started = time.perf_counter()
     cost_before = usage.today_usage(usr_id)["costUsd"]
-    _log.info("질문 user=%s conv=%s model=%s effort=%s view=%s len=%d", usr_id, conv_id, model, effort,
+    _log.info("질문 user=%s conv=%s model=%s effort=%s route=%s view=%s len=%d", usr_id, conv_id, model, effort, route,
               (ctx or {}).get("view", "-"), len(text))
     try:
         for _ in range(MAX_TOOL_ROUNDS):
-            final = yield from _stream_round(client, dict(
-                model=model,
-                max_tokens=16000,
-                system=[{"type": "text", "text": SYSTEM_PROMPT}],
-                tools=tools,
-                messages=messages,
-                output_config={"effort": effort},
-                cache_control={"type": "ephemeral"},
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-            ), emit)
+            def request(m: str, e: str) -> dict:
+                return dict(model=m, max_tokens=16000, system=[{"type": "text", "text": SYSTEM_PROMPT}], tools=tools,
+                            messages=messages, output_config={"effort": e}, cache_control={"type": "ephemeral"},
+                            betas=[FALLBACK_BETA], fallbacks="default")
+
+            try:
+                final = yield from _stream_round(client, request(model, effort), emit)
+            except anthropic.BadRequestError:
+                # 자동 선택한 저렴한 모델이 요청을 받지 않으면(지원하지 않는 옵션 등) 기본 모델로 바로 다시
+                if route != "simple" or model == base_model:
+                    raise
+                _log.warning("모델 전환 user=%s conv=%s %s 요청 거부 → %s", usr_id, conv_id, model, base_model, exc_info=True)
+                model, effort, route = base_model, base_effort, "escalated"
+                final = yield from _stream_round(client, request(model, effort), emit)
             answered = True
 
             usage.record_call(usr_id, conv_id, final.model, final.usage)
@@ -332,6 +340,7 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                     yield emit({"type": "tool_done", "id": block.id, "ok": True})
                 except ToolInputError as ex:
                     _log.info("도구 입력 오류 %s user=%s: %s", block.name, usr_id, ex)
+                    tool_errors += 1
                     content, is_error = f"입력 오류: {ex}", True
                     yield emit({"type": "tool_done", "id": block.id, "ok": False})
                 except Exception as ex:  # DB 오류 등은 모델에 알려 재시도/안내하게 함
@@ -343,6 +352,11 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                                 "content": content, "is_error": is_error})
             messages.append({"role": "user", "content": results})
             _save(conv_id, messages, display)
+
+            # 저렴한 모델이 도구 입력을 거듭 틀리면 이 질문의 남은 과정은 기본 모델로
+            if route == "simple" and model != base_model and tool_errors >= model_router.ESCALATE_AFTER_TOOL_ERRORS:
+                _log.info("모델 전환 user=%s conv=%s %s → %s (도구 입력 오류 %d회)", usr_id, conv_id, model, base_model, tool_errors)
+                model, effort, route = base_model, base_effort, "escalated"
 
             # 도구 루프 도중 일일 비용 한도에 도달하면 중단
             if usage.today_usage(usr_id)["costUsd"] >= cost_limit:

@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from . import sale_dashboard as sd
+from . import sale_products as sp
 
 SECTIONS = {
     "kpi": "핵심 지표 (실판금액·비교 기준 대비·보조 비교·연 누계·수량·할인금액·원가율·판매 매장 수·목표금액·달성률)",
@@ -21,7 +22,11 @@ SECTIONS = {
     "risers": "비교 기간 대비 성장률 상위 10개 매장 (비교 기간 월평균 1천만원 이상, 폐점·종료 매장 제외)",
     "fallers": "비교 기간 대비 하락률 상위 10개 매장 (비교 기간 월평균 1천만원 이상, 폐점·종료 매장 제외)",
     "laggards": "목표 달성률 하위 10개 매장 (목표가 있고 매출이 있는 영업 매장)",
+    "products": "기간 안 상품(품번) 순위 상위 20 — 실판금액·수량·할인율 순 (품번은 시즌마다 새로 나와 전년 비교 없음)",
+    "items": "아이템·품군별 실판금액·비교 기간 대비·비중·할인율 (상품의 전년 비교는 이 단위로)",
+    "sales_types": "판매형태(행사/정상/정상50%/세일 등) 구성: 비중·비교 기간 대비·할인율·월별 비중",
 }
+PRODUCT_SECTIONS = {"products", "items", "sales_types"}
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -123,6 +128,8 @@ def run(name: str, inp: dict, allowed: list[str] | None = None) -> dict:
     sections = list(dict.fromkeys(sections))
     try:
         d = sd.dashboard(ym, ym_from, compare, cmp_from, cmp_to, brand, allowed=allowed)
+        pr = (sp.analyze(ym, ym_from, compare, cmp_from, cmp_to, brand, allowed=allowed)
+              if PRODUCT_SECTIONS & set(sections) else None)
     except HTTPException as ex:
         raise DashToolError(ex.detail.get("message", str(ex.detail)) if isinstance(ex.detail, dict) else str(ex.detail))
 
@@ -151,6 +158,17 @@ def run(name: str, inp: dict, allowed: list[str] | None = None) -> dict:
     for sec, key in (("risers", "risers"), ("fallers", "fallers"), ("laggards", "laggards")):
         if sec in sections:
             result[key] = _shops(d[key])
+    if pr is not None:
+        if pr.get("unavailable"):
+            result["productNote"] = pr["unavailable"]
+        else:
+            if "products" in sections:
+                result["products"] = {k: v for k, v in pr["rankings"].items()}
+                result["productRule"] = f"할인율 순위는 기간 실판금액 {pr['minAmtForDsctRank']:,}원 이상 상품만, 상품 수 {pr['productCount']:,}"
+            if "items" in sections:
+                result["items"], result["productGroups"] = pr["items"][:30], pr["groups"][:30]
+            if "sales_types" in sections:
+                result["salesTypes"], result["salesTypeTrend"] = pr["salesTypes"], pr["salesTypeTrend"]
 
     # 화면 표: 한 부분만 요청했으면 그 표, 아니면 핵심 지표 표
     only = sections[0] if len(sections) == 1 else "kpi"
@@ -169,6 +187,17 @@ def run(name: str, inp: dict, allowed: list[str] | None = None) -> dict:
                                      {"key": "change", "label": "증감(%)"}, {"key": "costRate", "label": "원가율(%)"},
                                      {"key": "shops", "label": "매장 수"}, {"key": "goalAmt", "label": "목표금액"},
                                      {"key": "achieve", "label": "달성률(%)"}], "rows": d[only]}
+    elif only in PRODUCT_SECTIONS and (pr is None or pr.get("unavailable")):
+        table = None
+    elif only == "products":
+        table = {"columns": [{"key": "prdtCd", "label": "품번"}, {"key": "itemNm", "label": "아이템"}, {"key": "prdtGrpNm", "label": "품군"},
+                             {"key": "amt", "label": "실판금액"}, {"key": "qty", "label": "수량"}, {"key": "dsctRate", "label": "할인율(%)"},
+                             {"key": "share", "label": "비중(%)"}], "rows": pr["rankings"]["amt"]}
+    elif only in ("items", "sales_types"):
+        rows = pr["items"] if only == "items" else pr["salesTypes"]
+        table = {"columns": [{"key": "name", "label": "아이템" if only == "items" else "판매형태"}, {"key": "amt", "label": "실판금액"},
+                             {"key": "baseAmt", "label": base_col}, {"key": "change", "label": "증감(%)"}, {"key": "share", "label": "비중(%)"},
+                             {"key": "baseShare", "label": "비교 비중(%)"}, {"key": "dsctRate", "label": "할인율(%)"}], "rows": rows}
     else:
         key = {"top_shops": "topShops", "risers": "risers", "fallers": "fallers", "laggards": "laggards"}[only]
         table = {"columns": [{"key": "rank", "label": "순위"}, {"key": "shopNm", "label": "매장명"}, {"key": "shopId", "label": "매장코드"},

@@ -24,6 +24,8 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "model": ("AI_MODEL", "str"),
     "effort": ("AI_EFFORT", "str"),
     "log_keep_days": ("LOG_KEEP_DAYS", "int"),
+    "auto_model": ("AI_AUTO_MODEL", "yn"),
+    "simple_model": ("AI_SIMPLE_MODEL", "str"),
 }
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
@@ -32,6 +34,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "model": None,
     "effort": None,
     "log_keep_days": 7,
+    "auto_model": False,
+    "simple_model": None,
 }
 
 _lock = threading.Lock()

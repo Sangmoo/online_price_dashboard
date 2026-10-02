@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   Activity,
+  Archive,
   BarChart3,
   History,
   Bot,
@@ -43,8 +44,9 @@ import AuditTab from './admin/AuditTab'
 import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
 import ServerStatusTab from './admin/ServerStatusTab'
 import MenuUsageTab from './admin/MenuUsageTab'
+import BackupTab from './admin/BackupTab'
 
-export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'logins' | 'sessions' | 'audit' | 'status' | 'serverlogs'
+export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -56,6 +58,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
   { key: 'audit', label: '변경 이력', icon: History },
+  { key: 'backup', label: '설정 백업', icon: Archive },
   { key: 'status', label: '서버 상태', icon: Server },
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
@@ -87,6 +90,7 @@ export default function AdminView({ me, initialTab }: { me: User; initialTab?: T
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
       {tab === 'audit' && <AuditTab notify={notify} />}
+      {tab === 'backup' && <BackupTab notify={notify} />}
       {tab === 'status' && <ServerStatusTab notify={notify} />}
       {tab === 'serverlogs' && <ServerLogsTab notify={notify} />}
       {toast && <div className={`toast ${toast.error ? 'error' : ''}`}>{toast.error ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
@@ -579,6 +583,8 @@ function AiTab({ notify }: { notify: Notify }) {
           defaultDailyCostUsd: Number(s.defaultDailyCostUsd),
           model: s.model,
           effort: s.effort,
+          autoModel: s.autoModel,
+          simpleModel: s.simpleModel,
         }),
       )
       notify('AI 설정을 저장했습니다.')
@@ -637,6 +643,25 @@ function AiTab({ notify }: { notify: Notify }) {
           {s.efforts.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
+      <div className="setting-row">
+        <div>
+          <div className="strong">질문에 따라 모델 자동 선택</div>
+          <div className="muted">
+            값·목록을 바로 묻는 짧은 질문(예: "지난달 실판금액 얼마야?")은 아래 저렴한 모델(effort low)로, 분석·원인·비교·제안 질문과
+            애매한 질문은 위 모델로 답합니다. 저렴한 모델이 도구 사용을 거듭 틀리면 그 질문은 위 모델로 넘깁니다.
+          </div>
+        </div>
+        <Toggle on={s.autoModel} onChange={(v) => setS({ ...s, autoModel: v })} labels={['사용', '중지']} />
+      </div>
+      <div className="setting-row">
+        <div>
+          <div className="strong">단순 조회용 모델</div>
+          <div className="muted">자동 선택이 켜져 있을 때 단순 조회 질문에 쓰는 모델</div>
+        </div>
+        <select className="input select" value={s.simpleModel} disabled={!s.autoModel} onChange={(e) => setS({ ...s, simpleModel: e.target.value })}>
+          {s.models.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
       <div className="setting-actions">
         <button className="btn primary" onClick={submit} disabled={saving}>
           {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />} 저장
@@ -687,6 +712,26 @@ function UsageTab() {
           </ComposedChart>
         </ResponsiveContainer>
       </section>
+      {(data?.byModel ?? []).length > 0 && (
+        <section className="card panel">
+          <div className="panel-head"><h3>모델별 사용량</h3><span className="panel-hint">모델 자동 선택 효과 확인용 · API 호출 기준</span></div>
+          <table className="table sd-table">
+            <thead><tr><th>모델</th><th className="num">API 호출</th><th className="num">입력 토큰</th><th className="num">출력 토큰</th><th className="num">비용($)</th><th className="num">호출당 비용($)</th></tr></thead>
+            <tbody>
+              {(data?.byModel ?? []).map((m) => (
+                <tr key={m.model ?? '-'}>
+                  <td className="mono">{m.model ?? '-'}</td>
+                  <td className="num">{fmtNum(m.calls)}</td>
+                  <td className="num">{fmtNum(m.input_tokens)}</td>
+                  <td className="num">{fmtNum(m.output_tokens)}</td>
+                  <td className="num strong">${Number(m.cost).toFixed(4)}</td>
+                  <td className="num">${m.calls ? (Number(m.cost) / m.calls).toFixed(4) : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
       <section className="card panel">
         <div className="panel-head"><h3>사용자별 사용량</h3></div>
         <div className="table-wrap">

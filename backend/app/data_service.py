@@ -358,3 +358,29 @@ def dashboard(start: str, end: str) -> dict:
     }
     _dash_cache.set(key, result, _ttl_for(end))
     return result
+
+
+def product_online(prdt_cd: str, days: int = 31) -> dict:
+    """상품 팝업의 온라인 가격: 최근 수집일별 평균 할인율 · 최저 할인가 · 정상가 · 사이트 수, 마지막 수집일의 사이트별 최저가.
+    인덱스 (PRDT_CD, DT) 로 바로 찾는다."""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    daily = db.query_dicts(
+        f"""SELECT DT, ROUND(AVG({DC_RATE_SQL}), 1) AS AVG_DC_RATE, MAX({DC_RATE_SQL}) AS MAX_DC_RATE, MIN(DC_PRICE) AS MIN_DC_PRICE,
+                   MAX(PRICE) AS LIST_PRICE, COUNT(DISTINCT MALL_NM) AS MALL_CNT, COUNT(*) AS ROW_CNT
+              FROM {TABLE} WHERE PRDT_CD = :p AND DT >= :s AND PRICE > 0 GROUP BY DT ORDER BY DT""",
+        {"p": prdt_cd, "s": since})
+    last = daily[-1]["DT"] if daily else None
+    malls, title = [], None
+    if last:
+        rows = db.query_dicts(
+            f"""SELECT MALL_NM, MIN(DC_PRICE) AS LOW_PRICE, MAX(PRICE) AS LIST_PRICE, MAX({DC_RATE_SQL}) AS TOP_RATE, MAX(TITLE) AS ANY_TITLE
+                  FROM {TABLE} WHERE PRDT_CD = :p AND DT = :d AND PRICE > 0 GROUP BY MALL_NM ORDER BY 2""",
+            {"p": prdt_cd, "d": last})
+        malls = [{"mallNm": r["MALL_NM"], "dcPrice": _num(r["LOW_PRICE"]), "price": _num(r["LIST_PRICE"]), "dcRate": _num(r["TOP_RATE"])}
+                 for r in rows[:15]]
+        title = next((r["ANY_TITLE"] for r in rows if r["ANY_TITLE"]), None)
+    return {"title": title, "lastDt": last,
+            "daily": [{"dt": r["DT"], "avgDcRate": _num(r["AVG_DC_RATE"]), "maxDcRate": _num(r["MAX_DC_RATE"]),
+                       "minDcPrice": _num(r["MIN_DC_PRICE"]), "price": _num(r["LIST_PRICE"]), "malls": int(r["MALL_CNT"]),
+                       "rows": int(r["ROW_CNT"])} for r in daily],
+            "malls": malls}

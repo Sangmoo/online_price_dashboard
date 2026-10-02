@@ -39,8 +39,11 @@ def _clear_caches() -> None:
     from . import chat_tools_sale as cts
     from . import sale_dashboard, sale_monthly
 
+    from . import sale_products
+
     cts._mv_state = None
     sale_dashboard.clear_cache()
+    sale_products.clear_cache()
     with sale_monthly._stats_lock:
         sale_monthly._stats_cache.clear()
 
@@ -67,7 +70,17 @@ def start(admin: dict) -> dict:
 def _refresh() -> None:
     # 11g 는 PL/SQL BOOLEAN 바인드를 지원하지 않아(ORA-03115) callproc 로 True 를 넘기지 않고 리터럴 TRUE 로 쓴다
     with db.get_pool().acquire() as conn, conn.cursor() as cur:
-        cur.execute("BEGIN DBMS_MVIEW.REFRESH(list => :l, method => 'C', atomic_refresh => TRUE); END;", {"l": _mv_name()})
+        cur.execute("BEGIN DBMS_MVIEW.REFRESH(list => :l, method => 'C', atomic_refresh => TRUE); END;", {"l": _refresh_list()})
+
+
+def _refresh_list() -> str:
+    """함께 갱신할 뷰: 월×매장 뷰 + 상품 뷰(있으면). 한 번에 갱신해 두 뷰가 같은 시점의 데이터를 갖는다."""
+    from . import sale_products
+
+    names = [_mv_name()]
+    if sale_products.mv_state()["exists"]:
+        names.append(sale_products.MV_NAME)
+    return ",".join(names)
 
 
 def _run(admin: dict) -> None:

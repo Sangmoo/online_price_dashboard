@@ -79,8 +79,8 @@ def _kpi_rows(d: dict) -> list[dict]:
     return rows
 
 
-def build(d: dict) -> bytes:
-    """d: sale_dashboard.dashboard(..., full=True) 결과"""
+def build(d: dict, products: dict | None = None) -> bytes:
+    """d: sale_dashboard.dashboard(..., full=True) 결과, products: sale_products.analyze() 결과 (있으면 '상품·판매형태' 시트)"""
     wb = Workbook()
     k = d["kpi"]
     base_label = f"비교({d['base']['label']})"
@@ -142,6 +142,8 @@ def build(d: dict) -> bytes:
     if d["hasGoals"]:
         _table(ws, row, shop_cols, ranked(d["laggards"]), "목표 달성률 하위 10 (목표·매출이 있는 영업 매장)")
     _charts(wb, d, base_label)
+    if products and not products.get("unavailable"):
+        _products_sheet(wb, d, products)
     # 6) 전체 매장
     ws = wb.create_sheet("전체 매장")
     row = _header(ws, d, f"전체 매장 ({len(d['allShops']):,}개, 실판금액 순)")
@@ -199,6 +201,23 @@ def _charts(wb: Workbook, d: dict, base_label: str) -> None:
         chart.height, chart.width = 8, 18
         chart.legend.position = "b"
         ws.add_chart(chart, "G21")
+
+
+def _products_sheet(wb: Workbook, d: dict, pr: dict) -> None:
+    ws = wb.create_sheet("상품·판매형태")
+    row = _header(ws, d, "상품 순위 · 아이템/품군 · 판매형태")
+    base_label = f"비교({pr['base']})"
+    grp_cols = [("name", "", "text", 16), ("amt", "실판금액", "amt", 16), ("baseAmt", base_label, "amt", 18), ("change", "증감(%)", "chg", 10),
+                ("share", "비중(%)", "pct", 9), ("baseShare", "비교 비중(%)", "pct", 11), ("dsctRate", "할인율(%)", "pct", 10)]
+    with_label = lambda label: [(grp_cols[0][0], label, "text", 16)] + grp_cols[1:]  # noqa: E731
+    row = _table(ws, row, with_label("판매형태"), pr["salesTypes"], "판매형태 구성")
+    row = _table(ws, row, with_label("아이템"), pr["items"], "아이템별 (비교 기간 대비)")
+    row = _table(ws, row, with_label("품군"), pr["groups"], "품군별 (비교 기간 대비)")
+    ranked = [{**x, "rank": i + 1} for i, x in enumerate(pr["rankings"]["amt"])]
+    _table(ws, row, [("rank", "순위", "int", 6), ("prdtCd", "품번", "text", 16), ("itemNm", "아이템", "text", 12),
+                     ("prdtGrpNm", "품군", "text", 14), ("amt", "실판금액", "amt", 16), ("qty", "수량", "int", 9),
+                     ("dsctRate", "할인율(%)", "pct", 10), ("share", "비중(%)", "pct", 9)], ranked,
+           f"상품 순위 상위 {len(ranked)} (실판금액, 기간 안 순위)")
 
 
 def filename(d: dict) -> str:

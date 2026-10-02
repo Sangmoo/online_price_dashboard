@@ -77,6 +77,25 @@ export const saleOptions = {
   summaryDims: [{ key: 'month', label: '월별' }],
 }
 
+const grp = (name: string, amt: number, baseAmt: number, share: number, baseShare: number) => ({
+  name, amt, baseAmt, change: Math.round((amt / baseAmt - 1) * 1000) / 10, share, baseShare,
+  shareDiff: Math.round((share - baseShare) * 10) / 10, dsctRate: 3.2, baseDsctRate: 3.5,
+})
+export const productsData = {
+  period: '2026-08', base: '2025-08', baseKind: '전년 동기', brand: null, source: '사전 집계 뷰', productCount: 4676,
+  minAmtForDsctRank: 5_000_000,
+  rankings: {
+    amt: [{ prdtCd: 'TWWJKQ72020', itemNm: '자켓', prdtGrpNm: '우븐', amt: 112_422_100, qty: 581, dsctRate: 2.7, share: 0.58 },
+          { prdtCd: 'TSJTSP62050', itemNm: '티셔츠', prdtGrpNm: 'JERSEY', amt: 880_700, qty: 25, dsctRate: 8.3, share: 0.01 }],
+    qty: [{ prdtCd: 'SWWSTQ32150', itemNm: '셔츠', prdtGrpNm: '우븐', amt: 101_006_500, qty: 878, dsctRate: 3.3, share: 0.52 }],
+    dsctRate: [{ prdtCd: 'SSKPOQ22220', itemNm: '폴로', prdtGrpNm: 'KNIT', amt: 6_000_000, qty: 70, dsctRate: 14.9, share: 0.03 }],
+  },
+  items: [grp('자켓', 3_850_913_791, 4_361_000_000, 19.8, 20.9), grp('팬츠', 3_216_671_200, 3_433_000_000, 16.6, 16.5)],
+  groups: [grp('우븐', 9_000_000_000, 9_500_000_000, 46.3, 45.6)],
+  salesTypes: [grp('행사', 8_106_354_960, 10_644_232_745, 41.7, 51.1), grp('세일', 4_615_063_070, 3_156_168_974, 23.7, 15.2)],
+  salesTypeTrend: [{ ym: '202608', 행사: 8_106_354_960, 세일: 4_615_063_070 }],
+}
+
 export class MockApi {
   calls: Call[] = []
   unhandled: string[] = []
@@ -95,6 +114,7 @@ export class MockApi {
     this.on('GET', '/api/chat/conversations', () => ({ json: { conversations: [] } }))
     this.on('GET', '/api/chat/favorites', () => ({ json: { favorites: [] } }))
     this.on('GET', '/api/sale-dashboard', (_, url) => ({ json: dashboardData(url.searchParams) }))
+    this.on('GET', '/api/sale-dashboard/products', () => ({ json: productsData }))
     // 판매 집계 화면은 권한이 있으면 숨김 상태로 미리 떠 있어 기본 응답이 필요하다
     this.on('GET', '/api/sale-monthly/options', () => ({ json: saleOptions }))
     this.on('GET', '/api/sale-monthly', () => ({ json: { rows: [], summary: { rows: 0, qty: 0, realSaleAmt: 0 } } }))

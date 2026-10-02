@@ -191,6 +191,9 @@ export const api = {
     dataStatus: () => getJson<DataStatus>('/api/admin/data-status'),
     // 10분마다 자동 확인 → 세션 연장 안 함 (화면을 열어만 둬도 1시간 뒤 로그아웃되도록)
     dataFreshness: async () => (await apiFetch('/api/admin/data-freshness', { headers: BACKGROUND_HEADERS })).json() as Promise<DataFreshness>,
+    restorePreview: (data: unknown) => sendJson<RestorePreview>('POST', '/api/admin/restore/preview', { data }),
+    restoreApply: (data: unknown, sections: string[]) =>
+      sendJson<{ applied: string[]; failed: { item: string; reason: string }[] }>('POST', '/api/admin/restore/apply', { data, sections }),
     menuUsage: (days: number) => getJson<MenuUsage>(`/api/admin/menu-usage?${qs({ days })}`),
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
     cleanupLogs: () => sendJson<{ deleted: string[]; freedBytes: number; keepDays: number }>('POST', '/api/admin/logs/cleanup'),
@@ -312,6 +315,24 @@ export type AdminSettings = {
   envModel: string
   envEffort: string
   logKeepDays: number
+  autoModel: boolean
+  simpleModel: string
+}
+export type RestorePreview = {
+  file: { createdAt: string | null; createdBy: string | null }
+  users: {
+    added: { id: string; name: string | null }[]
+    changed: { id: string; name: string | null; diff: Record<string, { before: unknown; after: unknown }> }[]
+    same: number
+    notInFile: { id: string; name: string | null }[]
+    skipped: { id: string; name: string | null; reason: string }[]
+  }
+  settings: { changed: { key: string; before: unknown; after: unknown }[] }
+  aiTools: {
+    builtinChanged: { name: string }[]
+    customAdded: { name: string; label: string }[]
+    customChanged: { name: string; label: string; keys: string[] }[]
+  }
 }
 export type MenuUsageCell = { granted: boolean; opens: number; days: number; last: string | null }
 export type MenuUsage = {
@@ -344,6 +365,7 @@ export type AdminUsage = {
   total: { questions: number; cost: number; input_tokens: number; output_tokens: number; users: number }
   daily: (UsageRow & { day: string; users: number })[]
   byUser: (UsageRow & { usr_id: string; usr_nm: string | null; last_used: string })[]
+  byModel?: { model: string | null; calls: number; cost: number; input_tokens: number; output_tokens: number }[]
 }
 export type LoginLog = { id: number; usr_id: string; usr_nm: string | null; ts: string; success: number; reason: string; ip: string | null }
 export type LockInfo = { usr_id: string; fail_count: number; locked_until: number; locked: boolean; remainSec: number }

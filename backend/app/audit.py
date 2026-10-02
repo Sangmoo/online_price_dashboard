@@ -31,12 +31,13 @@ ACTIONS = {
     "LOCK_RELEASE": "로그인 잠금 해제",
     "SESSION_KILL": "세션 강제 로그아웃",
     "MV_REFRESH": "사전 집계 뷰 갱신",
+    "SETTINGS_RESTORE": "설정 복원",
 }
 FIELD_LABELS = {
     "role": "권한", "pages": "메뉴 권한", "ai_enabled": "AI 사용", "daily_questions": "일일 질문 한도",
     "daily_cost_usd": "일일 비용 한도($)", "active": "계정 사용", "usr_nm": "이름", "brands": "브랜드 권한",
     "ai_enabled_global": "AI 기능", "default_daily_questions": "기본 질문 한도", "default_daily_cost_usd": "기본 비용 한도($)",
-    "model": "모델", "effort": "effort", "enabled": "사용", "extraDesc": "추가 안내", "description": "설명",
+    "model": "모델", "effort": "effort", "auto_model": "모델 자동 선택", "simple_model": "단순 조회 모델", "enabled": "사용", "extraDesc": "추가 안내", "description": "설명",
     "label": "표시 이름", "page": "연결 메뉴", "sql": "SQL", "params": "입력값", "maxRows": "최대 행",
     "lastRefresh": "마지막 갱신", "staleness": "상태", "rows": "행 수", "maxMonth": "최신 월",
 }

@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { AlertTriangle, CalendarRange, Layers, Percent, RefreshCw, ShoppingBag, Store, Tag } from 'lucide-react'
 import { api, type Dashboard, type DateInfo } from '../api'
+import ProductInsightModal from './ProductInsightModal'
 import { addDays, compact, daysBetween, dtLabel, dtShort, dtToIso, fmtNum, fmtPct, fmtWon, isoToDt } from '../format'
 
 const MAX_DAYS = 31
@@ -27,6 +28,7 @@ type Props = {
 }
 
 export default function DashboardView({ dates, range, onRangeChange, onOpenDetail, canOpenDetail = true }: Props) {
+  const [productCd, setProductCd] = useState<string | null>(null)
   const [start, setStart] = useState(range.start)
   const [end, setEnd] = useState(range.end)
   const [data, setData] = useState<Dashboard | null>(null)
@@ -202,7 +204,18 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
               {(data?.topProducts ?? []).map((p, i) => (
                 <tr key={p.PRDT_CD} className={canOpenDetail ? 'clickable' : ''} onClick={() => onOpenDetail(p.MIN_DT, p.PRDT_CD)}>
                   <td className="muted">{i + 1}</td>
-                  <td className="mono">{p.PRDT_CD}</td>
+                  <td>
+                    <button
+                      className="btn-link mono"
+                      title="온라인 가격 · 매장 판매 비교"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setProductCd(p.PRDT_CD)
+                      }}
+                    >
+                      {p.PRDT_CD}
+                    </button>
+                  </td>
                   <td className="ellipsis" title={p.TITLE}>{p.TITLE}</td>
                   <td className="num">{fmtWon(p.PRICE)}</td>
                   <td className="num strong">{fmtWon(p.MIN_DC_PRICE)}</td>
@@ -222,6 +235,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
           {dtLabel(data.start)} ~ {dtLabel(data.end)} · 집계 시각 {data.generatedAt}
         </div>
       )}
+      {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
     </div>
   )
 }

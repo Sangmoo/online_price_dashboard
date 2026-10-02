@@ -287,7 +287,7 @@ test('판매 현황에 할인율을 보여준다', async ({ page, mockApi }) => 
   const card = page.locator('.sd-kpi', { hasText: '할인율' })
   await expect(card).toContainText('3.1%')
   await expect(card).toContainText('-0.7%p')
-  await expect(page.getByRole('columnheader', { name: '할인율' })).toBeVisible()
+  await expect(page.locator('.sd-table').first().getByRole('columnheader', { name: '할인율' })).toBeVisible()
 })
 
 test('AI 답변의 도구 표시를 누르면 조회 조건(답변 근거)을 펼쳐 보여준다', async ({ page, mockApi }) => {
@@ -322,4 +322,83 @@ test('AI 답변의 도구 표시를 누르면 조회 조건(답변 근거)을 �
   await expect(basis).toContainText('직전 기간')
   await expect(basis).toContainText('쉬즈미스')
   await expect(basis).toContainText('kpi, brands')
+})
+
+test('판매 현황 아래에 판매형태 구성·상품 순위·아이템 비교를 보여주고, 품번을 누르면 온라인 가격과 매장 판매를 비교한다', async ({ page, mockApi }) => {
+  const user = makeUser('USER', ['dashboard', 'sale_dashboard'])
+  const api = await mockApi(user)
+  api.on('GET', '/api/products/TSJTSP62050/insight', () => ({
+    json: {
+      prdtCd: 'TSJTSP62050',
+      online: { title: '리스트 코튼 레터링 반팔 티셔츠', lastDt: '20260930',
+                daily: [{ dt: '20260901', avgDcRate: 50.7, maxDcRate: 60, minDcPrice: 13760, price: 40000, malls: 10, rows: 20 },
+                        { dt: '20260930', avgDcRate: 56.9, maxDcRate: 64.5, minDcPrice: 14190, price: 40000, malls: 9, rows: 26 }],
+                malls: [{ mallNm: '옥션', dcPrice: 14190, price: 40000, dcRate: 64.5 }] },
+      sales: { itemNm: '티셔츠', prdtGrpNm: 'JERSEY', source: '사전 집계 뷰',
+               months: [{ ym: '202604', amt: 3_411_200, qty: 75, dsctRate: 5.6 }, { ym: '202605', amt: 3_257_300, qty: 74, dsctRate: 6.4 },
+                        { ym: '202606', amt: 2_103_610, qty: 52, dsctRate: 5.7 }, { ym: '202607', amt: 1_857_200, qty: 50, dsctRate: 2.8 },
+                        { ym: '202608', amt: 880_700, qty: 25, dsctRate: 8.3 }, { ym: '202609', amt: 278_500, qty: 5, dsctRate: 0.5 }] },
+    },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.getByRole('heading', { name: '판매형태 구성' })).toBeVisible()
+  await expect(page.getByRole('row', { name: /세일/ })).toContainText('+8.5%p')
+  await page.getByRole('button', { name: '수량' }).click()
+  await expect(page.getByRole('button', { name: 'SWWSTQ32150' })).toBeVisible()
+  await page.getByRole('button', { name: '실판금액' }).click()
+  await page.getByRole('button', { name: '품군' }).click()
+  await expect(page.getByRole('cell', { name: '우븐', exact: true })).toBeVisible()
+  expect(Object.fromEntries(api.find('GET', '/api/sale-dashboard/products')[0].query)).toEqual({ ym: '202608', from: '202608', cmp: 'yoy' })
+
+  await page.getByRole('button', { name: 'TSJTSP62050' }).click()
+  const modal = page.locator('.product-modal')
+  await expect(modal).toContainText('온라인 평균 할인율 50.7% → 56.9%')
+  await expect(modal).toContainText('매장 판매 최근 3개월 80개')
+  await expect(modal).toContainText('옥션')
+})
+
+test('관리자: 설정 백업 파일을 고르면 바뀌는 내용을 보여주고, 선택한 항목만 복원한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: true } }))
+  api.on('POST', '/api/admin/restore/preview', () => ({
+    json: {
+      file: { createdAt: '2026-10-01 10:00:00', createdBy: '250016' },
+      users: { added: [{ id: '170047', name: '나신입' }], changed: [{ id: '170046', name: '홍길동', diff: { brands: { before: null, after: ['리스트'] } } }],
+               same: 3, notInFile: [], skipped: [{ id: '250016', name: '최고', reason: '최고 관리자는 복원하지 않음' }] },
+      settings: { changed: [{ key: 'defaultDailyQuestions', before: 10, after: 20 }] },
+      aiTools: { builtinChanged: [], customAdded: [], customChanged: [] },
+    },
+  }))
+  api.on('POST', '/api/admin/restore/apply', () => ({ json: { applied: ['사용자 추가 나신입(170047)', '사용자 변경 홍길동(170046)'], failed: [] } }))
+  page.on('dialog', (d) => d.accept())
+  await page.goto('/?view=admin')
+  await page.getByRole('button', { name: '설정 백업' }).click()
+  await page.locator('input[type=file]').setInputFiles({ name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from('{"app":"erp-sales-web","version":1}') })
+  await expect(page.locator('.restore-preview')).toContainText('브랜드: 기본/전체 → 리스트')
+  await expect(page.locator('.restore-preview')).toContainText('기본 질문 한도: 10 → 20')
+  await page.locator('.restore-section', { hasText: '전역 설정' }).locator('input').uncheck()
+  await page.getByRole('button', { name: '선택한 항목 복원' }).click()
+  await expect(page.getByText('적용 2건 · 실패 0건')).toBeVisible()
+  expect(api.find('POST', '/api/admin/restore/apply')[0].body).toEqual({ data: { app: 'erp-sales-web', version: 1 }, sections: ['users'] })
+})
+
+test('관리자: AI 사용 설정에서 모델 자동 선택을 켜고 단순 조회용 모델을 저장한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  const settings = {
+    aiEnabled: true, defaultDailyQuestions: 10, defaultDailyCostUsd: 2, model: 'claude-opus-5', effort: 'medium',
+    models: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'], efforts: ['low', 'medium', 'high'], envModel: 'claude-opus-5',
+    envEffort: 'medium', logKeepDays: 7, autoModel: false, simpleModel: 'claude-haiku-4-5',
+  }
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: true } }))
+  api.on('GET', '/api/admin/settings', () => ({ json: settings }))
+  api.on('PUT', '/api/admin/settings', (req) => ({ json: { ...settings, ...(req.postDataJSON() as object) } }))
+  await page.goto('/?view=admin')
+  await page.getByRole('button', { name: 'AI 사용 설정' }).click()
+  const row = page.locator('.setting-row', { hasText: '질문에 따라 모델 자동 선택' })
+  await row.getByRole('switch').click()
+  await page.locator('.setting-row', { hasText: '단순 조회용 모델' }).locator('select').selectOption('claude-sonnet-5')
+  await page.getByRole('button', { name: '저장' }).click()
+  await expect(page.getByText('AI 설정을 저장했습니다.')).toBeVisible()
+  const body = api.find('PUT', '/api/admin/settings')[0].body as Record<string, unknown>
+  expect([body.autoModel, body.simpleModel]).toEqual([true, 'claude-sonnet-5'])
 })

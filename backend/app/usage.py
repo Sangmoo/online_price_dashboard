@@ -169,7 +169,11 @@ def report(since_iso: str) -> dict:
                          for k, v in r.items()}
         daily = [{**low(r), "day": _iso(r["DAY"])} for r in daily]
         by_user = [{**low(r), "last_used": _fmt14(r["LAST_USED"])} for r in by_user]
-        return {"daily": daily, "byUser": by_user, "total": low(total)}
+        by_model = [low(r) for r in db.query_dicts(
+            f"""SELECT MODEL_NM AS MODEL, COUNT(*) AS CALLS, ROUND(SUM(COST_USD), 4) AS COST,
+                       SUM(INPUT_TOKENS + CACHE_READ + CACHE_WRITE) AS INPUT_TOKENS, SUM(OUTPUT_TOKENS) AS OUTPUT_TOKENS
+                  FROM {ORA_TABLE} WHERE USE_DT >= :s AND USE_TYPE = 'C' GROUP BY MODEL_NM ORDER BY SUM(COST_USD) DESC""", p)]
+        return {"daily": daily, "byUser": by_user, "total": low(total), "byModel": by_model}
     daily = store.rows(
         """SELECT day, SUM(kind='question') AS questions, SUM(kind='api_call') AS calls,
                   SUM(input_tokens + cache_read + cache_write) AS input_tokens, SUM(output_tokens) AS output_tokens,
@@ -185,7 +189,11 @@ def report(since_iso: str) -> dict:
                   COALESCE(SUM(input_tokens + cache_read + cache_write),0) AS input_tokens,
                   COALESCE(SUM(output_tokens),0) AS output_tokens, COUNT(DISTINCT usr_id) AS users
              FROM ai_usage WHERE day >= ?""", (since_iso,))
-    return {"daily": daily, "byUser": by_user, "total": total}
+    by_model = store.rows(
+        """SELECT model, COUNT(*) AS calls, ROUND(SUM(cost_usd), 4) AS cost,
+                  SUM(input_tokens + cache_read + cache_write) AS input_tokens, SUM(output_tokens) AS output_tokens
+             FROM ai_usage WHERE day >= ? AND kind = 'api_call' GROUP BY model ORDER BY cost DESC""", (since_iso,))
+    return {"daily": daily, "byUser": by_user, "total": total, "byModel": by_model}
 
 
 def _fmt14(v: str | None) -> str | None:

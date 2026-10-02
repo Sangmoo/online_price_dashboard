@@ -413,6 +413,33 @@ def admin_logs_cleanup(_: dict = Depends(require_admin)):
     return logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
 
 
+@app.get("/api/admin/backup")
+def admin_backup(me: dict = Depends(require_admin)):
+    """설정 백업 파일 (JSON)"""
+    import json as _json
+
+    from . import backup
+
+    body = _json.dumps(backup.export(me), ensure_ascii=False, indent=1).encode("utf-8")
+    name = f"ERP영업관리_설정백업_{time.strftime('%Y%m%d_%H%M')}.json"
+    return Response(body, media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+@app.post("/api/admin/restore/preview")
+def admin_restore_preview(body: dict, _: dict = Depends(require_admin)):
+    from . import backup
+
+    return backup.preview(body.get("data"))
+
+
+@app.post("/api/admin/restore/apply")
+def admin_restore_apply(body: dict, me: dict = Depends(require_admin)):
+    from . import backup
+
+    return backup.apply(me, body.get("data"), body.get("sections") or [])
+
+
 @app.get("/api/admin/data-freshness")
 def admin_data_freshness(_: dict = Depends(require_admin)):
     return mv_refresh.freshness()
@@ -530,8 +557,48 @@ def sale_dashboard_get(args: dict = Depends(_dash_args), me: dict = Depends(sale
 def sale_dashboard_export(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
     from . import sale_dashboard_report as rpt
 
-    d = sale_dashboard.dashboard(**args, full=True, allowed=brand_scope.brands_of(me))
-    return _xlsx_response(rpt.build(d), rpt.filename(d))
+    from . import sale_products
+
+    allowed = brand_scope.brands_of(me)
+    d = sale_dashboard.dashboard(**args, full=True, allowed=allowed)
+    try:
+        pr = sale_products.analyze(**args, allowed=allowed)
+    except Exception:  # noqa: BLE001 - 상품 집계가 실패해도 나머지 보고서는 만든다
+        logs.get("app").exception("보고용 엑셀 상품 시트 생략")
+        pr = None
+    return _xlsx_response(rpt.build(d, pr), rpt.filename(d))
+
+
+@app.get("/api/sale-dashboard/products")
+def sale_dashboard_products(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
+    """상품 순위 · 아이템/품군 비교 · 판매형태 구성 (판매 현황과 같은 조건, 따로 불러 화면이 먼저 뜨게)"""
+    from . import sale_products
+
+    return sale_products.analyze(**args, allowed=brand_scope.brands_of(me))
+
+
+@app.get("/api/products/{prdt_cd}/insight")
+def product_insight(prdt_cd: str, me: dict = Depends(current_user)):
+    """상품 팝업: 온라인 가격(온라인 가격 메뉴 권한) + 매장 판매(판매 메뉴 권한)를 품번으로 이어서 보여준다."""
+    import re
+
+    from . import sale_products
+
+    cd = (prdt_cd or "").strip().upper()
+    if not re.match(r"^[A-Z0-9_-]{2,20}$", cd):
+        raise HTTPException(400, {"message": "품번이 올바르지 않습니다.", "code": "BAD_REQUEST"})
+    pages = set(me["pages"])
+    can_price, can_sale = bool(pages & {"dashboard", "detail"}), bool(pages & {"sale_dashboard", "sale_monthly"})
+    if not (can_price or can_sale):
+        raise HTTPException(403, {"message": "온라인 가격 또는 판매 메뉴 권한이 필요합니다.", "code": "FORBIDDEN"})
+    out: dict = {"prdtCd": cd}
+    if can_price:
+        out["online"] = ds.product_online(cd)
+    if can_sale:
+        last = sale_monthly._shift_ym(time.strftime("%Y%m"), -1)
+        months = [sale_monthly._shift_ym(last, -i) for i in range(11, -1, -1)]
+        out["sales"] = sale_products.product_sales(cd, months, brand_scope.teams_of(me))
+    return out
 
 
 @app.get("/api/sale-dashboard/shops/{shop_id}/trend")

@@ -4,6 +4,8 @@ import { ArrowDownRight, ArrowUpRight, ChartLine, Download, Loader2, RefreshCw, 
 import { apiFetch, downloadFile } from '../api'
 import { fmtNum } from '../format'
 import ShopTrendModal, { fmtGrowth, growthClass } from './ShopTrendModal'
+import SaleProductsPanel from './SaleProductsPanel'
+import ProductInsightModal from './ProductInsightModal'
 
 type Kpi = {
   amt: number
@@ -103,6 +105,7 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [trendShop, setTrendShop] = useState<{ id: string; name: string } | null>(null)
+  const [productCd, setProductCd] = useState<string | null>(null)
 
   const load = (c: Cond | null) => {
     setLoading(true)
@@ -355,6 +358,9 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
           baseLbl={baseLbl} showGoal={false} onShop={openTrend} />
       </section>
 
+      {applied && <SaleProductsPanel query={condQuery(applied)} onProduct={setProductCd} />}
+
+      {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
       {trendShop && (
         <ShopTrendModal url={`/api/sale-dashboard/shops/${encodeURIComponent(trendShop.id)}/trend`} shopId={trendShop.id} title={trendShop.name} onClose={() => setTrendShop(null)} />
       )}
