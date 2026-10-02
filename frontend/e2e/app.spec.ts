@@ -602,3 +602,82 @@ test('관리자: AI 사용 현황에서 도구별 호출·오류·응답 시간�
   await expect(card).toContainText('로그 보관 기간이 7일이라')
   await expect(card).toContainText('쓰이지 않은 기본 도구: 시즌 판매 진척')
 })
+
+test('판매처 매장 연결: 후보를 넣고 매장코드를 고쳐 변경분만 저장한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['dashboard', 'mall_shop']))
+  const row = (o: Record<string, unknown>) => ({
+    sellNo: '-', rows: 100, products: 10, lastDt: '20261002', shopFilled: 0, rmk: null, seen: true, shopId: null, shopNm: null, useYn: null,
+    mapRmk: null, updatedBy: null, updatedAt: null, starShopId: null, starShopNm: null, effectiveShopId: null, suggestions: [], ...o,
+  })
+  api.on('GET', '/api/mall-shops', () => ({
+    json: {
+      ready: true, days: 31,
+      summary: { combos: 3, sellers: 2, mapped: 1, unmapped: 2, malls: 2, rowsTotal: 300, rowsMapped: 100, rowsMappedPct: 33.3, shopFilled: 0 },
+      rows: [
+        row({ mallNm: '하프클럽(사이트)', brdCd: 'S', brand: '쉬즈미스', suggestions: [{ shopId: 'S51005', shopNm: '하프클럽', brand: '쉬즈미스' }] }),
+        row({ mallNm: '하프클럽(사이트)', brdCd: 'T', brand: '리스트', suggestions: [{ shopId: 'T51005', shopNm: '하프클럽', brand: '리스트' }] }),
+        row({ mallNm: '롯데온(사이트)', brdCd: 'A', brand: '시스티나', shopId: 'A51021', shopNm: '롯데ON', useYn: 'Y', effectiveShopId: 'A51021' }),
+      ],
+    },
+  }))
+  api.on('GET', '/api/mall-shops/shops', () => ({
+    json: { shops: [{ shopId: 'S51005', shopNm: '하프클럽', brands: ['쉬즈미스'] }, { shopId: 'T51005', shopNm: '하프클럽', brands: ['리스트'] },
+                    { shopId: 'A51021', shopNm: '롯데ON', brands: ['시스티나'] }, { shopId: 'A51005', shopNm: '하프클럽', brands: ['시스티나'] }] },
+  }))
+  api.on('PUT', '/api/mall-shops', () => ({ json: { saved: 3, deleted: 0, changed: 3 } }))
+  await page.goto('/?view=mall_shop')
+  await expect(page.locator('.side-nav')).toContainText('판매처 매장 연결')
+  await expect(page.locator('.pill', { hasText: '수집 행 연결률' })).toContainText('33.3%')
+  expect(api.find('GET', '/api/mall-shops').map((c) => c.query.get('days'))).toEqual(['7'])   // 메뉴를 열면 최근 7일
+  await page.getByRole('button', { name: '최근 31일' }).click()
+  expect(api.find('GET', '/api/mall-shops')).toHaveLength(1)   // 기간만 바꿔서는 조회하지 않음
+  await page.getByRole('button', { name: '조회', exact: true }).click()
+  await expect.poll(() => api.find('GET', '/api/mall-shops').map((c) => c.query.get('days'))).toEqual(['7', '31'])
+  await expect(page.locator('td.group-cell', { hasText: '하프클럽(사이트)' })).toHaveAttribute('rowspan', '2')   // 사이트 묶음
+  await page.getByRole('button', { name: /후보 2건 채우기/ }).click()
+  await page.getByLabel('롯데온(사이트) 시스티나 매장코드').fill('A51005')
+  await expect(page.getByRole('button', { name: /변경 3건 저장/ })).toBeEnabled()
+  await page.getByLabel('롯데온(사이트) 시스티나 매장코드').fill('ZZ9999')
+  await expect(page.locator('.alert.error')).toContainText('매장 목록에 없는 매장코드: ZZ9999')
+  await expect(page.getByRole('button', { name: /변경 3건 저장/ })).toBeDisabled()
+  await page.getByLabel('롯데온(사이트) 시스티나 매장코드').fill('A51005')
+  await page.getByRole('button', { name: /변경 3건 저장/ }).click()
+  await expect(page.locator('.alert.ok-inline')).toContainText('등록·수정 3건')
+  const items = (api.find('PUT', '/api/mall-shops')[0].body as { items: Record<string, string>[] }).items
+  expect(items.map((i) => `${i.mallNm}/${i.brdCd}=${i.shopId}`).sort()).toEqual(
+    ['롯데온(사이트)/A=A51005', '하프클럽(사이트)/S=S51005', '하프클럽(사이트)/T=T51005'])
+})
+
+test('AI 판매처 매장 연결 변경안: [적용]을 눌러야 저장 API 를 부른다', async ({ page, mockApi }) => {
+  const user = makeUser('USER', ['dashboard', 'mall_shop'])
+  user.ai = { ...user.ai, enabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2 }
+  const api = await mockApi(user)
+  api.on('GET', '/api/mall-shops', () => ({ json: { ready: true, days: 31, rows: [], summary: { combos: 0, sellers: 0, mapped: 0, unmapped: 0, malls: 0, rowsTotal: 0, rowsMapped: 0, rowsMappedPct: null, shopFilled: 0 } } }))
+  api.on('GET', '/api/mall-shops/shops', () => ({ json: { shops: [] } }))
+  const item = { mallNm: '하프클럽(사이트)', sellNo: '-', brdCd: 'S', shopId: 'S51005', useYn: 'Y', rmk: '' }
+  const events = [
+    { type: 'conversation', id: 'c1', title: '하프클럽 연결' },
+    { type: 'tool', id: 't1', name: 'propose_mall_shop_mappings', label: '판매처 매장 연결 변경안', input: { items: [{ mall_nm: '하프클럽', brand: '쉬즈미스', shop_id: 'S51005' }] } },
+    { type: 'action', id: 't1', actionKind: 'mall_shop_save', title: '판매처 매장 연결 변경안 1건', items: [item],
+      lines: ['[등록] 하프클럽(사이트) / - / 쉬즈미스: - → S51005 하프클럽'], warnings: [] },
+    { type: 'tool_done', id: 't1', ok: true },
+    { type: 'text_start' },
+    { type: 'text', text: '아래 [적용]을 누르면 저장됩니다.' },
+    { type: 'done' },
+  ]
+  api.on('GET', '/api/chat/usage', () => ({ json: { questions: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, questionLimit: 10, costLimitUsd: 2, enabled: true } }))
+  api.on('POST', '/api/chat', () => ({ body: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), headers: { 'Content-Type': 'text/event-stream' } }))
+  api.on('PUT', '/api/mall-shops', () => ({ json: { saved: 1, deleted: 0, changed: 1 } }))
+  await page.goto('/?view=mall_shop')
+  await page.getByRole('button', { name: 'AI 데이터 어시스턴트' }).click()
+  await page.getByPlaceholder(/데이터에 대해 질문하세요/).fill('하프클럽 쉬즈미스는 S51005로 연결해줘')
+  await page.keyboard.press('Enter')
+  const card = page.locator('.action-card')
+  await expect(card).toContainText('[등록] 하프클럽(사이트) / - / 쉬즈미스: - → S51005')
+  expect(api.find('PUT', '/api/mall-shops')).toHaveLength(0)   // 변경안만으로는 저장하지 않음
+  page.once('dialog', (d) => d.accept())
+  await card.getByRole('button', { name: '적용' }).click()
+  await expect(card).toContainText('저장했습니다 · 등록·수정 1건')
+  expect(api.find('PUT', '/api/mall-shops')[0].body).toEqual({ items: [item] })
+  await expect(card.getByRole('button', { name: '적용됨' })).toBeDisabled()
+})

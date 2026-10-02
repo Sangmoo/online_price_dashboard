@@ -9,6 +9,7 @@ import {
   BarChart3,
   Bot,
   Check,
+  CheckCircle2,
   Download,
   History,
   Loader2,
@@ -34,6 +35,7 @@ import {
   type Column,
   type ConversationSummary,
   type Favorite,
+  type MallShopSaveItem,
   type Row,
   type Usage,
   type User,
@@ -54,6 +56,8 @@ type Part =
       source?: { tool: string; input: Record<string, unknown> } // 잘린 표: 전체 결과 엑셀용
     }
   | { kind: 'notice'; text: string; error?: boolean }
+  // AI 가 만든 변경안: 사용자가 [적용]을 눌러야 저장 (예: 판매처 매장 연결)
+  | { kind: 'action'; id: string; actionKind: 'mall_shop_save'; title: string; items: MallShopSaveItem[]; lines: string[]; warnings: string[] }
 
 type Message = { role: 'user'; text: string } | { role: 'assistant'; parts: Part[]; streaming?: boolean }
 
@@ -168,6 +172,9 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
         break
       case 'notice':
         updateLast((p) => [...p, { kind: 'notice', text: e.message }])
+        break
+      case 'action':
+        updateLast((p) => [...p, { kind: 'action', id: e.id, actionKind: e.actionKind, title: e.title, items: e.items, lines: e.lines, warnings: e.warnings ?? [] }])
         break
       case 'error':
         updateLast((p) => [...p, { kind: 'notice', text: e.message, error: true }])
@@ -419,7 +426,39 @@ function PartView({ part }: { part: Part }) {
     ) : null
   if (part.kind === 'tool') return <ToolChip part={part} />
   if (part.kind === 'notice') return <div className={`notice ${part.error ? 'error' : ''}`}>{part.text}</div>
+  if (part.kind === 'action') return <ActionCard part={part} />
   return <TableCard part={part} />
+}
+
+/** AI 변경안 카드: 사용자가 내용을 보고 [적용]을 눌러야 화면과 같은 저장 경로(같은 권한·검증·변경 이력)로 저장된다. */
+function ActionCard({ part }: { part: Extract<Part, { kind: 'action' }> }) {
+  const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
+  const [msg, setMsg] = useState<string | null>(null)
+  const apply = async () => {
+    if (!confirm(`${part.title}을 저장할까요?\n\n${part.lines.join('\n')}`)) return
+    setState('saving')
+    try {
+      const r = await api.mallShops.save(part.items)
+      setState('done')
+      setMsg(`저장했습니다 · 등록·수정 ${r.saved}건 · 해제 ${r.deleted}건`)
+    } catch (e) {
+      setState('error')
+      setMsg((e as Error).message)
+    }
+  }
+  return (
+    <div className={`action-card ${state}`}>
+      <div className="action-head"><b>{part.title}</b><span className="muted small">아직 저장 전 · 확인 후 [적용]</span></div>
+      <ul>{part.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      {part.warnings.length > 0 && <div className="action-warn">{part.warnings.map((w, i) => <div key={i}><AlertCircle size={12} /> {w}</div>)}</div>}
+      <div className="action-foot">
+        {msg && <span className={state === 'error' ? 'up small' : 'small'}>{state === 'done' && <CheckCircle2 size={13} />} {msg}</span>}
+        <button className="btn primary small" disabled={state === 'saving' || state === 'done'} onClick={apply}>
+          {state === 'saving' ? <Loader2 size={14} className="spin" /> : <Check size={14} />} {state === 'done' ? '적용됨' : '적용'}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 // AI 가 도구에 넘긴 조회 조건 이름 (답변 근거 보기)

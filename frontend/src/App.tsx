@@ -7,6 +7,7 @@ import {
   DatabaseZap,
   Home,
   Loader2,
+  Link2,
   LogOut,
   MessageSquareWarning,
   Moon,
@@ -50,6 +51,7 @@ const InvtPlanView = lazyView(() => import('./components/InvtPlanView'))
 const SaleMonthlyView = lazyView(() => import('./components/SaleMonthlyView'))
 const SaleDashboardView = lazyView(() => import('./components/SaleDashboardView'))
 const FeedbackModal = lazyView(() => import('./components/FeedbackModal'))
+const MallShopView = lazyView(() => import('./components/MallShopView'))
 
 type Theme = 'light' | 'dark'
 
@@ -88,6 +90,7 @@ type MenuGroup = 'view' | 'sales' | 'data' | 'admin'
 const MENU: { key: PageKey; label: string; desc: string; icon: typeof Home; group: MenuGroup }[] = [
   { key: 'dashboard', label: '대시보드', desc: '기간별 수집 현황', icon: Home, group: 'view' },
   { key: 'detail', label: '일자별 상세', desc: '일자별 원본 · 엑셀', icon: Table2, group: 'view' },
+  { key: 'mall_shop', label: '판매처 매장 연결', desc: '사이트 · 판매자 → 매장코드', icon: Link2, group: 'view' },
   { key: 'sale_dashboard', label: '판매 현황', desc: '월 실적 · 전년 대비', icon: ChartLine, group: 'sales' },
   { key: 'sale_monthly', label: '월별 매장별 판매 집계', desc: '마감 매출 · 엑셀', icon: BarChart3, group: 'sales' },
   { key: 'invt_plan', label: '매장 재고 실사계획', desc: '실사 일정 · 예상 비용', icon: ClipboardList, group: 'data' },
@@ -449,7 +452,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </button>
             <div>
               <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
-              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
+              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'mall_shop' ? '온라인 가격 · T_SELECT_ONLINE_MALL_SHOP' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
             <button className="btn ghost feedback-btn" onClick={() => setFeedbackOpen(true)} title="오류 신고 · 기능 요청 · 문의 (현재 화면과 조회 조건이 함께 전달됩니다)">
               <MessageSquareWarning size={15} /> 문의·신고
@@ -519,6 +522,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </div>
           )}
           {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
+          {view === 'mall_shop' && user.pages.includes('mall_shop') && <MallShopView />}
           {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge} />}
           {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
           </Suspense>

@@ -279,6 +279,7 @@ def _run_price_tool(name: str, inp: Any) -> dict:
 from . import chat_tools_dashboard as dash  # noqa: E402
 from . import chat_tools_insight as insight  # noqa: E402
 from . import chat_tools_invt as invt  # noqa: E402
+from . import chat_tools_mall as mall  # noqa: E402
 from . import chat_tools_sale as sale  # noqa: E402
 from . import chat_tools_shop as shop  # noqa: E402
 
@@ -286,18 +287,21 @@ PRICE_PAGES = {"dashboard", "detail"}   # 온라인 가격 데이터 메뉴
 SALE_PAGES = {"sale_monthly"}           # 월별 매장별 판매 집계 메뉴
 DASH_PAGES = {"sale_dashboard"}         # 판매 현황 메뉴
 INVT_PAGES = {"invt_plan"}              # 매장 재고 실사계획 메뉴
+MALL_PAGES = {"mall_shop"}              # 판매처 매장 연결 메뉴
 SHOP_PAGES = DASH_PAGES | SALE_PAGES | INVT_PAGES  # 매장 정보(담당 영업직원) 도구를 쓸 수 있는 메뉴
 TOOL_LABELS.update(invt.TOOL_LABELS)
 TOOL_LABELS.update(shop.TOOL_LABELS)
 TOOL_LABELS.update(sale.TOOL_LABELS)
 TOOL_LABELS.update(dash.TOOL_LABELS)
 TOOL_LABELS.update(insight.TOOL_LABELS)
+TOOL_LABELS.update(mall.TOOL_LABELS)
 _PRICE_TOOL_NAMES = {t["name"] for t in TOOLS}
 _INVT_TOOL_NAMES = {t["name"] for t in invt.TOOLS}
 _SALE_TOOL_NAMES = {t["name"] for t in sale.TOOLS}
 _DASH_TOOL_NAMES = {t["name"] for t in dash.TOOLS}
 _SHOP_TOOL_NAMES = {t["name"] for t in shop.TOOLS}
 _INSIGHT_TOOL_NAMES = {t["name"] for t in insight.TOOLS}
+_MALL_TOOL_NAMES = mall.TOOL_NAMES
 # 판매 현황 메뉴만 있어도 쓸 수 있는 판매 도구: 월×매장 합계(대시보드와 같은 수준의 합계). 판매 행 조회는 판매 집계 권한 필요
 _SUM_TOOL = next(t for t in sale.TOOLS if t["name"] == "sum_sales_shop_month")
 
@@ -312,14 +316,15 @@ BUILTIN_GROUPS = [
     (insight.TOOLS_SALE, "시즌 판매 진척", sorted(DASH_PAGES | SALE_PAGES)),
     (insight.TOOLS_ALERT, "온라인 할인 주의 (판매 + 온라인 가격 메뉴)", sorted(DASH_PAGES | SALE_PAGES | PRICE_PAGES)),
     (insight.TOOLS_PRODUCT, "상품 종합 (판매 또는 온라인 가격 메뉴)", sorted(DASH_PAGES | SALE_PAGES | PRICE_PAGES)),
+    (mall.TOOLS, "판매처 매장 연결 (변경은 사용자 [적용] 확인 후 저장)", sorted(MALL_PAGES)),
 ]
-BUILTIN_NAMES = _PRICE_TOOL_NAMES | _SALE_TOOL_NAMES | _INVT_TOOL_NAMES | _DASH_TOOL_NAMES | _SHOP_TOOL_NAMES | _INSIGHT_TOOL_NAMES
+BUILTIN_NAMES = _PRICE_TOOL_NAMES | _SALE_TOOL_NAMES | _INVT_TOOL_NAMES | _DASH_TOOL_NAMES | _SHOP_TOOL_NAMES | _INSIGHT_TOOL_NAMES | _MALL_TOOL_NAMES
 
 
 def data_scopes(me: dict) -> dict[str, bool]:
     pages = set(me.get("pages") or [])
     return {"price": bool(pages & PRICE_PAGES), "invt": bool(pages & INVT_PAGES), "sale": bool(pages & SALE_PAGES),
-            "dash": bool(pages & DASH_PAGES), "shop": bool(pages & SHOP_PAGES)}
+            "dash": bool(pages & DASH_PAGES), "shop": bool(pages & SHOP_PAGES), "mall": bool(pages & MALL_PAGES)}
 
 
 def _with_admin_note(tool: dict, cfg: dict | None) -> dict:
@@ -341,7 +346,7 @@ def tools_for(me: dict) -> list[dict]:
     base = (TOOLS if sc["price"] else []) + sales + (invt.TOOLS if sc["invt"] else []) + (shop.TOOLS if sc["shop"] else [])
     can_sale = sc["sale"] or sc["dash"]
     base += ((insight.TOOLS_SALE if can_sale else []) + (insight.TOOLS_ALERT if can_sale and sc["price"] else [])
-             + (insight.TOOLS_PRODUCT if can_sale or sc["price"] else []))
+             + (insight.TOOLS_PRODUCT if can_sale or sc["price"] else []) + (mall.TOOLS if sc["mall"] else []))
     out = [_with_admin_note(t, cfg["builtin"].get(t["name"])) for t in base
            if cfg["builtin"].get(t["name"], {}).get("enabled", True)]
     pages = set(me.get("pages") or [])
@@ -408,6 +413,13 @@ def run_tool(name: str, inp: Any, me: dict) -> dict:
         try:
             return shop.run(name, inp, allowed=brand_scope.brands_of(me))
         except shop.ShopToolError as ex:
+            raise ToolInputError(str(ex))
+    if name in _MALL_TOOL_NAMES:
+        if not sc["mall"]:
+            raise ToolInputError("이 사용자는 판매처 매장 연결 메뉴 권한이 없어 조회·변경할 수 없습니다.")
+        try:
+            return mall.run(name, inp)
+        except mall.MallToolError as ex:
             raise ToolInputError(str(ex))
     if name in _INSIGHT_TOOL_NAMES:
         can_sale = sc["sale"] or sc["dash"]

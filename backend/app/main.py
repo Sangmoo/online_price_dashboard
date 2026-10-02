@@ -604,6 +604,30 @@ invt_page = require_page("invt_plan")
 # 월별 매장별 판매 집계 (T_CLOSE_SALE_BASE)
 # ----------------------------------------------------------------------------
 sale_page = require_page("sale_monthly")
+mall_page = require_page("mall_shop")
+
+
+@app.get("/api/mall-shops")
+def mall_shop_list(days: int = 7, _: dict = Depends(mall_page)):
+    """판매처 매장 연결: 최근 수집에 나온 사이트·판매자번호 조합과 매핑"""
+    from . import mall_shop
+
+    return mall_shop.listing(days)
+
+
+@app.get("/api/mall-shops/shops")
+def mall_shop_shops(_: dict = Depends(mall_page)):
+    from . import mall_shop
+
+    return {"shops": mall_shop.shop_options()}
+
+
+@app.put("/api/mall-shops")
+def mall_shop_save(body: dict, me: dict = Depends(mall_page)):
+    """매핑 저장 [{mallNm, sellNo, shopId(빈 값이면 해제), useYn, rmk}]"""
+    from . import mall_shop
+
+    return mall_shop.save(me, body.get("items"))
 sale_dash_page = require_page("sale_dashboard")
 
 

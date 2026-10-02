@@ -64,12 +64,19 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - '○○ 매장 담당자', '김○○ 담당 매장', '영업직원별 매장 수' 같은 질문에 쓰고, 담당자 기준 판매를 물으면
   search_shops 로 매장코드를 찾은 뒤 판매 도구(shop_ids)로 실적을 조회합니다.
 
+[F] 판매처 매장 연결 (메뉴: 온라인 가격 > 판매처 매장 연결) — 도구: search_mall_shop_mappings, propose_mall_shop_mappings
+- 온라인 가격 수집의 사이트(MALL_NM)·판매자번호·브랜드(품번 첫 글자 S/T/A, '*' = 공통)마다 매장코드를 연결한 표입니다.
+  수집 프로그램이 이 연결로 T_SELECT_ONLINE_MNG_R.SHOP_ID 를 채웁니다. 온라인몰은 브랜드마다 매장코드가 다릅니다(예: 하프클럽 S51005/T51005/A51005).
+- 연결을 등록·수정·해제해 달라는 요청은 propose_mall_shop_mappings 로 변경안을 만듭니다. 이 도구는 저장하지 않습니다.
+  대화창에 [적용] 버튼이 있는 카드가 나가고 사용자가 눌러야 저장되므로, '아래 [적용]을 누르면 저장됩니다'라고 안내하고 저장했다고 말하지 않습니다.
+  사이트명이 모호하거나 판매자번호가 여러 개면 먼저 search_mall_shop_mappings 로 확인하고, 경고(브랜드가 다른 매장 등)가 있으면 함께 알립니다.
+
 [D] 관리자 정의 조회 도구 — 설명 끝에 '(관리자 정의 조회 도구 …)' 가 붙은 도구
 - 관리자가 이 서비스 데이터 조회용으로 추가한 도구입니다. 도구 설명에 적힌 범위의 질문에 사용하고, 결과 컬럼명 그대로 해석하되 모호하면 그렇다고 밝힙니다.
 
 답변 원칙:
 1. 반드시 도구로 조회한 결과만 근거로 답합니다. 일반 지식, 추측, 외부 정보로 수치를 만들지 않습니다.
-2. 이 서비스의 데이터(A, B, C, D, E)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
+2. 이 서비스의 데이터(A, B, C, D, E, F)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
 3. 대화마다 [화면 컨텍스트]로 오늘 날짜, 사용자가 보고 있는 화면, 사용자가 조회 권한을 가진 데이터가 주어집니다.
    권한이 없는 데이터는 조회할 수 없으며, 요청받으면 해당 메뉴 권한이 필요하다고 안내합니다.
 4. 질문이 어느 데이터에 관한 것인지 불분명하면 사용자가 보고 있는 화면의 데이터를 우선합니다.
@@ -133,7 +140,8 @@ def _context_text(ctx: dict | None, me: dict) -> str:
     sc = data_scopes(me)
     allowed = [n for n, ok in (("온라인 가격(A)", sc["price"]), ("매장 재고 실사계획(B)", sc["invt"]),
                                ("판매 현황(C)", sc["dash"] or sc["sale"]),
-                               ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"]), ("매장 정보·담당 영업직원(E)", sc["shop"])) if ok]
+                               ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"]), ("매장 정보·담당 영업직원(E)", sc["shop"]),
+                               ("판매처 매장 연결(F)", sc["mall"])) if ok]
     parts = [f"오늘 날짜: {date.today():%Y%m%d}", f"조회 권한이 있는 데이터: {', '.join(allowed) or '없음'}"]
     if (sc["dash"] or sc["sale"]) and me.get("brands"):
         parts.append(f"판매 데이터 브랜드 권한: {', '.join(me['brands'])} 만 조회됩니다 (도구 결과도 이 브랜드로만 계산됨). "
@@ -198,6 +206,8 @@ class _Display:
                     p["status"] = "ok" if e["ok"] else "fail"
         elif t == "table":
             self.parts.append({"kind": "table", **{k: v for k, v in e.items() if k != "type"}})
+        elif t == "action":
+            self.parts.append({"kind": "action", **{k: v for k, v in e.items() if k != "type"}})
         elif t in ("notice", "error"):
             self.parts.append({"kind": "notice", "text": e["message"], "error": t == "error"})
 
@@ -343,6 +353,8 @@ def stream_chat(me: dict, conv_id: str | None, text: str, ctx: dict | None) -> I
                             extra = {"truncated": True, "source": {"tool": block.name, "input": block.input}}
                         yield emit({"type": "table", "id": block.id,
                                     "title": _table_title(block.name, block.input), **out["table"], **extra})
+                    if out.get("action"):  # 사용자 확인 후 저장하는 변경안 (예: 판매처 매장 연결) → 대화창에 [적용] 카드
+                        yield emit({"type": "action", "id": block.id, **out["action"]})
                     yield emit({"type": "tool_done", "id": block.id, "ok": True})
                 except ToolInputError as ex:
                     _log.info("도구 입력 오류 %s user=%s: %s", block.name, usr_id, ex)
@@ -438,6 +450,11 @@ def _table_title(name: str, inp: dict) -> str:
     if name == "get_season_progress":
         s = f"{inp['plan_yy']} {inp['season']}" if inp.get("plan_yy") and inp.get("season") else "기본 시즌"
         return f"시즌 판매 진척 · {s} · {inp.get('ym') or '최근 마감 월'}{' · ' + inp['brand'] if inp.get('brand') else ''}"
+    if name == "search_mall_shop_mappings":
+        cond = [f"{k}={v}" for k, v in inp.items() if v not in (None, "")]
+        return "판매처 매장 연결" + (f" · {', '.join(cond)}" if cond else "")
+    if name == "propose_mall_shop_mappings":
+        return f"판매처 매장 연결 변경안 · {len(inp.get('items') or [])}건 (적용 전)"
     if name == "find_sale_heavy_shops":
         return f"세일 비중 높은 매장 · {inp.get('ym') or '최근 마감 월'}{' · ' + inp['brand'] if inp.get('brand') else ''}"
     if name == "find_online_discount_alerts":

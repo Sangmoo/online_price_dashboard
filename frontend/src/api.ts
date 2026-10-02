@@ -3,7 +3,7 @@ export type Row = Record<string, string | number | null>
 
 export type DateInfo = { dt: string; count: number }
 
-export type PageKey = 'dashboard' | 'detail' | 'sale_dashboard' | 'sale_monthly' | 'invt_plan' | 'admin'
+export type PageKey = 'dashboard' | 'detail' | 'mall_shop' | 'sale_dashboard' | 'sale_monthly' | 'invt_plan' | 'admin'
 
 export type AiLimits = {
   enabled: boolean
@@ -189,6 +189,14 @@ export const api = {
   addFavorite: (text: string) => sendJson<{ favorites: Favorite[] }>('POST', '/api/chat/favorites', { text }),
   deleteFavorite: (id: number) => sendJson<{ favorites: Favorite[] }>('DELETE', `/api/chat/favorites/${id}`),
 
+  // 온라인 가격 > 판매처 매장 연결
+  mallShops: {
+    list: (days: number) => getJson<MallShopList>(`/api/mall-shops?${qs({ days })}`),
+    shops: () => getJson<{ shops: { shopId: string; shopNm: string | null; brands: string[]; teamNm: string | null }[] }>('/api/mall-shops/shops'),
+    save: (items: MallShopSaveItem[]) =>
+      sendJson<{ saved: number; deleted: number; changed: number }>('PUT', '/api/mall-shops', { items }),
+  },
+
   // 문의·오류 신고
   sendFeedback: (body: { type: FeedbackType; content: string; page: string; context: Record<string, unknown>; images?: { name: string; data: string }[] }) =>
     sendJson<Feedback>('POST', '/api/feedback', body),
@@ -321,6 +329,20 @@ export type AiToolStats = {
     topErrors: { message: string; count: number }[]
   }[]
   unusedTools: { name: string; label: string }[]
+}
+export type MallShopRow = {
+  mallNm: string; sellNo: string; brdCd: string; brand: string; rows: number; products: number; lastDt: string | null
+  shopFilled: number; rmk: string | null; rmkShare?: number | null; seen: boolean; shopId: string | null; shopNm: string | null; useYn: 'Y' | 'N' | null
+  mapRmk: string | null; updatedBy: string | null; updatedAt: string | null; starShopId: string | null; starShopNm: string | null
+  effectiveShopId: string | null; suggestions: { shopId: string; shopNm: string | null; brand: string }[]
+}
+export type MallShopSaveItem = { mallNm: string; sellNo: string; brdCd: string; shopId: string; useYn: 'Y' | 'N'; rmk: string }
+export type MallShopList = {
+  ready: boolean
+  days: number
+  rows: MallShopRow[]
+  summary: { combos: number; sellers: number; mapped: number; unmapped: number; malls: number; rowsTotal: number; rowsMapped: number
+             rowsMappedPct: number | null; shopFilled: number }
 }
 export type FeedbackType = 'BUG' | 'REQ' | 'ASK'
 export type FeedbackStatus = 'NEW' | 'DOING' | 'DONE'
@@ -489,6 +511,7 @@ export type ChatEvent =
   | { type: 'tool_done'; id: string; ok: boolean }
   | { type: 'table'; id: string; title: string; columns: Column[]; rows: Row[]; totalMatched?: number; truncated?: boolean; source?: { tool: string; input: Record<string, unknown> } }
   | { type: 'notice'; message: string }
+  | { type: 'action'; id: string; actionKind: 'mall_shop_save'; title: string; items: MallShopSaveItem[]; lines: string[]; warnings: string[] }
   | { type: 'error'; message: string; code?: string }
   | { type: 'usage' } & Usage
   | { type: 'done' }

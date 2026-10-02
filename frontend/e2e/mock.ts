@@ -6,7 +6,7 @@ export type Call = { method: string; path: string; query: URLSearchParams; body:
 type Reply = { status?: number; json?: unknown; body?: Buffer; headers?: Record<string, string> }
 type Handler = (req: Request, url: URL) => Reply | Promise<Reply>
 
-const ALL_PAGES = ['dashboard', 'detail', 'sale_dashboard', 'sale_monthly', 'invt_plan', 'admin']
+const ALL_PAGES = ['dashboard', 'detail', 'mall_shop', 'sale_dashboard', 'sale_monthly', 'invt_plan', 'admin']
 
 export function makeUser(role: 'ADMIN' | 'USER', pages: string[] = role === 'ADMIN' ? ALL_PAGES : ['sale_dashboard', 'sale_monthly']) {
   return {
