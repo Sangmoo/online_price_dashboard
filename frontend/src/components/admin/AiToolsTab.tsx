@@ -213,7 +213,7 @@ function DataStatusCard({ notify }: { notify: Notify }) {
     if (!st) return
     const msg =
       `사전 집계 뷰를 지금 갱신할까요?\n\n` +
-      `· 원본(T_CLOSE_SALE_BASE) 전체를 월×매장으로 다시 집계합니다 (몇 분 걸릴 수 있음).\n` +
+      `· 원본(T_CLOSE_SALE_BASE) 전체를 월×매장${st.productMv?.exists ? '·상품' : ''}으로 다시 집계합니다 (몇 분 걸릴 수 있음).\n` +
       `· 갱신이 끝날 때까지 화면·AI 는 이전 데이터로 조회되고, 끝나면 바로 새 데이터를 씁니다.\n` +
       `· 전월 마감 적재가 끝난 뒤에 실행하세요. (현재 원본 최신 월: ${ym(st.baseMaxMonth)})`
     if (!confirm(msg)) return
@@ -249,6 +249,18 @@ function DataStatusCard({ notify }: { notify: Notify }) {
           <div className="pill"><span>뷰 최신 월</span><b>{ym(st.mvMaxMonth)}</b><span className="muted">/ 원본 {ym(st.baseMaxMonth)}</span></div>
           <div className="pill"><span>행 수</span><b>{st.rows === null ? '-' : fmtNum(st.rows)}</b></div>
           <div className="pill"><span>원가 컬럼</span><b>{st.hasCostColumn ? '있음' : '없음'}</b></div>
+          <div className={`pill ${st.productMv && st.productMv.exists && st.productMv.staleness !== 'FRESH' ? 'warn-pill' : ''}`}
+            title="상품 순위·판매형태·시즌 진척·상품 팝업이 사용 (db/create_mv_close_sale_prdt_ym.sql)">
+            <span>상품 뷰</span>
+            <b>{!st.productMv?.exists ? '없음' : st.productMv.staleness === 'FRESH' ? `최신 · ${ym(st.productMv.mvMaxMonth)}` : '갱신 필요'}</b>
+          </div>
+          {st.prewarm && (
+            <div className={`pill ${st.prewarm.error ? 'warn-pill' : ''}`}
+              title={st.prewarm.error ?? '기본 조건(최신 월·전년 동기) 판매 현황을 브랜드 권한 조합마다 미리 계산해 둡니다. 뷰 갱신 직후 · 매일 아침 7시 · 데이터 변경 감지 시'}>
+              <span>첫 화면 미리 계산</span>
+              <b>{st.prewarm.running ? '계산 중' : st.prewarm.last ? `${st.prewarm.last.slice(5, 16)} · ${st.prewarm.elapsedSec}초` : '아직 없음'}</b>
+            </div>
+          )}
         </div>
       )}
       {st && !ok && !running && (

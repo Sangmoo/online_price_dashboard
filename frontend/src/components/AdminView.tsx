@@ -11,6 +11,7 @@ import {
   LayoutGrid,
   Loader2,
   LogOut,
+  MessageSquareWarning,
   MonitorSmartphone,
   RefreshCw,
   ScrollText,
@@ -45,8 +46,9 @@ import MenuPermTab, { MenuPermModal } from './admin/MenuPermTab'
 import ServerStatusTab from './admin/ServerStatusTab'
 import MenuUsageTab from './admin/MenuUsageTab'
 import BackupTab from './admin/BackupTab'
+import FeedbackTab from './admin/FeedbackTab'
 
-export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
+export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'users', label: '사용자 · 권한', icon: Users },
@@ -55,6 +57,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'aitools', label: 'AI 도구', icon: Wrench },
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
   { key: 'menuusage', label: '메뉴 이용', icon: BarChart3 },
+  { key: 'feedback', label: '문의·신고', icon: MessageSquareWarning },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
   { key: 'audit', label: '변경 이력', icon: History },
@@ -87,6 +90,7 @@ export default function AdminView({ me, initialTab }: { me: User; initialTab?: T
       {tab === 'aitools' && <AiToolsTab notify={notify} />}
       {tab === 'usage' && <UsageTab />}
       {tab === 'menuusage' && <MenuUsageTab notify={notify} />}
+      {tab === 'feedback' && <FeedbackTab notify={notify} />}
       {tab === 'logins' && <LoginsTab notify={notify} />}
       {tab === 'sessions' && <SessionsTab notify={notify} />}
       {tab === 'audit' && <AuditTab notify={notify} />}

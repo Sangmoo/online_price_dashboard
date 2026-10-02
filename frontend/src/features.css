@@ -365,3 +365,73 @@
 .restore-section.none { opacity: 0.55; }
 .restore-list { margin: 6px 0 0 18px; padding: 0; font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
 .restore-preview summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+
+/* 판매 현황 > 시즌 판매 진척 */
+.season-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 4px 0 10px; }
+.season-kpi { display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+.season-kpi > span { font-size: 11.5px; color: var(--muted); }
+.season-kpi > b { font-size: 18px; font-weight: 700; }
+.season-kpi > small { font-size: 11.5px; color: var(--muted); }
+.season-kpi em { font-style: normal; margin-left: 4px; }
+@media (max-width: 1100px) { .season-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* 판매 현황 > 온라인 할인 주의 상품 */
+.online-alert-panel h3 { display: inline-flex; align-items: center; gap: 6px; }
+.warn-icon { color: #d97706; }
+.count-badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 11.5px; font-weight: 700;
+  background: rgba(148, 163, 184, 0.2); color: var(--muted); }
+.count-badge.warn { background: rgba(245, 158, 11, 0.18); color: #b45309; }
+:root[data-theme='dark'] .count-badge.warn { color: #fcd34d; }
+.table tr.warn-row td { background: rgba(245, 158, 11, 0.06); }
+
+/* 상품 팝업 > 많이 팔린 매장 · 매장 팝업 > 판매 구성 */
+.mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mini-grid h4, .mix-block h4 { margin: 0 0 6px; font-size: 13px; }
+.share-bar { position: relative; height: 6px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); overflow: hidden; min-width: 60px; }
+.share-bar > i { position: absolute; inset: 0 auto 0 0; background: var(--primary); border-radius: 3px; }
+.share-bar > s { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #f59e0b; }
+@media (max-width: 900px) { .mini-grid { grid-template-columns: 1fr; } }
+
+/* 문의·오류 신고 */
+.feedback-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.feedback-modal { width: min(920px, 100%); max-height: calc(100vh - 40px); overflow: auto; }
+.feedback-types { display: flex; gap: 8px; }
+.feedback-ctx { font-size: 12px; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; }
+.feedback-ctx summary { cursor: pointer; }
+.feedback-ctx pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; font-size: 11.5px; max-height: 180px; overflow: auto; }
+.feedback-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow: auto; }
+.feedback-item { border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.feedback-item .meta { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--muted); }
+.feedback-item .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-item .answer { white-space: pre-wrap; border-left: 3px solid var(--primary); padding-left: 8px; color: var(--text); }
+.fb-status { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.fb-status.NEW { background: rgba(225, 29, 72, 0.12); color: var(--danger); }
+.fb-status.DOING { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.fb-status.DONE { background: rgba(16, 185, 129, 0.14); color: var(--success); }
+.feedback-modal { display: flex; flex-direction: column; gap: 10px; }
+
+.feedback-modal .row-end { display: flex; justify-content: flex-end; gap: 8px; }
+.feedback-mine-title { margin: 6px 0 0; font-size: 13px; }
+.alert.ok-inline { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: var(--success); }
+.feedback-admin-row { display: grid; grid-template-columns: 1fr 300px; gap: 14px; align-items: start; }
+.feedback-admin-row .answer-box { display: flex; flex-direction: column; gap: 6px; }
+.feedback-admin-row textarea { width: 100%; resize: vertical; font: inherit; }
+@media (max-width: 1000px) { .feedback-admin-row { grid-template-columns: 1fr; } }
+
+/* 문의·신고: 넓은 입력 칸 · 이미지 첨부 */
+.feedback-editor { position: relative; }
+.feedback-editor textarea { width: 100%; min-height: 300px; height: 38vh; max-height: 60vh; resize: vertical; font: inherit; line-height: 1.6;
+  padding: 12px 14px; box-sizing: border-box; }
+.feedback-editor.dragging textarea { border-color: var(--primary); }
+.fb-count { position: absolute; right: 12px; bottom: 8px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+.fb-count.over { color: var(--danger); font-weight: 700; }
+.fb-drop { position: absolute; inset: 0; display: grid; place-items: center; border: 2px dashed var(--primary); border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--primary); font-weight: 700; pointer-events: none; }
+.fb-attach { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fb-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.fb-thumbs a, .fb-thumb { position: relative; display: block; width: 120px; height: 84px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  background: rgba(148, 163, 184, 0.12); }
+.fb-thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fb-thumb button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border-radius: 999px; background: rgba(15, 23, 42, 0.65); color: #fff; }
+.fb-thumb span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10.5px; color: #fff; background: rgba(15, 23, 42, 0.55); padding: 1px 6px; }
+.feedback-admin-row textarea { min-height: 120px; }

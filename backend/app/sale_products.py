@@ -21,6 +21,7 @@ from . import sale_monthly as sm
 
 MV_NAME = f"{config.DB_OWNER_SCHEMA}.MV_CLOSE_SALE_PRDT_YM"
 TOP_N = 20
+ALERT_TOP_N = 50                    # 온라인 할인 주의: 매장 실판금액 상위 상품 수
 MIN_AMT_FOR_DSCT_RANK = 5_000_000   # 할인율 순위: 기간 실판금액 500만원 이상 상품만 (소량 상품의 극단값 제외)
 CACHE_TTL = 10 * 60
 STATE_TTL = 60
@@ -64,6 +65,13 @@ def clear_cache() -> None:
         _state = None
 
 
+def clear_state() -> None:
+    """뷰 상태 캐시만 비운다 (결과 캐시는 그대로)"""
+    global _state
+    with _lock:
+        _state = None
+
+
 def _source(months: list[str]) -> str | None:
     st = mv_state()
     if st["usable"] and st["mv_max"] and max(months) <= st["mv_max"]:
@@ -86,7 +94,9 @@ def _rate(a: float, b: float) -> float | None:
 
 
 def analyze(ym: str | None = None, frm: str | None = None, cmp: str | None = None, cmp_from: str | None = None,
-            cmp_to: str | None = None, brand: str | None = None, allowed: list[str] | None = None) -> dict:
+            cmp_to: str | None = None, brand: str | None = None, allowed: list[str] | None = None,
+            ttl: int | None = None, internal: bool = False) -> dict:
+    """internal=True 면 화면에 보내지 않는 값(_top: 실판금액 상위 ALERT_TOP_N 상품)까지 돌려준다."""
     r = sd.resolve(ym, frm, cmp, cmp_from, cmp_to, brand, allowed)
     period, base, teams = r["period"], r["base"], r["teams"]
     meta = {"period": sd.period_label(period), "base": sd.period_label(base), "baseKind": sd.CMP_KINDS[r["kind"]],
@@ -99,14 +109,15 @@ def analyze(ym: str | None = None, frm: str | None = None, cmp: str | None = Non
         src = "base"
     key = (src, tuple(period), tuple(base), tuple(teams) if teams is not None else None)
     hit = _cache.get(key)
-    if hit and hit[0] > time.time():
-        return {**meta, **hit[1]}
-    out = _compute(src, period, base, teams)
-    with _lock:
-        if len(_cache) > 50:
-            _cache.clear()
-        _cache[key] = (time.time() + CACHE_TTL, out)
-    return {**meta, **out}
+    if hit and hit[0] > time.time() and ttl is None:
+        out = hit[1]
+    else:
+        out = _compute(src, period, base, teams)
+        with _lock:
+            if len(_cache) > 50:
+                _cache.clear()
+            _cache[key] = (time.time() + (ttl or CACHE_TTL), out)
+    return {**meta, **{k: v for k, v in out.items() if internal or not k.startswith("_")}}
 
 
 def _compute(src: str, period: list[str], base: list[str], teams: list[str] | None) -> dict:
@@ -181,6 +192,7 @@ def _compute(src: str, period: list[str], base: list[str], teams: list[str] | No
         "productCount": len(selling), "rankings": rankings,
         "items": finish("item"), "groups": finish("grp"), "salesTypes": types, "salesTypeTrend": trend,
         "minAmtForDsctRank": MIN_AMT_FOR_DSCT_RANK,
+        "_top": sorted(selling, key=lambda p: p["amt"], reverse=True)[:ALERT_TOP_N],
     }
 
 
@@ -211,3 +223,37 @@ def product_sales(prdt_cd: str, months: list[str], teams: list[str] | None = Non
 
 def bad(msg: str):
     raise HTTPException(status_code=400, detail={"message": msg, "code": "BAD_REQUEST"})
+
+
+def product_shops(prdt_cd: str, months: list[str], teams: list[str] | None = None, top: int = 10) -> dict:
+    """상품 팝업: 품번이 많이 팔린 매장 · 팀 (최근 몇 개월, 원본 — 판매년월 인덱스 + 품번 조건으로 3개월 1초 안팎)"""
+    minl, mb = _in(months, "m")
+    team_sql, tb = "", {}
+    if teams is not None:
+        tinl, tb = _in(teams or ["-"], "t")
+        team_sql = f" AND TEAM_CD IN ({tinl})"
+    rows = db.query(f"""SELECT SHOP_ID, MAX(SHOP_NM), TEAM_CD, SUM(QTY), SUM(REAL_SALE_AMT), SUM(DSCT_AMT)
+                          FROM T_CLOSE_SALE_BASE WHERE MAKE_YYMM IN ({minl}) AND PRDT_CD = :p{team_sql}
+                         GROUP BY SHOP_ID, TEAM_CD""", {**mb, **tb, "p": prdt_cd})[1]
+    shops: dict[str, dict] = {}
+    teams_out: dict[str, dict] = {}
+    for sid, nm, team, qty, amt, dsct in rows:
+        qty, amt, dsct = int(qty or 0), int(amt or 0), int(dsct or 0)
+        s = shops.setdefault(sid, {"shopId": sid, "shopNm": nm, "team": team, "qty": 0, "amt": 0, "dsct": 0})
+        s["qty"] += qty
+        s["amt"] += amt
+        s["dsct"] += dsct
+        t = teams_out.setdefault(team or "(없음)", {"team": team or "(없음)", "brand": sd.brand_of(team), "qty": 0, "amt": 0, "shops": 0})
+        t["qty"] += qty
+        t["amt"] += amt
+        t["shops"] += 1
+    tot_amt = sum(s["amt"] for s in shops.values())
+    tot_qty = sum(s["qty"] for s in shops.values())
+    ranked = sorted((s for s in shops.values() if s["qty"] > 0 or s["amt"] > 0), key=lambda s: (s["qty"], s["amt"]), reverse=True)
+    for s in ranked:
+        s["share"] = round(s["amt"] * 100 / tot_amt, 1) if tot_amt else None
+        s["dsctRate"] = _dr(s.pop("dsct"), s["amt"])
+    top_share = round(sum(s["amt"] for s in ranked[:top]) * 100 / tot_amt, 1) if tot_amt else None
+    return {"from": months[0], "to": months[-1], "shopCount": len(ranked), "qty": tot_qty, "amt": tot_amt,
+            "shops": ranked[:top], "topShare": top_share,
+            "teams": sorted(teams_out.values(), key=lambda t: t["qty"], reverse=True)}

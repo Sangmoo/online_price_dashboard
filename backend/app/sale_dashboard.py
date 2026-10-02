@@ -222,19 +222,21 @@ def _goals(period: list[str]) -> dict[str, tuple[int, str | None]]:
 
 
 def dashboard(ym: str | None = None, frm: str | None = None, cmp: str | None = None, cmp_from: str | None = None,
-              cmp_to: str | None = None, brand: str | None = None, full: bool = False, allowed: list[str] | None = None) -> dict:
-    """화면·AI·엑셀 공통 계산. full=True 면 전체 매장 목록(allShops)까지 (엑셀용)."""
+              cmp_to: str | None = None, brand: str | None = None, full: bool = False, allowed: list[str] | None = None,
+              ttl: int | None = None) -> dict:
+    """화면·AI·엑셀 공통 계산. full=True 면 전체 매장 목록(allShops)까지 (엑셀용).
+    ttl: 캐시 유지 시간(초). 미리 계산(prewarm)은 길게 둔다 — 데이터가 바뀌면 prewarm 이 캐시를 비운다."""
     r = resolve(ym, frm, cmp, cmp_from, cmp_to, brand, allowed)
     key = (r["to"], r["from"], r["kind"], tuple(r["base"]), r["brand"], tuple(sorted(r["scope"])) if r["scope"] is not None else None)
     hit = _cache.get(key)
-    if hit and hit[0] > time.time():
+    if hit and hit[0] > time.time() and ttl is None:
         out = hit[1]
     else:
         out = _compute(r)
         with _lock:
             if len(_cache) > 50:
                 _cache.clear()
-            _cache[key] = (time.time() + CACHE_TTL, out)
+            _cache[key] = (time.time() + (ttl or CACHE_TTL), out)
     if full:
         return out
     return {k: v for k, v in out.items() if k != "allShops"}

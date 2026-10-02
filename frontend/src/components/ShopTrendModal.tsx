@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ClipboardList, Loader2, Store, UserRound, X } from 'lucide-react'
+import { ClipboardList, Loader2, PieChart, Store, UserRound, X } from 'lucide-react'
 import { apiFetch } from '../api'
 import { fmtNum } from '../format'
 
@@ -31,6 +31,16 @@ type Profile = {
   goals?: Record<string, number>
   invtPlans?: { planId: number; invtPlanDt: string | null; invtPlanNote: string | null; lastInvtDt: string | null; prevInvtType: string | null; shopRankNm: string | null; stockQty: number | null }[]
   managers?: { smasrNm: string; smasrHp: string | null; openDt: string | null }[]
+  mix?: {
+    from: string
+    to: string
+    brand: string | null
+    amt: number
+    brandAvg: boolean
+    itemCount: number
+    salesTypes: { name: string; amt: number; qty: number; share: number | null; dsctRate: number | null; brandShare?: number; shareDiff?: number | null }[]
+    items: { name: string; amt: number; qty: number; share: number | null; dsctRate: number | null }[]
+  }
 }
 
 const ym = (v: string) => `${v.slice(0, 4)}-${v.slice(4)}`
@@ -164,6 +174,62 @@ export default function ShopTrendModal({ url, shopId, ctx, title, onClose }: {
               </table>
             </div>
           </>
+        )}
+
+        {profile?.mix && profile.mix.amt !== 0 && (
+          <div className="mix-block">
+            <div className="shop-invt-head">
+              <PieChart size={14} /> 판매 구성 · {ym(profile.mix.from)}~{ym(profile.mix.to)}
+              <span className="muted small">
+                {profile.mix.brandAvg ? `주황 선: ${profile.mix.brand} 전체 비중` : '브랜드 평균은 상품 사전 집계 뷰가 있을 때 표시'}
+              </span>
+            </div>
+            <div className="mini-grid">
+              <div className="table-wrap trend-table">
+                <table className="table">
+                  <thead>
+                    <tr><th>판매형태</th><th className="num">실판금액</th><th>비중</th><th className="num">비중</th>{profile.mix.brandAvg && <th className="num">브랜드 대비</th>}<th className="num">할인율</th></tr>
+                  </thead>
+                  <tbody>
+                    {profile.mix.salesTypes.map((t) => (
+                      <tr key={t.name}>
+                        <td className="strong">{t.name}</td>
+                        <td className="num">{fmtNum(t.amt)}</td>
+                        <td>
+                          <div className="share-bar">
+                            <i style={{ width: `${Math.max(0, Math.min(100, t.share ?? 0))}%` }} />
+                            {t.brandShare !== undefined && <s style={{ left: `${Math.max(0, Math.min(100, t.brandShare))}%` }} />}
+                          </div>
+                        </td>
+                        <td className="num">{t.share === null ? '-' : `${t.share.toFixed(1)}%`}</td>
+                        {profile.mix!.brandAvg && (
+                          <td className={`num ${growthClass(t.shareDiff ?? null)}`}>
+                            {t.shareDiff === null || t.shareDiff === undefined ? '-' : `${t.shareDiff > 0 ? '+' : ''}${t.shareDiff.toFixed(1)}%p`}
+                          </td>
+                        )}
+                        <td className="num">{t.dsctRate === null ? '-' : `${t.dsctRate.toFixed(1)}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="table-wrap trend-table">
+                <table className="table">
+                  <thead><tr><th>주력 아이템 (상위 {profile.mix.items.length}/{profile.mix.itemCount})</th><th className="num">수량</th><th className="num">실판금액</th><th className="num">비중</th></tr></thead>
+                  <tbody>
+                    {profile.mix.items.map((t) => (
+                      <tr key={t.name}>
+                        <td className="strong">{t.name}</td>
+                        <td className="num">{fmtNum(t.qty)}</td>
+                        <td className="num">{fmtNum(t.amt)}</td>
+                        <td className="num">{t.share === null ? '-' : `${t.share.toFixed(1)}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         )}
 
         {profile && (profile.invtPlans || profile.managers) && (

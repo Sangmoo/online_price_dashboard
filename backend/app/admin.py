@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 
-from . import ai_tools, appdb, audit, auth, config, db, logs, model_router, mv_refresh, usage, userdb
+from . import ai_tools, appdb, audit, auth, config, db, logs, model_router, mv_refresh, prewarm, usage, userdb
 
 MODELS = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
@@ -263,7 +263,17 @@ def data_status() -> dict:
         "hasCostColumn": "TOTAL_COST_AMT" in st.get("columns", set()),
         "behind": bool(st["base_max"] and st["mv_max"] and st["base_max"] > st["mv_max"]),
         "refresh": mv_refresh.state(),
+        "productMv": _product_mv(),
+        "prewarm": prewarm.state(),
     }
+
+
+def _product_mv() -> dict:
+    from . import sale_products
+
+    sale_products.clear_state()
+    ps = sale_products.mv_state()
+    return {"exists": ps["exists"], "staleness": ps["staleness"], "mvMaxMonth": ps["mv_max"]}
 
 
 def refresh_mv(admin: dict) -> dict:

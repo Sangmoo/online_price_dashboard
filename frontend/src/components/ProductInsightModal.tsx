@@ -13,6 +13,16 @@ type Insight = {
     malls: { mallNm: string; dcPrice: number | null; price: number | null; dcRate: number | null }[]
   }
   sales?: { itemNm: string | null; prdtGrpNm: string | null; source: string; months: { ym: string; amt: number; qty: number; dsctRate: number | null }[] }
+  shops?: {
+    from: string
+    to: string
+    shopCount: number
+    qty: number
+    amt: number
+    topShare: number | null
+    shops: { shopId: string; shopNm: string | null; team: string | null; qty: number; amt: number; share: number | null; dsctRate: number | null }[]
+    teams: { team: string; brand: string; qty: number; amt: number; shops: number }[]
+  }
 }
 
 const dt = (v: string) => `${v.slice(4, 6)}-${v.slice(6, 8)}`
@@ -122,6 +132,50 @@ export default function ProductInsightModal({ prdtCd, onClose }: { prdtCd: strin
               </section>
             )}
           </div>
+        )}
+        {data?.shops && data.shops.shopCount > 0 && (
+          <section>
+            <div className="shop-invt-head">
+              <Store size={14} /> 많이 팔린 매장 · {ym(data.shops.from)}~{ym(data.shops.to)}
+              <span className="muted small">
+                판매 매장 {fmtNum(data.shops.shopCount)}개 · 수량 {fmtNum(data.shops.qty)}개 · 상위 {data.shops.shops.length}개 매장이 실판금액의 {pct(data.shops.topShare)}
+              </span>
+            </div>
+            <div className="mini-grid">
+              <div className="table-wrap trend-table">
+                <table className="table">
+                  <thead><tr><th>매장</th><th>팀</th><th className="num">수량</th><th className="num">실판금액</th><th className="num">비중</th><th className="num">할인율</th></tr></thead>
+                  <tbody>
+                    {data.shops.shops.map((s) => (
+                      <tr key={s.shopId}>
+                        <td title={s.shopId}>{s.shopNm ?? s.shopId} <span className="muted mono small">{s.shopId}</span></td>
+                        <td className="small">{s.team ?? '-'}</td>
+                        <td className="num strong">{fmtNum(s.qty)}</td>
+                        <td className="num">{fmtNum(s.amt)}</td>
+                        <td className="num">{pct(s.share)}</td>
+                        <td className="num">{pct(s.dsctRate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="table-wrap trend-table">
+                <table className="table">
+                  <thead><tr><th>팀</th><th className="num">매장 수</th><th className="num">수량</th><th className="num">수량 비중</th></tr></thead>
+                  <tbody>
+                    {data.shops.teams.map((t) => (
+                      <tr key={t.team}>
+                        <td>{t.team} <span className="muted small">{t.brand}</span></td>
+                        <td className="num">{fmtNum(t.shops)}</td>
+                        <td className="num strong">{fmtNum(t.qty)}</td>
+                        <td className="num">{data.shops && data.shops.qty ? pct((t.qty * 100) / data.shops.qty) : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         )}
         <div className="muted small">온라인: 가격 수집(T_SELECT_ONLINE_MNG_R) · 매장: 마감 판매(T_CLOSE_SALE_BASE) · 할인율 = 할인금액 ÷ (실판금액 + 할인금액)</div>
       </div>

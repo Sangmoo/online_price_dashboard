@@ -3,7 +3,7 @@
 전월 마감 완료 시점이 매번 달라 자동 갱신 대신 관리자가 마감 후 직접 실행한다.
 - 서버에서 백그라운드로 실행하고 화면은 진행 상태를 조회한다 (동시에 한 번만).
 - 원자적 갱신(atomic_refresh): 끝나서 커밋될 때까지 화면·AI 는 이전 데이터를 그대로 본다.
-- 끝나면 앱의 집계 캐시를 비워 판매 현황·요약·AI 가 바로 새 데이터를 쓴다.
+- 끝나면 앱의 집계 캐시를 비워 판매 현황·요약·AI 가 바로 새 데이터를 쓰고, 기본 조건 판매 현황을 미리 계산한다(prewarm).
 - 앱 계정(SS10DEV)의 ALTER ANY MATERIALIZED VIEW 권한으로 DBMS_MVIEW.REFRESH 를 호출한다.
 """
 from __future__ import annotations
@@ -39,11 +39,12 @@ def _clear_caches() -> None:
     from . import chat_tools_sale as cts
     from . import sale_dashboard, sale_monthly
 
-    from . import sale_products
+    from . import sale_products, sale_season
 
     cts._mv_state = None
     sale_dashboard.clear_cache()
     sale_products.clear_cache()
+    sale_season.clear_cache()
     with sale_monthly._stats_lock:
         sale_monthly._stats_cache.clear()
 
@@ -98,6 +99,10 @@ def _run(admin: dict) -> None:
                                      f"{before['maxMonth']} → {after['maxMonth']}")
         with _lock:
             _state.update({"status": "done", "finished": time.time(), "elapsedSec": sec})
+        # 그날 첫 사용자도 기다리지 않게 기본 조건 판매 현황을 미리 계산 (완료 표시 뒤, 같은 스레드에서)
+        from . import prewarm
+
+        prewarm.after_refresh()
     except Exception as ex:  # noqa: BLE001 - 실패는 상태로 알리고, 원자적 갱신이라 뷰는 이전 데이터 그대로
         msg = str(ex).splitlines()[0]
         _log.exception("사전 집계 뷰 갱신 실패")

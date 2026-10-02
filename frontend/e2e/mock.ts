@@ -96,6 +96,29 @@ export const productsData = {
   salesTypeTrend: [{ ym: '202608', 행사: 8_106_354_960, 세일: 4_615_063_070 }],
 }
 
+const sm = (ym: string, amt: number | null, cum: number | null, prevAmt: number, prevCum: number, step: number) => ({
+  ym, label: `${ym.slice(0, 4)}-${ym.slice(4)}`, step, prevYm: `${Number(ym.slice(0, 4)) - 1}${ym.slice(4)}`, amt, qty: amt === null ? null : 10, cum, prevAmt, prevCum,
+})
+export const seasonData = {
+  to: '202608', toLabel: '2026-08', brand: null, brandOptions: ['리스트', '쉬즈미스', '시스티나'], source: '사전 집계 뷰',
+  options: [{ planYy: '2026', season: '여름', amt: 60_000_000_000, lastAmt: 5_555_700_484 }, { planYy: '2026', season: '가을', amt: 5_430_125_852, lastAmt: 3_991_124_286 }],
+  planYy: '2026', season: '여름', prevPlanYy: '2025', start: '202602', startLabel: '2026-02', step: 7,
+  months: [sm('202607', 9_830_537_235, 50_000_000_000, 10_320_680_906, 47_000_000_000, 6), sm('202608', 5_555_700_484, 55_000_000_000, 5_747_676_857, 52_000_000_000, 7),
+           sm('202609', null, null, 1_696_100_165, 54_000_000_000, 8)],
+  kpi: { amt: 55_000_000_000, qty: 400_000, prevSameAmt: 52_000_000_000, prevSameQty: 390_000, change: 5.8, qtyChange: 2.6, prevFinalAmt: 61_000_000_000,
+         progress: 90.2, prevProgressSame: 85.2, dsctRate: 3.0, prevDsctRate: 3.4, lastAmt: 5_555_700_484, prevLastAmt: 5_747_676_857 },
+}
+export const alertsData = {
+  period: '2026-08', brand: null, recentDays: 7, baseDays: 28, alertDiff: 3, alertNew: 15, recentFrom: '2026-09-26', baseFrom: '2026-08-29',
+  alertCount: 1, withOnline: 2, total: 2,
+  rows: [
+    { rank: 12, prdtCd: 'SWWJPQ33010', itemNm: '점퍼', prdtGrpNm: 'PADDING', storeAmt: 105_333_200, storeQty: 600, storeDsctRate: 0.9,
+      online: { recentRate: 10.2, baseRate: 5.7, lowPrice: 134_100, malls: 8, lastDt: '20261001' }, diff: 4.5, flag: 'rise' },
+    { rank: 1, prdtCd: 'AWWJKQ31030', itemNm: '자켓', prdtGrpNm: 'PADDING', storeAmt: 200_000_000, storeQty: 900, storeDsctRate: 1.1,
+      online: { recentRate: 11.9, baseRate: 11.2, lowPrice: 151_900, malls: 32, lastDt: '20261002' }, diff: 0.7, flag: null },
+  ],
+}
+
 export class MockApi {
   calls: Call[] = []
   unhandled: string[] = []
@@ -115,6 +138,9 @@ export class MockApi {
     this.on('GET', '/api/chat/favorites', () => ({ json: { favorites: [] } }))
     this.on('GET', '/api/sale-dashboard', (_, url) => ({ json: dashboardData(url.searchParams) }))
     this.on('GET', '/api/sale-dashboard/products', () => ({ json: productsData }))
+    this.on('GET', '/api/sale-dashboard/season', () => ({ json: seasonData }))
+    this.on('GET', '/api/sale-dashboard/online-alerts', () => ({ json: alertsData }))
+    this.on('GET', '/api/feedback/mine', () => ({ json: { rows: [] } }))
     // 판매 집계 화면은 권한이 있으면 숨김 상태로 미리 떠 있어 기본 응답이 필요하다
     this.on('GET', '/api/sale-monthly/options', () => ({ json: saleOptions }))
     this.on('GET', '/api/sale-monthly', () => ({ json: { rows: [], summary: { rows: 0, qty: 0, realSaleAmt: 0 } } }))

@@ -52,6 +52,9 @@ def _housekeeping() -> None:
 
 if os.getenv("ERP_NO_AUTO_MIGRATE") != "1":
     threading.Thread(target=_housekeeping, daemon=True, name="housekeeping").start()
+    from . import prewarm  # noqa: E402
+
+    threading.Thread(target=prewarm.loop, daemon=True, name="prewarm").start()
 
 app = FastAPI(title="ERP 영업 관리 API")
 app.add_middleware(
@@ -398,6 +401,46 @@ def usage_menu_open(body: MenuOpen, user: dict = Depends(current_user)):
     return {"ok": True}
 
 
+@app.post("/api/feedback")
+def feedback_create(body: dict, me: dict = Depends(current_user)):
+    """화면 내 문의·오류 신고 (현재 화면·조회 조건·최근 오류가 context 로 함께 온다)"""
+    from . import feedback
+
+    return feedback.create(me, body)
+
+
+@app.get("/api/feedback/mine")
+def feedback_mine(me: dict = Depends(current_user)):
+    from . import feedback
+
+    return {"rows": feedback.mine(me["id"]), "limits": feedback.limits()}
+
+
+@app.get("/api/feedback/{fb_id}/files/{no}")
+def feedback_file(fb_id: str, no: int, me: dict = Depends(current_user)):
+    """첨부 이미지 (작성자 본인 또는 관리자)"""
+    from . import feedback
+
+    data, mime, name = feedback.get_file(fb_id, no, me)
+    return Response(content=data, media_type=mime, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f"inline; filename*=UTF-8''{quote(name)}"})
+
+
+@app.get("/api/admin/feedback")
+def admin_feedback(status: str | None = None, _: dict = Depends(require_admin)):
+    from . import feedback
+
+    return feedback.list_all(status)
+
+
+@app.put("/api/admin/feedback/{fb_id}")
+def admin_feedback_answer(fb_id: str, body: dict, me: dict = Depends(require_admin)):
+    from . import feedback
+
+    return feedback.answer(me, fb_id, body)
+
+
 @app.get("/api/admin/menu-usage")
 def admin_menu_usage(days: int = 30, _: dict = Depends(require_admin)):
     return menu_usage.report(days, admin.list_users())
@@ -577,6 +620,25 @@ def sale_dashboard_products(args: dict = Depends(_dash_args), me: dict = Depends
     return sale_products.analyze(**args, allowed=brand_scope.brands_of(me))
 
 
+@app.get("/api/sale-dashboard/season")
+def sale_dashboard_season(ym: str | None = None, brand: str | None = None, planYy: str | None = None,  # noqa: N803
+                          season: str | None = None, me: dict = Depends(sale_dash_page)):
+    """시즌 판매 진척: 시즌 월 누적 판매 vs 전년 같은 시즌의 같은 시점 (기준 월·브랜드는 판매 현황과 같게)"""
+    from . import sale_season
+
+    return sale_season.progress(ym, brand, brand_scope.brands_of(me), planYy, season)
+
+
+@app.get("/api/sale-dashboard/online-alerts")
+def sale_dashboard_online_alerts(args: dict = Depends(_dash_args), me: dict = Depends(sale_dash_page)):
+    """온라인 할인 주의 상품: 매장 상위 상품 중 최근 온라인 할인율이 오른 상품 (온라인 가격 메뉴 권한도 필요)"""
+    from . import online_alerts
+
+    if not set(me["pages"]) & {"dashboard", "detail"}:
+        raise HTTPException(403, {"message": "온라인 가격 메뉴 권한이 필요합니다.", "code": "FORBIDDEN"})
+    return online_alerts.alerts(**args, allowed=brand_scope.brands_of(me))
+
+
 @app.get("/api/products/{prdt_cd}/insight")
 def product_insight(prdt_cd: str, me: dict = Depends(current_user)):
     """상품 팝업: 온라인 가격(온라인 가격 메뉴 권한) + 매장 판매(판매 메뉴 권한)를 품번으로 이어서 보여준다."""
@@ -598,6 +660,10 @@ def product_insight(prdt_cd: str, me: dict = Depends(current_user)):
         last = sale_monthly._shift_ym(time.strftime("%Y%m"), -1)
         months = [sale_monthly._shift_ym(last, -i) for i in range(11, -1, -1)]
         out["sales"] = sale_products.product_sales(cd, months, brand_scope.teams_of(me))
+        try:  # 많이 팔린 매장 · 팀 (최근 3개월)
+            out["shops"] = sale_products.product_shops(cd, months[-3:], brand_scope.teams_of(me))
+        except Exception:  # noqa: BLE001 - 매장 분포가 실패해도 나머지는 보여준다
+            logs.get("app").exception("상품 팝업 매장 분포 실패 %s", cd)
     return out
 
 
@@ -728,6 +794,10 @@ def shop_profile(shop_id: str, ctx: str | None = None, me: dict = Depends(curren
         last = sale_monthly._shift_ym(time.strftime("%Y%m"), -1)
         months = [sale_monthly._shift_ym(last, -i) for i in range(11, -1, -1)]
         out["goals"] = shop_info.goals_by_month(sid, months, allowed)
+        try:  # 판매형태 구성 · 주력 아이템 (최근 12개월)
+            out["mix"] = sale_monthly.shop_mix(sid, teams=brand_scope.teams_of(me))
+        except Exception:  # noqa: BLE001
+            logs.get("app").exception("매장 팝업 판매 구성 실패 %s", sid)
     if "invt_plan" in pages:
         keys = ("planId", "invtPlanDt", "invtPlanNote", "lastInvtDt", "prevInvtType", "shopRankNm", "stockQty", "twiceYearYn")
         out["invtPlans"] = [{k: p.get(k) for k in keys} for p in invt_plan.list_plans() if p.get("shopId") == sid]

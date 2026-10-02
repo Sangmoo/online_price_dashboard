@@ -51,6 +51,11 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - 베스트 상품·상품 순위, 아이템/품군 전년 비교, 판매형태(행사/정상/세일) 구성 질문은 get_sales_dashboard 의
   sections=products / items / sales_types 를 씁니다. 품번은 시즌마다 새로 나오므로 상품의 전년 비교는 아이템·품군 단위로 답합니다.
   시즌·기획년도·품군·아이템·판매형태 등이 조건이나 묶음에 들어가거나 상품 수·원가가 필요할 때만 aggregate_sales 를 씁니다.
+- 시즌이 얼마나 팔렸는지·전년 같은 시즌 대비·진척률 질문은 get_season_progress 를 씁니다(화면의 시즌 판매 진척과 같은 계산,
+  같은 시점 = 전년 같은 달까지 누적). 직접 누적을 계산하지 말고 도구 결과를 그대로 씁니다.
+- 품번 하나의 온라인 가격과 매장 판매·많이 팔린 매장은 get_product_insight 한 번으로 조회합니다.
+- 잘 팔리는 상품의 온라인 할인 동향(온라인 할인율이 오른 상위 상품)은 find_online_discount_alerts 를 씁니다
+  (판매 메뉴와 온라인 가격 메뉴 권한이 모두 있을 때만). 매장 판매 기간과 온라인 수집 기간(오늘 기준 최근 7일 vs 그 전 4주)이 다름을 밝힙니다.
 - 매출은 '실판금액 합계'를 기준으로 합니다. 할인율·원가율처럼 도구에 없는 비율은 반환된 합계로 계산하고 계산식을 밝힙니다.
 
 [E] 매장 정보 (판매·실사계획 메뉴 권한) — 도구: search_shops
@@ -429,6 +434,14 @@ def _table_title(name: str, inp: dict) -> str:
         secs = ", ".join(inp.get("sections") or []) or "요약"
         extra = [v for v in (inp.get("brand"), {"prev": "직전 기간 대비", "custom": "직접 선택 비교"}.get(inp.get("compare") or "")) if v]
         return f"판매 현황 · {ym}{' · ' + ', '.join(extra) if extra else ''} · {secs}"
+    if name == "get_season_progress":
+        s = f"{inp['plan_yy']} {inp['season']}" if inp.get("plan_yy") and inp.get("season") else "기본 시즌"
+        return f"시즌 판매 진척 · {s} · {inp.get('ym') or '최근 마감 월'}{' · ' + inp['brand'] if inp.get('brand') else ''}"
+    if name == "find_online_discount_alerts":
+        ym = inp.get("ym") or "최근 마감 월"
+        return f"온라인 할인 주의 상품 · 매장 {inp['ym_from'] + '~' if inp.get('ym_from') else ''}{ym}{' · ' + inp['brand'] if inp.get('brand') else ''}"
+    if name == "get_product_insight":
+        return f"상품 종합 · {inp.get('prdt_cd', '')}"
     if name in ("sum_sales_shop_month", "aggregate_sales", "search_sales"):
         cond = [f"{k}={','.join(v) if isinstance(v, list) else v}" for k, v in inp.items()
                 if k not in ("ym_from", "ym_to", "group_by", "order_by", "order_dir", "limit") and v not in (None, "", [])]

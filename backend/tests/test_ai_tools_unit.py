@@ -163,7 +163,7 @@ def test_registry_respects_admin_settings(local_store, monkeypatch):
 def test_settings_error_falls_back_to_defaults(monkeypatch):
     monkeypatch.setattr(ai_tools, "_load_all", lambda: (_ for _ in ()).throw(RuntimeError("DB down")))
     assert ai_tools.snapshot() == {"builtin": {}, "custom": []}
-    assert len(ct.tools_for({"pages": ["sale_monthly"]})) == 5  # 설정 저장소 장애여도 기본 도구로 AI 동작
+    assert len(ct.tools_for({"pages": ["sale_monthly"]})) == 7  # 설정 저장소 장애여도 기본 도구로 AI 동작
 
 
 # ----------------------------------------------------------------------------

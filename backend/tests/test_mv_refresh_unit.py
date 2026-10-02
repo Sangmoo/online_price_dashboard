@@ -20,6 +20,10 @@ def fake(monkeypatch):
         gate.wait(5)
 
     monkeypatch.setattr(mv_refresh, "_refresh", refresh)
+    from app import prewarm
+
+    warmed = []
+    monkeypatch.setattr(prewarm, "after_refresh", lambda: warmed.append(1))  # 실제 DB 계산 대신
     monkeypatch.setattr(mv_refresh, "_state", {"status": "idle", "started": None, "finished": None, "by": None, "error": None,
                                                "elapsedSec": None})
     return gate, calls

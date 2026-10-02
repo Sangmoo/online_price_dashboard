@@ -8,6 +8,7 @@ import {
   Home,
   Loader2,
   LogOut,
+  MessageSquareWarning,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -48,6 +49,7 @@ const AdminView = lazyView(() => import('./components/AdminView'))
 const InvtPlanView = lazyView(() => import('./components/InvtPlanView'))
 const SaleMonthlyView = lazyView(() => import('./components/SaleMonthlyView'))
 const SaleDashboardView = lazyView(() => import('./components/SaleDashboardView'))
+const FeedbackModal = lazyView(() => import('./components/FeedbackModal'))
 
 type Theme = 'light' | 'dark'
 
@@ -214,6 +216,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [invtCtx, setInvtCtx] = useState<Record<string, string>>({})
   const [saleCtx, setSaleCtx] = useState<Record<string, string>>({})
   const [saleDashCtx, setSaleDashCtx] = useState<Record<string, string>>({})
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const lastTouch = useRef(0)
@@ -427,8 +430,16 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
               <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
+            <button className="btn ghost feedback-btn" onClick={() => setFeedbackOpen(true)} title="오류 신고 · 기능 요청 · 문의 (현재 화면과 조회 조건이 함께 전달됩니다)">
+              <MessageSquareWarning size={15} /> 문의·신고
+            </button>
           </div>
         </header>
+        {feedbackOpen && (
+          <Suspense fallback={null}>
+            <FeedbackModal page={view ?? ''} pageLabel={current?.label ?? '-'} context={chatContext} onClose={() => setFeedbackOpen(false)} />
+          </Suspense>
+        )}
 
         {remain > 0 && remain <= WARN_BEFORE_SEC && (
           <div className="session-warn">
@@ -479,7 +490,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               />
             </div>
           )}
-          {view === 'sale_dashboard' && user.pages.includes('sale_dashboard') && <SaleDashboardView onContextChange={setSaleDashCtx} />}
+          {view === 'sale_dashboard' && user.pages.includes('sale_dashboard') && <SaleDashboardView onContextChange={setSaleDashCtx} canOnline={user.pages.includes('dashboard') || user.pages.includes('detail')} />}
           {user.pages.includes('sale_monthly') && (
             <div hidden={view !== 'sale_monthly'}>
               <SaleMonthlyView onContextChange={setSaleCtx} />

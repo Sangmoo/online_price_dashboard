@@ -402,3 +402,116 @@ test('관리자: AI 사용 설정에서 모델 자동 선택을 켜고 단순 �
   const body = api.find('PUT', '/api/admin/settings')[0].body as Record<string, unknown>
   expect([body.autoModel, body.simpleModel]).toEqual([true, 'claude-sonnet-5'])
 })
+
+test('판매 현황: 시즌 판매 진척과 온라인 할인 주의 상품을 보여주고, 시즌을 바꾸면 그 시즌으로 요청한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['dashboard', 'sale_dashboard']))
+  await page.goto('/?view=sale_dashboard')
+  const season = page.locator('.season-panel')
+  await expect(season).toContainText('시즌 판매 진척')
+  await expect(season.locator('.season-kpi', { hasText: '전년 시즌 최종 대비 진척' })).toContainText('90.2%')
+  await expect(season.locator('.season-kpi', { hasText: '누적 실판금액' })).toContainText('+5.8%')
+  await season.getByRole('combobox', { name: '시즌' }).selectOption('2026 가을')
+  await expect.poll(() => api.find('GET', '/api/sale-dashboard/season').map((c) => Object.fromEntries(c.query)).pop())
+    .toEqual({ ym: '202608', planYy: '2026', season: '가을' })
+
+  const alerts = page.locator('.online-alert-panel')
+  await expect(alerts.locator('.count-badge')).toHaveText('1')
+  await expect(alerts.getByRole('row', { name: /SWWJPQ33010/ })).toContainText('+4.5%p')
+  await expect(alerts.getByRole('button', { name: 'AWWJKQ31030' })).toHaveCount(0) // 주의만
+  await alerts.getByRole('button', { name: /상위 2개 전체/ }).click()
+  await expect(alerts.getByRole('button', { name: 'AWWJKQ31030' })).toBeVisible()
+})
+
+test('온라인 가격 메뉴 권한이 없으면 온라인 할인 주의 상품을 요청하지 않는다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['sale_dashboard']))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.locator('.season-panel')).toBeVisible()
+  await expect(page.locator('.online-alert-panel')).toHaveCount(0)
+  expect(api.find('GET', '/api/sale-dashboard/online-alerts')).toHaveLength(0)
+})
+
+test('상품 팝업에 많이 팔린 매장·팀, 매장 팝업에 판매형태 구성·주력 아이템을 보여준다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['sale_dashboard']))
+  api.on('GET', '/api/products/TWWJKQ72020/insight', () => ({
+    json: {
+      prdtCd: 'TWWJKQ72020',
+      sales: { itemNm: '자켓', prdtGrpNm: '우븐', source: '사전 집계 뷰', months: [{ ym: '202608', amt: 112_422_100, qty: 581, dsctRate: 2.7 }] },
+      shops: { from: '202606', to: '202608', shopCount: 93, qty: 1838, amt: 340_000_000, topShare: 37.9,
+               shops: [{ shopId: 'T34606', shopNm: '현대아울렛대전', team: '리스트3팀', qty: 115, amt: 21_746_800, share: 6.4, dsctRate: 2.4 }],
+               teams: [{ team: '리스트3팀', brand: '리스트', qty: 902, amt: 168_308_440, shops: 83 }] },
+    },
+  }))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: 'TWWJKQ72020' }).click()
+  const modal = page.locator('.product-modal')
+  await expect(modal).toContainText('많이 팔린 매장')
+  await expect(modal).toContainText('현대아울렛대전')
+  await expect(modal).toContainText('상위 1개 매장이 실판금액의 37.9%')
+  await expect(modal.getByRole('row', { name: /리스트3팀 리스트/ })).toContainText('49.1%')
+  await modal.getByRole('button').first().click()
+
+  api.on('GET', '/api/sale-dashboard/shops/S41001/trend', () => ({
+    json: { shopId: 'S41001', shopNm: '테스트매장1', from: '202510', to: '202609', months: [], total: { qty: 0, amt: 0, prevQty: 0, prevAmt: 0, growth: null } },
+  }))
+  api.on('GET', '/api/shops/S41001/profile', () => ({
+    json: {
+      shop: { shopId: 'S41001', shopNm: '테스트매장1', status: '정상', teamNm: '쉬즈4팀', repId: null, repNm: null, openDt: null, closeDt: null,
+              brands: [], addr: null, tel: null, found: true },
+      mix: { from: '202510', to: '202609', brand: '쉬즈미스', amt: 2_192_109_390, brandAvg: true, itemCount: 12,
+             salesTypes: [{ name: '세일', amt: 704_759_900, qty: 5571, share: 32.1, dsctRate: 1.6, brandShare: 23.7, shareDiff: 8.4 }],
+             items: [{ name: '자켓', amt: 587_999_900, qty: 3400, share: 26.8, dsctRate: 2.5 }] },
+    },
+  }))
+  await page.getByRole('button', { name: '테스트매장1' }).click()
+  const shop = page.locator('.trend-modal').last()
+  await expect(shop).toContainText('판매 구성')
+  await expect(shop.getByRole('row', { name: /세일/ })).toContainText('+8.4%p')
+  await expect(shop).toContainText('주력 아이템 (상위 1/12)')
+})
+
+test('문의·신고: 현재 화면과 조회 조건을 붙여 보내고, 관리자는 상태와 답변을 저장한다', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  const saved = { id: '20261002101500AB12', userId: 'TEST01', userName: '테스트', type: 'BUG', typeLabel: '오류', content: '숫자가 이상합니다',
+                  page: 'sale_dashboard', context: { page: '판매 현황', conditions: { ym: '202608' }, errors: [] }, status: 'NEW', statusLabel: '접수',
+                  answer: null, answerBy: null, answeredAt: null, createdAt: '2026-10-02 10:15', updatedAt: null, files: [] as unknown[] }
+  api.on('POST', '/api/feedback', () => ({ json: saved }))
+  await page.goto('/?view=sale_dashboard')
+  await expect(page.locator('.sd-kpi').first()).toBeVisible()
+  await page.getByRole('button', { name: '문의·신고' }).click()
+  const modal = page.locator('.feedback-modal')
+  const box = modal.getByRole('textbox', { name: '내용' })
+  expect((await box.boundingBox())!.height).toBeGreaterThanOrEqual(280) // 넓은 입력 칸
+  await box.fill('숫자가 이상합니다')
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex')
+  await modal.locator('input[type=file]').setInputFiles([
+    { name: 'a.png', mimeType: 'image/png', buffer: png }, { name: 'b.png', mimeType: 'image/png', buffer: png },
+    { name: 'c.png', mimeType: 'image/png', buffer: png }, { name: 'd.png', mimeType: 'image/png', buffer: png },
+  ])
+  await expect(modal.locator('.fb-thumb')).toHaveCount(3) // 최대 3개
+  await expect(modal).toContainText('최대 3개까지라 1개는 빼었습니다')
+  await modal.getByRole('button', { name: 'c.png 빼기' }).click()
+  await expect(modal.getByRole('button', { name: /이미지 첨부 \(2\/3\)/ })).toBeVisible()
+  await modal.getByRole('button', { name: '보내기' }).click()
+  await expect(modal).toContainText('접수되었습니다 (번호 20261002101500AB12)')
+  const body = api.find('POST', '/api/feedback')[0].body as { type: string; page: string; context: { page: string; conditions: Record<string, string> } }
+  expect(body.type).toBe('BUG')
+  expect(body.page).toBe('sale_dashboard')
+  expect(body.context.page).toBe('판매 현황')
+  expect(body.context.conditions.ym).toBe('202608')
+  expect((body as unknown as { images: { name: string; data: string }[] }).images.map((i) => i.name)).toEqual(['a.png', 'b.png'])
+  expect((body as unknown as { images: { data: string }[] }).images[0].data).toMatch(/^data:image\/png;base64,iVBORw0KGgo/)
+  await modal.getByRole('button', { name: '닫기' }).first().click()
+
+  api.on('GET', '/api/admin/feedback', () => ({ json: { rows: [saved], counts: { NEW: 1, DOING: 0, DONE: 0 }, storage: 'sqlite' } }))
+  api.on('PUT', '/api/admin/feedback/20261002101500AB12', () => ({ json: { ...saved, status: 'DONE', answer: '수정했습니다' } }))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
+  await page.locator('.side-nav').getByText('관리자').click()
+  await page.locator('.admin-tabs').getByRole('button', { name: '문의·신고' }).click()
+  const row = page.locator('.feedback-admin-row')
+  await expect(row).toContainText('숫자가 이상합니다')
+  await row.getByRole('combobox', { name: '상태' }).selectOption('DONE')
+  await row.getByPlaceholder(/답변/).fill('수정했습니다')
+  await row.getByRole('button', { name: '저장' }).click()
+  await expect.poll(() => api.find('PUT', '/api/admin/feedback/20261002101500AB12').length).toBe(1)
+  expect(api.find('PUT', '/api/admin/feedback/20261002101500AB12')[0].body).toEqual({ status: 'DONE', answer: '수정했습니다' })
+})

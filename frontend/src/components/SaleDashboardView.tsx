@@ -5,6 +5,8 @@ import { apiFetch, downloadFile } from '../api'
 import { fmtNum } from '../format'
 import ShopTrendModal, { fmtGrowth, growthClass } from './ShopTrendModal'
 import SaleProductsPanel from './SaleProductsPanel'
+import SeasonProgressPanel from './SeasonProgressPanel'
+import OnlineAlertPanel from './OnlineAlertPanel'
 import ProductInsightModal from './ProductInsightModal'
 
 type Kpi = {
@@ -97,7 +99,7 @@ function condOf(d: Dash): Cond {
   return { from: d.period.from, to: d.period.to, cmp: d.base.kind, cmpFrom: d.base.from, cmpTo: d.base.to, brand: d.brand ?? '' }
 }
 
-export default function SaleDashboardView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
+export default function SaleDashboardView({ onContextChange, canOnline = false }: { onContextChange?: (ctx: Record<string, string>) => void; canOnline?: boolean }) {
   const [draft, setDraft] = useState<Cond | null>(null)
   const [applied, setApplied] = useState<Cond | null>(null)
   const [data, setData] = useState<Dash | null>(null)
@@ -358,7 +360,9 @@ export default function SaleDashboardView({ onContextChange }: { onContextChange
           baseLbl={baseLbl} showGoal={false} onShop={openTrend} />
       </section>
 
+      {applied && <SeasonProgressPanel key={`${applied.to}|${applied.brand}`} ym={applied.to} brand={applied.brand} />}
       {applied && <SaleProductsPanel query={condQuery(applied)} onProduct={setProductCd} />}
+      {applied && canOnline && <OnlineAlertPanel query={condQuery(applied)} onProduct={setProductCd} />}
 
       {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
       {trendShop && (

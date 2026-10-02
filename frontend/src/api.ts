@@ -107,6 +107,14 @@ export class ApiError extends Error {
   }
 }
 
+// 문의·오류 신고에 자동으로 붙일 최근 오류 (요청 실패 · 화면 오류, 최근 8건)
+export type ClientError = { at: string; kind: 'api' | 'js'; status?: number; url?: string; message: string }
+export const recentErrors: ClientError[] = []
+export function recordClientError(e: Omit<ClientError, 'at'>) {
+  recentErrors.push({ at: new Date().toLocaleTimeString('ko-KR', { hour12: false }), ...e, message: String(e.message).slice(0, 300) })
+  if (recentErrors.length > 8) recentErrors.shift()
+}
+
 export const SESSION_EXPIRED_EVENT = 'opd:session-expired'
 export const SESSION_EXTENDED_EVENT = 'opd:session-extended'
 
@@ -123,6 +131,7 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
     const d = body.detail
     const message = typeof d === 'string' ? d : d?.message || `요청 실패 (${res.status})`
     const code = typeof d === 'object' && d?.code ? d.code : 'ERROR'
+    if (res.status !== 401) recordClientError({ kind: 'api', status: res.status, url: url.split('?')[0], message })
     if (res.status === 401 && !url.startsWith('/api/auth/login')) {
       window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: message }))
     }
@@ -180,6 +189,11 @@ export const api = {
   addFavorite: (text: string) => sendJson<{ favorites: Favorite[] }>('POST', '/api/chat/favorites', { text }),
   deleteFavorite: (id: number) => sendJson<{ favorites: Favorite[] }>('DELETE', `/api/chat/favorites/${id}`),
 
+  // 문의·오류 신고
+  sendFeedback: (body: { type: FeedbackType; content: string; page: string; context: Record<string, unknown>; images?: { name: string; data: string }[] }) =>
+    sendJson<Feedback>('POST', '/api/feedback', body),
+  myFeedback: () => getJson<{ rows: Feedback[]; limits?: FeedbackLimits }>('/api/feedback/mine'),
+
   // 관리자
   admin: {
     users: (q?: string) => getJson<AdminUsersResponse>(`/api/admin/users?${qs({ q })}`),
@@ -195,6 +209,9 @@ export const api = {
     restoreApply: (data: unknown, sections: string[]) =>
       sendJson<{ applied: string[]; failed: { item: string; reason: string }[] }>('POST', '/api/admin/restore/apply', { data, sections }),
     menuUsage: (days: number) => getJson<MenuUsage>(`/api/admin/menu-usage?${qs({ days })}`),
+    feedback: (status?: string) => getJson<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string }>(`/api/admin/feedback?${qs({ status })}`),
+    answerFeedback: (id: string, body: { status?: FeedbackStatus; answer?: string }) =>
+      sendJson<Feedback>('PUT', `/api/admin/feedback/${encodeURIComponent(id)}`, body),
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
     cleanupLogs: () => sendJson<{ deleted: string[]; freedBytes: number; keepDays: number }>('POST', '/api/admin/logs/cleanup'),
     refreshState: () => getJson<{ refresh: MvRefresh }>('/api/admin/data-status/refresh'),
@@ -283,7 +300,30 @@ export type DataStatus = {
   hasCostColumn: boolean
   behind: boolean
   refresh: MvRefresh
+  productMv?: { exists: boolean; staleness: string | null; mvMaxMonth: string | null }
+  prewarm?: { last: string | null; elapsedSec: number | null; scopes: number; error: string | null; reason?: string; running: boolean }
 }
+export type FeedbackType = 'BUG' | 'REQ' | 'ASK'
+export type FeedbackStatus = 'NEW' | 'DOING' | 'DONE'
+export type Feedback = {
+  id: string
+  userId: string
+  userName: string | null
+  type: FeedbackType
+  typeLabel: string
+  content: string
+  page: string | null
+  context: Record<string, unknown>
+  status: FeedbackStatus
+  statusLabel: string
+  answer: string | null
+  answerBy: string | null
+  answeredAt: string | null
+  createdAt: string
+  updatedAt: string | null
+  files: { no: number; name: string; type: string; size: number }[]
+}
+export type FeedbackLimits = { maxText: number; maxFiles: number; maxFileBytes: number; types: string[] }
 export type DataFreshness = { behind: boolean; mvMaxMonth: string | null; baseMaxMonth: string | null; lastRefresh: string | null; refreshing: boolean }
 export type MvRefresh = {
   status: 'idle' | 'running' | 'done' | 'error'

@@ -575,3 +575,61 @@ def options() -> dict:
         "sheetRows": SHEET_ROWS,
         "summaryDims": [{"key": k, "label": v[1]} for k, v in SUMMARY_DIMS.items()],
     }
+
+
+def shop_mix(shop_id: str, months: int = 12, teams: list[str] | None = None, top_items: int = 8) -> dict:
+    """매장 정보 팝업: 최근 N개월(지난달까지) 판매형태(행사/정상/세일…) 구성과 주력 아이템, 같은 브랜드 전체 판매형태 비중.
+    매장 하나는 (판매년월, 매장코드) 인덱스로 12개월 0.1초 수준. 브랜드 평균은 상품 사전 집계 뷰가 최신일 때만."""
+    from . import sale_dashboard as sd
+    from . import sale_products as sp
+
+    shop_id = (shop_id or "").strip().upper()
+    last = _shift_ym(date.today().strftime("%Y%m"), -1)
+    month_list = _month_list(_shift_ym(last, -(months - 1)), last)
+    binds = {f"m{i}": ym for i, ym in enumerate(month_list)}
+    team_sql = ""
+    if teams is not None:
+        tb = {f"t{i}": t for i, t in enumerate(teams or ["-"])}
+        team_sql = f" AND TEAM_CD IN ({', '.join(':' + k for k in tb)})"
+        binds.update(tb)
+    rows = db.query(
+        f"""SELECT GROUPING_ID(ITEM_NM, DSCT_CLSBY_NM, TEAM_CD), ITEM_NM, DSCT_CLSBY_NM, TEAM_CD,
+                   NVL(SUM(REAL_SALE_AMT), 0), NVL(SUM(QTY), 0), NVL(SUM(DSCT_AMT), 0)
+              FROM T_CLOSE_SALE_BASE
+             WHERE MAKE_YYMM IN ({', '.join(':' + k for k in binds if k.startswith('m'))}) AND SHOP_ID = :shop{team_sql}
+             GROUP BY GROUPING SETS ((ITEM_NM), (DSCT_CLSBY_NM), (TEAM_CD))""", {**binds, "shop": shop_id})[1]
+    items, types, team_amt = [], [], {}
+    for gid, item, typ, team, amt, qty, dsct in rows:
+        row = {"amt": int(amt), "qty": int(qty), "dsctRate": sd._dsct_rate(int(dsct), int(amt))}
+        if gid == 3:      # ITEM_NM
+            items.append({"name": item or "(없음)", **row})
+        elif gid == 5:    # DSCT_CLSBY_NM
+            types.append({"name": typ or "(없음)", **row})
+        else:             # TEAM_CD
+            team_amt[team] = int(amt)
+    tot = sum(t["amt"] for t in types)
+    for x in items + types:
+        x["share"] = round(x["amt"] * 100 / tot, 1) if tot else None
+    items.sort(key=lambda x: x["amt"], reverse=True)
+    types.sort(key=lambda x: x["amt"], reverse=True)
+    brand = sd.brand_of(max(team_amt, key=team_amt.get)) if team_amt else None
+    brand_types = None
+    st = sp.mv_state()
+    if brand and tot and st["usable"] and st["mv_max"] and last <= st["mv_max"]:
+        bteams = sd.brand_teams().get(brand) or []
+        if teams is not None:
+            bteams = [t for t in bteams if t in set(teams)]
+        if bteams:
+            mb = {f"m{i}": ym for i, ym in enumerate(month_list)}
+            tb2 = {f"b{i}": t for i, t in enumerate(bteams)}
+            brows = db.query(f"""SELECT DSCT_CLSBY_NM, SUM(TOTAL_SALE_AMT) FROM {sp.MV_NAME}
+                                  WHERE MAKE_YYMM IN ({', '.join(':' + k for k in mb)}) AND TEAM_CD IN ({', '.join(':' + k for k in tb2)})
+                                  GROUP BY DSCT_CLSBY_NM""", {**mb, **tb2})[1]
+            btot = sum(int(a or 0) for _, a in brows)
+            brand_types = {(n or "(없음)"): round(int(a or 0) * 100 / btot, 1) for n, a in brows} if btot else None
+    if brand_types:
+        for t in types:
+            t["brandShare"] = brand_types.get(t["name"], 0.0)
+            t["shareDiff"] = round(t["share"] - t["brandShare"], 1) if t["share"] is not None else None
+    return {"from": month_list[0], "to": last, "brand": brand, "amt": tot, "salesTypes": types, "items": items[:top_items],
+            "itemCount": len(items), "brandAvg": brand_types is not None}
