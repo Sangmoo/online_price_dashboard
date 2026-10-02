@@ -187,8 +187,8 @@ def test_insight_tools_registry_and_permissions(monkeypatch):
 
     monkeypatch.setattr(ai_tools, "snapshot", lambda: {"builtin": {}, "custom": []})
     names = lambda me: sorted(t["name"] for t in ct.tools_for(me) if t["name"] in ct._INSIGHT_TOOL_NAMES)  # noqa: E731
-    assert names({"pages": ["sale_dashboard", "dashboard"]}) == ["find_online_discount_alerts", "get_product_insight", "get_season_progress"]
-    assert names({"pages": ["sale_dashboard"]}) == ["get_product_insight", "get_season_progress"]
+    assert names({"pages": ["sale_dashboard", "dashboard"]}) == ["find_online_discount_alerts", "find_sale_heavy_shops", "get_product_insight", "get_season_progress"]
+    assert names({"pages": ["sale_dashboard"]}) == ["find_sale_heavy_shops", "get_product_insight", "get_season_progress"]
     assert names({"pages": ["detail"]}) == ["get_product_insight"]
     assert names({"pages": ["invt_plan"]}) == []
     with pytest.raises(ct.ToolInputError, match="모두 있어야"):

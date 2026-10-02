@@ -172,3 +172,34 @@ def test_ai_tool_stats_from_log(tmp_path, monkeypatch):
     ss_ = next(t for t in d["tools"] if t["name"] == "search_sales")
     assert ss_["failures"] == 1 and ss_["avgSec"] is None
     assert "get_season_progress" in [u["name"] for u in d["unusedTools"]]
+
+
+def test_feedback_history_and_lead_time(local_fb, monkeypatch):
+    from app import audit
+
+    clock = {"fb": "20261001090000", "audit": "20261001090000"}
+    monkeypatch.setattr(fb, "_now", lambda: clock["fb"])
+    logged = []
+
+    def record(admin, action, target, before=None, after=None, summary=None):  # 변경 이력 저장소 대신 (바뀐 게 없으면 안 남김)
+        if before != after:
+            d = clock["audit"]
+            logged.insert(0, {"ts": f"{d[:4]}-{d[4:6]}-{d[6:8]} {d[8:10]}:{d[10:12]}", "adminId": admin["id"], "action": action,
+                              "target": target, "before": before, "after": after})
+    monkeypatch.setattr(audit, "record", record)
+    monkeypatch.setattr(audit, "search", lambda action=None, q=None, days=90, limit=300: [r for r in logged if r["action"] == action])
+    user, admin = {"id": "u1", "name": "가"}, {"id": "a1", "name": "관리"}
+    f = fb.create(user, {"type": "BUG", "content": "오류"})
+    waiting = fb.create(user, {"type": "ASK", "content": "대기 중"})
+    clock.update(fb="20261001150000", audit="20261001150000")
+    fb.answer(admin, f["id"], {"status": "DOING"})
+    clock.update(fb="20261002090000", audit="20261002090000")
+    fb.answer(admin, f["id"], {"status": "DONE", "answer": "고쳤습니다"})
+    fb.answer(admin, f["id"], {"status": "DONE", "answer": "고쳤습니다"})  # 바뀐 게 없으면 이력 안 남김
+    d = fb.list_all()
+    r = next(x for x in d["rows"] if x["id"] == f["id"])
+    assert [(h["from"], h["to"], h["answered"]) for h in r["history"]] == [("NEW", "DOING", False), ("DOING", "DONE", True)]
+    assert r["doneAt"] == "2026-10-02 09:00" and r["leadHours"] == 24.0 and r["ageHours"] is None
+    w = next(x for x in d["rows"] if x["id"] == waiting["id"])
+    assert w["history"] == [] and w["ageHours"] is not None and w["leadHours"] is None
+    assert d["leadStats"]["doneCount"] == 1 and d["leadStats"]["avgHours"] == 24.0

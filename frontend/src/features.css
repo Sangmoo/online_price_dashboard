@@ -442,3 +442,8 @@
 .season-items-head { margin: 4px 0; gap: 8px; align-items: center; }
 .table tr.me-row td { background: color-mix(in srgb, var(--primary) 10%, transparent); }
 .fb-keep .num-input { width: 72px; text-align: right; } .fb-keep .row { gap: 6px; align-items: center; }
+.fb-lead { font-weight: 600; color: var(--text-2); }
+.fb-lead.late { color: var(--danger); }
+.fb-history { font-size: 12.5px; }
+.fb-history summary { cursor: pointer; color: var(--muted); }
+.fb-history ol { margin: 4px 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 2px; }

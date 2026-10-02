@@ -196,9 +196,9 @@ export class MockApi {
 
 /** 테스트마다 가짜 API 를 설치하고, 끝나면 정의되지 않은 API 호출이 없었는지 확인한다. */
 export const test = base.extend<{ mockApi: (user: ReturnType<typeof makeUser> | null) => Promise<MockApi> }>({
-  mockApi: async ({ page }, use) => {
+  mockApi: async ({ page }, provide) => {
     const made: MockApi[] = []
-    await use(async (user) => {
+    await provide(async (user) => {
       const m = new MockApi(user)
       await m.install(page)
       made.push(m)

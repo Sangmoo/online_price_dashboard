@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, RefreshCw, Save } from 'lucide-react'
 import { fmtNum } from '../../format'
-import { api, type Feedback, type FeedbackStatus } from '../../api'
+import { api, type Feedback, type FeedbackLeadStats, type FeedbackStatus } from '../../api'
 import { FeedbackImages } from '../FeedbackModal'
 
 type Notify = (text: string, error?: boolean) => void
+
+/** 시간 → '3시간' / '2.5일' */
+export const fmtHours = (h: number | null | undefined) =>
+  h === null || h === undefined ? '-' : h < 24 ? `${h < 1 ? '1시간 미만' : `${Math.round(h)}시간`}` : `${(h / 24).toFixed(1)}일`
 const STATUS: { key: FeedbackStatus; label: string }[] = [
   { key: 'NEW', label: '접수' },
   { key: 'DOING', label: '처리 중' },
@@ -14,7 +18,7 @@ const STATUS: { key: FeedbackStatus; label: string }[] = [
 /** 관리자 › 문의·신고: 사용자가 화면에서 남긴 오류·요청·문의와 그때의 화면·조회 조건·최근 오류. 상태와 답변을 남긴다. */
 export default function FeedbackTab({ notify, onChange }: { notify: Notify; onChange?: () => void }) {
   const [filter, setFilter] = useState<FeedbackStatus | ''>('')
-  const [data, setData] = useState<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string; images?: { count: number; bytes: number } } | null>(null)
+  const [data, setData] = useState<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string; images?: { count: number; bytes: number }; leadStats?: FeedbackLeadStats } | null>(null)
   const [keep, setKeep] = useState<number | null>(null)
   const [keepSaved, setKeepSaved] = useState<number | null>(null)
   useEffect(() => {
@@ -67,6 +71,15 @@ export default function FeedbackTab({ notify, onChange }: { notify: Notify; onCh
         </div>
         <button className="icon-btn bordered" onClick={load} title="새로고침"><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
       </div>
+      {data.leadStats && (
+        <div className="summary-pills">
+          <div className="pill" title="완료된 문의: 접수부터 마지막 완료까지"><span>평균 처리 시간</span><b>{fmtHours(data.leadStats.avgHours)}</b>
+            <span className="muted">완료 {data.leadStats.doneCount}건</span></div>
+          <div className="pill"><span>처리 시간 중앙값</span><b>{fmtHours(data.leadStats.medianHours)}</b></div>
+          <div className={`pill ${data.leadStats.oldestOpenHours !== null && data.leadStats.oldestOpenHours >= 72 ? 'warn-pill' : ''}`}>
+            <span>가장 오래 기다리는 문의</span><b>{fmtHours(data.leadStats.oldestOpenHours)}</b></div>
+        </div>
+      )}
       <div className="setting-row fb-keep">
         <div>
           <div className="strong">첨부 이미지 보관 기간</div>
@@ -121,6 +134,8 @@ function FeedbackRow({ f, notify, onSaved }: { f: Feedback; notify: Notify; onSa
           <span className="strong">{f.typeLabel}</span>
           <span>{f.userName ?? f.userId} <span className="mono">{f.userId}</span></span>
           <span>{f.createdAt}</span>
+          {f.leadHours !== null && f.leadHours !== undefined && <span className="fb-lead">처리 {fmtHours(f.leadHours)}</span>}
+          {f.ageHours !== null && f.ageHours !== undefined && <span className={`fb-lead ${f.ageHours >= 72 ? 'late' : ''}`}>대기 {fmtHours(f.ageHours)}</span>}
           <span>화면: {(f.context as { page?: string }).page ?? f.page ?? '-'}</span>
         </div>
         <div className="content">{f.content}</div>
@@ -133,6 +148,21 @@ function FeedbackRow({ f, notify, onSaved }: { f: Feedback; notify: Notify; onSa
           <pre>{JSON.stringify(f.context, null, 2)}</pre>
         </details>
         {f.answeredAt && <div className="muted small">답변 {f.answerBy} · {f.answeredAt}</div>}
+        {f.history && f.history.length > 0 && (
+          <details className="fb-history">
+            <summary>처리 이력 {f.history.length}건</summary>
+            <ol>
+              <li><span className="muted">{f.createdAt}</span> 접수 · {f.userName ?? f.userId}</li>
+              {f.history.map((h, i) => (
+                <li key={i}>
+                  <span className="muted">{h.at}</span> {h.by} ·{' '}
+                  {h.from !== h.to ? <>{h.fromLabel} → <b>{h.toLabel}</b></> : <>{h.toLabel}</>}
+                  {h.answered && ' · 답변 작성/수정'}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
       </div>
       <div className="answer-box">
         <select className="input select small" value={status} onChange={(e) => setStatus(e.target.value as FeedbackStatus)} aria-label="상태">

@@ -44,6 +44,26 @@ TOOLS_SALE: list[dict[str, Any]] = [
         "eager_input_streaming": True,
     },
 ]
+TOOLS_SALE.append({
+    "name": "find_sale_heavy_shops",
+    "description": (
+        "판매 현황 화면의 '세일 비중이 높은 매장'과 같은 계산: 매장 실판금액 중 세일 판매(판매형태에 '세일') 비중이 같은 브랜드 전체 비중보다 "
+        "크게 높은 매장 상위 15개와 비교 기간 대비 변화. '세일 비중 높은 매장 어디야?', '할인 판매에 기대는 매장' 같은 질문에 씁니다. "
+        "대상: 기간 월평균 실판금액 1천만원 이상, 폐점 제외. 행사·특판 전용 매장((행)·(특)·사내행사)은 include_event=true 일 때만 포함. "
+        "행사 판매는 세일로 세지 않습니다."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ym": {"type": "string", "description": "기간 끝 월 YYYYMM (생략 시 최근 마감 월)"},
+            "ym_from": {"type": "string", "description": "기간 시작 월 YYYYMM (생략 시 ym 한 달, 최대 12개월)"},
+            "brand": {"type": "string", "description": "브랜드 하나 (생략 시 전체)"},
+            "include_event": {"type": "boolean", "description": "행사·특판 전용 매장 포함 (기본 false)"},
+        },
+        "additionalProperties": False,
+    },
+    "eager_input_streaming": True,
+})
 TOOLS_ALERT: list[dict[str, Any]] = [
     {
         "name": "find_online_discount_alerts",
@@ -93,7 +113,7 @@ TOOLS_PRODUCT: list[dict[str, Any]] = [
     },
 ]
 TOOLS = TOOLS_SALE + TOOLS_ALERT + TOOLS_PRODUCT
-TOOL_LABELS = {"get_season_progress": "시즌 판매 진척", "find_online_discount_alerts": "온라인 할인 주의 상품",
+TOOL_LABELS = {"get_season_progress": "시즌 판매 진척", "find_sale_heavy_shops": "세일 비중 높은 매장", "find_online_discount_alerts": "온라인 할인 주의 상품",
                "get_product_insight": "상품 종합"}
 _YM = re.compile(r"^\d{4}-?(0[1-9]|1[0-2])$")
 _CD = re.compile(r"^[A-Z0-9_-]{2,20}$")
@@ -130,6 +150,8 @@ def run(name: str, inp: dict, *, allowed: list[str] | None, teams: list[str] | N
     try:
         if name == "get_season_progress":
             return _season(inp, allowed)
+        if name == "find_sale_heavy_shops":
+            return _heavy(inp, allowed)
         if name == "find_online_discount_alerts":
             return _alerts(inp, allowed)
         if name == "get_product_insight":
@@ -171,6 +193,24 @@ def _season(inp: dict, allowed: list[str] | None) -> dict:
         return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in cols], "rows": it}}
     cols = [("ym", "판매년월"), ("prevYm", "전년 같은 달"), ("amt", "월 실판금액"), ("cum", "누적"), ("prevAmt", "전년 월 실판금액"),
             ("prevCum", "전년 누적")]
+    return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in cols], "rows": rows}}
+
+
+def _heavy(inp: dict, allowed: list[str] | None) -> dict:
+    from . import sale_mix
+
+    ev = inp.get("include_event")
+    if ev is not None and not isinstance(ev, bool):
+        raise InsightToolError("include_event 는 true/false 입니다.")
+    d = sale_mix.heavy_shops(_ym(inp, "ym"), _ym(inp, "ym_from"), None, None, None, _text(inp, "brand"), allowed,
+                             include_event=bool(ev))
+    keys = ("shopId", "shopNm", "team", "brand", "amt", "share", "brandShare", "diff", "baseShare", "shareChange")
+    rows = [{k: s[k] for k in keys} for s in d["shops"]]
+    result = {"period": d["period"], "compare": f"{d['baseKind']} {d['base']}", "rule": d["rule"],
+              "basis": "share=매장 세일 비중(%), brandShare=같은 브랜드 전체 비중, diff=차이(%p), baseShare·shareChange=비교 기간 비중·변화(%p)",
+              "candidateCount": d["candidateCount"], "brandAverages": d["brandAverages"], "shops": rows}
+    cols = [("shopNm", "매장"), ("team", "팀"), ("amt", "실판금액"), ("share", "세일 비중(%)"), ("brandShare", "브랜드 평균(%)"),
+            ("diff", "차이(%p)"), ("baseShare", "비교 기간(%)"), ("shareChange", "변화(%p)")]
     return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in cols], "rows": rows}}
 
 

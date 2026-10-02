@@ -18,11 +18,11 @@ def test_tools_follow_menu_permissions():
     assert _names([]) == set()
     assert _names(["dashboard"]) == {"list_collection_dates", "aggregate_prices", "search_price_rows", "get_product_insight"}
     assert _names(["sale_monthly"]) == {"get_sales_dashboard", "sum_sales_shop_month", "aggregate_sales", "search_sales", "search_shops",
-                                        "get_season_progress", "get_product_insight"}
+                                        "get_season_progress", "get_product_insight", "find_sale_heavy_shops"}
     assert _names(["sale_dashboard"]) == {"get_sales_dashboard", "sum_sales_shop_month", "search_shops",  # 판매 행 조회 도구는 없음
-                                          "get_season_progress", "get_product_insight"}
+                                          "get_season_progress", "get_product_insight", "find_sale_heavy_shops"}
     assert _names(["invt_plan"]) == {"aggregate_invt_plans", "search_invt_plans", "search_shops"}
-    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 13  # 판매 + 온라인 가격이면 온라인 할인 주의 도구까지
+    assert len(_names(["detail", "sale_monthly", "invt_plan"])) == 14  # 판매 + 온라인 가격이면 온라인 할인 주의 도구까지
 
 
 @pytest.mark.parametrize("name,inp", [

@@ -429,7 +429,7 @@ const ARG_LABELS: Record<string, string> = {
   shop_ids: '매장코드', shop_nm: '매장명', team_cd: '팀', team: '팀', rep: '담당 영업직원', include_closed: '폐점 포함',
   plan_yys: '기획년도', seasons: '시즌', prdt_grp_nm: '품군', item_nm: '아이템', prdt_cd: '상품코드', date_from: '시작일', date_to: '끝일',
   mall_nm: '사이트', title_contains: '제목 포함', min_dc_rate: '최소 할인율', max_dc_rate: '최대 할인율', q: '검색어',
-  plan_yy: '기획년도', season: '시즌', only_alerts: '주의 상품만', parts: '조회 부분', by_item: '아이템별',
+  plan_yy: '기획년도', season: '시즌', only_alerts: '주의 상품만', parts: '조회 부분', by_item: '아이템별', include_event: '행사·특판 매장 포함',
 }
 const CMP_LABELS: Record<string, string> = { yoy: '전년 동기', prev: '직전 기간', custom: '직접 선택' }
 

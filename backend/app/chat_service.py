@@ -54,6 +54,7 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - 시즌이 얼마나 팔렸는지·전년 같은 시즌 대비·진척률 질문은 get_season_progress 를 씁니다(화면의 시즌 판매 진척과 같은 계산,
   같은 시점 = 전년 같은 달까지 누적). 직접 누적을 계산하지 말고 도구 결과를 그대로 씁니다.
 - 품번 하나의 온라인 가격과 매장 판매·많이 팔린 매장은 get_product_insight 한 번으로 조회합니다.
+- 세일 비중이 브랜드 평균보다 높은 매장(할인 판매 의존 매장)은 find_sale_heavy_shops 를 씁니다.
 - 잘 팔리는 상품의 온라인 할인 동향(온라인 할인율이 오른 상위 상품)은 find_online_discount_alerts 를 씁니다
   (판매 메뉴와 온라인 가격 메뉴 권한이 모두 있을 때만). 매장 판매 기간과 온라인 수집 기간(오늘 기준 최근 7일 vs 그 전 4주)이 다름을 밝힙니다.
 - 매출은 '실판금액 합계'를 기준으로 합니다. 할인율·원가율처럼 도구에 없는 비율은 반환된 합계로 계산하고 계산식을 밝힙니다.
@@ -437,6 +438,8 @@ def _table_title(name: str, inp: dict) -> str:
     if name == "get_season_progress":
         s = f"{inp['plan_yy']} {inp['season']}" if inp.get("plan_yy") and inp.get("season") else "기본 시즌"
         return f"시즌 판매 진척 · {s} · {inp.get('ym') or '최근 마감 월'}{' · ' + inp['brand'] if inp.get('brand') else ''}"
+    if name == "find_sale_heavy_shops":
+        return f"세일 비중 높은 매장 · {inp.get('ym') or '최근 마감 월'}{' · ' + inp['brand'] if inp.get('brand') else ''}"
     if name == "find_online_discount_alerts":
         ym = inp.get("ym") or "최근 마감 월"
         return f"온라인 할인 주의 상품 · 매장 {inp['ym_from'] + '~' if inp.get('ym_from') else ''}{ym}{' · ' + inp['brand'] if inp.get('brand') else ''}"

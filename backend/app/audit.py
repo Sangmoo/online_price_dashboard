@@ -32,6 +32,7 @@ ACTIONS = {
     "SESSION_KILL": "세션 강제 로그아웃",
     "MV_REFRESH": "사전 집계 뷰 갱신",
     "SETTINGS_RESTORE": "설정 복원",
+    "FEEDBACK_UPDATE": "문의·신고 처리",
 }
 FIELD_LABELS = {
     "role": "권한", "pages": "메뉴 권한", "ai_enabled": "AI 사용", "daily_questions": "일일 질문 한도",
@@ -40,7 +41,7 @@ FIELD_LABELS = {
     "model": "모델", "effort": "effort", "auto_model": "모델 자동 선택", "simple_model": "단순 조회 모델", "enabled": "사용", "extraDesc": "추가 안내", "description": "설명",
     "label": "표시 이름", "page": "연결 메뉴", "sql": "SQL", "params": "입력값", "maxRows": "최대 행",
     "lastRefresh": "마지막 갱신", "staleness": "상태", "rows": "행 수", "maxMonth": "최신 월",
-    "log_keep_days": "로그 보관(일)", "feedback_img_keep_months": "문의 이미지 보관(개월)",
+    "status": "상태", "answer": "답변", "log_keep_days": "로그 보관(일)", "feedback_img_keep_months": "문의 이미지 보관(개월)",
 }
 
 SQLITE_SCHEMA = """

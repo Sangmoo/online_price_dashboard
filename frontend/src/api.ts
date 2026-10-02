@@ -213,7 +213,7 @@ export const api = {
       sendJson<{ applied: string[]; failed: { item: string; reason: string }[] }>('POST', '/api/admin/restore/apply', { data, sections }),
     menuUsage: (days: number) => getJson<MenuUsage>(`/api/admin/menu-usage?${qs({ days })}`),
     aiToolStats: (days: number) => getJson<AiToolStats>(`/api/admin/ai-tool-stats?${qs({ days })}`),
-    feedback: (status?: string) => getJson<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string; images?: { count: number; bytes: number } }>(`/api/admin/feedback?${qs({ status })}`),
+    feedback: (status?: string) => getJson<{ rows: Feedback[]; counts: Record<FeedbackStatus, number>; storage: string; images?: { count: number; bytes: number }; leadStats?: FeedbackLeadStats }>(`/api/admin/feedback?${qs({ status })}`),
     answerFeedback: (id: string, body: { status?: FeedbackStatus; answer?: string }) =>
       sendJson<Feedback>('PUT', `/api/admin/feedback/${encodeURIComponent(id)}`, body),
     serverStatus: (days: number) => getJson<ServerStatus>(`/api/admin/server-status?${qs({ days })}`),
@@ -341,7 +341,12 @@ export type Feedback = {
   createdAt: string
   updatedAt: string | null
   files: { no: number; name: string; type: string; size: number }[]
+  history?: { at: string; by: string; from: FeedbackStatus | null; to: FeedbackStatus | null; fromLabel: string | null; toLabel: string | null; answered: boolean }[]
+  doneAt?: string | null
+  leadHours?: number | null
+  ageHours?: number | null
 }
+export type FeedbackLeadStats = { doneCount: number; avgHours: number | null; medianHours: number | null; oldestOpenHours: number | null }
 export type FeedbackLimits = { maxText: number; maxFiles: number; maxFileBytes: number; types: string[] }
 export type DataFreshness = { behind: boolean; mvMaxMonth: string | null; baseMaxMonth: string | null; lastRefresh: string | null; refreshing: boolean }
 export type MvRefresh = {

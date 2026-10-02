@@ -370,11 +370,17 @@ def badge(me: dict) -> dict:
 
 def list_all(status: str | None = None) -> dict:
     every = _select()
+    try:
+        hist = _histories()
+    except Exception:  # noqa: BLE001 - 이력을 못 읽어도 목록은 보여준다
+        _log.exception("문의 처리 이력 조회 실패")
+        hist = {}
+    _with_history(every, hist, datetime.now())
     counts = {k: 0 for k in STATUSES}
     for r in every:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     rows = [r for r in every if r["status"] == status] if status in STATUSES else every
-    return {"rows": rows, "counts": counts, "storage": backend_name(), "images": image_stats()}
+    return {"rows": rows, "counts": counts, "storage": backend_name(), "images": image_stats(), "leadStats": _lead_stats(every)}
 
 
 def open_count() -> int:
@@ -409,7 +415,56 @@ def answer(admin: dict, fb_id: str, body: dict) -> dict:
         _sqlite()
         store.execute(f"UPDATE feedback SET status = :st, answer = :ans, upt_day = :now{set_ans.lower()} WHERE fb_id = :id", p)
     _log.info("문의·신고 처리 %s by=%s status=%s answered=%s", fb_id, admin["id"], status, answered)
+    from . import audit
+
+    # 처리 이력 (관리자 변경 이력 테이블에 남긴다 — 별도 테이블 없이 누가 언제 상태·답변을 바꿨는지)
+    audit.record(admin, HIST_ACTION, fb_id, {"status": cur["status"], "answer": cur["answer"]}, {"status": status, "answer": ans})
     return get(fb_id)
+
+
+HIST_ACTION = "FEEDBACK_UPDATE"
+
+
+def _hours(a: str | None, b: str | None) -> float | None:
+    """'YYYY-MM-DD HH:MM' 두 시각 차이(시간)"""
+    if not a or not b:
+        return None
+    fmt = "%Y-%m-%d %H:%M"
+    return round((datetime.strptime(b[:16], fmt) - datetime.strptime(a[:16], fmt)).total_seconds() / 3600, 1)
+
+
+def _histories() -> dict[str, list[dict]]:
+    """문의번호 → 처리 이력 (오래된 순). 변경 이력에서 읽는다 (최근 1,000건)."""
+    from . import audit
+
+    out: dict[str, list[dict]] = {}
+    for r in audit.search(action=HIST_ACTION, days=3650, limit=1000):
+        b, a = r.get("before") or {}, r.get("after") or {}
+        out.setdefault(r["target"], []).append({
+            "at": r["ts"], "by": r["adminId"], "from": b.get("status"), "to": a.get("status"),
+            "fromLabel": STATUSES.get(b.get("status"), b.get("status")), "toLabel": STATUSES.get(a.get("status"), a.get("status")),
+            "answered": (a.get("answer") or None) != (b.get("answer") or None)})
+    for v in out.values():
+        v.sort(key=lambda h: h["at"] or "")
+    return out
+
+
+def _with_history(rows: list[dict], hist: dict[str, list[dict]], now: datetime) -> None:
+    for r in rows:
+        h = hist.get(r["id"], [])
+        r["history"] = h
+        done = [x["at"] for x in h if x["to"] == "DONE"]
+        r["doneAt"] = done[-1] if r["status"] == "DONE" and done else None   # 다시 열렸다 닫힌 경우 마지막 완료
+        r["leadHours"] = _hours(r["createdAt"], r["doneAt"]) if r["doneAt"] else None
+        r["ageHours"] = _hours(r["createdAt"], now.strftime("%Y-%m-%d %H:%M")) if r["status"] != "DONE" else None
+
+
+def _lead_stats(rows: list[dict]) -> dict:
+    leads = sorted(r["leadHours"] for r in rows if r.get("leadHours") is not None)
+    ages = [r["ageHours"] for r in rows if r.get("ageHours") is not None]
+    return {"doneCount": len(leads), "avgHours": round(sum(leads) / len(leads), 1) if leads else None,
+            "medianHours": leads[len(leads) // 2] if leads else None,
+            "oldestOpenHours": max(ages) if ages else None}
 
 
 def _migrate() -> None:
