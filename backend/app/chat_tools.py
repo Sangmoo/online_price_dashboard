@@ -21,6 +21,7 @@ GROUP_COLS = {
     "PRDT_CD": "PRDT_CD",
     "MALL_NM": "MALL_NM",
     "NAVER_PAY_SELL_NO": "NAVER_PAY_SELL_NO",
+    "SHOP_ID": "SHOP_ID",
     "TITLE": "TITLE",
 }
 METRICS = {
@@ -37,13 +38,13 @@ METRICS = {
     "MIN_DC_RATE": f"MIN({DC_RATE_SQL})",
 }
 METRIC_LABELS = {
-    "DT": "수집일", "PRDT_CD": "상품코드", "MALL_NM": "사이트명", "NAVER_PAY_SELL_NO": "판매자ID", "TITLE": "TITLE",
+    "DT": "수집일", "PRDT_CD": "상품코드", "MALL_NM": "사이트명", "NAVER_PAY_SELL_NO": "판매자ID", "SHOP_ID": "매장코드", "TITLE": "TITLE",
     "ROW_CNT": "건수", "PRDT_CNT": "상품수", "MALL_CNT": "사이트수", "SELLER_CNT": "판매자수",
     "AVG_PRICE": "평균 기준가", "AVG_DC_PRICE": "평균 할인가", "MIN_DC_PRICE": "최저 할인가",
     "MAX_DC_PRICE": "최고 할인가", "AVG_DC_RATE": "평균 할인율(%)", "MAX_DC_RATE": "최대 할인율(%)",
     "MIN_DC_RATE": "최소 할인율(%)",
 }
-ROW_COLS = [k for k, _ in ds.COLUMNS]
+ROW_COLS = [k for k, _ in ds.COLUMNS if k != "SHOP_NM"]   # 매장명은 화면에서 T_SHOP 으로 붙이는 값 (원본 열 아님)
 ROW_LABELS = dict(ds.COLUMNS)
 
 _FILTER_PROPS = {
@@ -54,6 +55,8 @@ _FILTER_PROPS = {
     "title_contains": {"type": "string", "description": "TITLE(상품명) 부분 일치"},
     "rmk_contains": {"type": "string", "description": "매장정보(RMK) 부분 일치"},
     "seller_id": {"type": "string", "description": "판매자ID(NAVER_PAY_SELL_NO) 정확히 일치"},
+    "shop_ids": {"type": "array", "items": {"type": "string"},
+                 "description": "매장코드(SHOP_ID) 목록 IN 조건 (최대 200개). '-' 를 넣으면 매장코드 없는(판매처 매장 연결 전) 행"},
     "min_dc_rate": {"type": "number", "description": "할인율(%) 하한 (이상)"},
     "max_dc_rate": {"type": "number", "description": "할인율(%) 상한 (이하)"},
     "min_dc_price": {"type": "number", "description": "사이트 할인가 하한"},
@@ -97,7 +100,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "search_price_rows",
         "description": (
             "필터 조건에 맞는 개별 수집 행(원본 데이터)을 조회합니다. 반환 컬럼: ONLINE_ID, 수집일, 상품코드, 기준가, "
-            "사이트_할인가, 할인율(%), 사이트명, TITLE, 매장정보, 수집시간, 판매자ID, URL. total_matched 에 전체 일치 건수가 포함됩니다."
+            "사이트_할인가, 할인율(%), 사이트명, TITLE, 매장정보, 수집시간, 판매자ID, 매장코드, URL. total_matched 에 전체 일치 건수가 포함됩니다."
         ),
         "input_schema": {
             "type": "object",
@@ -166,6 +169,22 @@ def _build_where(inp: dict) -> tuple[str, dict]:
     if (v := text("seller_id")) is not None:
         conds.append("NAVER_PAY_SELL_NO = :seller")
         p["seller"] = v
+    if (v := inp.get("shop_ids")) not in (None, []):
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ToolInputError("shop_ids 는 문자열 목록이어야 합니다.")
+        try:
+            ids = ds.parse_shops(",".join(v))
+        except ValueError as ex:
+            raise ToolInputError(str(ex))
+        real = [x for x in ids if x != ds.NO_SHOP]
+        ors = []
+        if real:
+            ors.append("SHOP_ID IN (" + ", ".join(f":shop{i}" for i in range(len(real))) + ")")
+            p.update({f"shop{i}": x for i, x in enumerate(real)})
+        if ds.NO_SHOP in ids:
+            ors.append("SHOP_ID IS NULL")
+        if ors:
+            conds.append("(" + " OR ".join(ors) + ")")
     if (v := number("min_dc_rate")) is not None:
         conds.append(f"{DC_RATE_SQL} >= :min_rate")
         p["min_rate"] = v
@@ -255,7 +274,7 @@ def _run_price_tool(name: str, inp: Any) -> dict:
         sql = f"""
             SELECT * FROM (
                 SELECT ONLINE_ID, DT, PRDT_CD, PRICE, DC_PRICE, {DC_RATE_SQL} AS DC_RATE, MALL_NM, TITLE,
-                       RMK, INS_DAY, NAVER_PAY_SELL_NO, URL
+                       RMK, INS_DAY, NAVER_PAY_SELL_NO, SHOP_ID, URL
                   FROM {TABLE} WHERE {where}
                  ORDER BY {order_by} {_order_dir(inp)} NULLS LAST
             ) WHERE ROWNUM <= {limit}

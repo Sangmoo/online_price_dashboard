@@ -80,6 +80,17 @@
 }
 .rate-range:focus-within { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-soft); }
 .rate-range input { width: 48px; border: 0; outline: 0; background: transparent; text-align: center; color: var(--text); }
+.alert.success { display: flex; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); color: var(--success); }
+.alert.success .clear { margin-left: auto; border: 0; background: transparent; color: inherit; cursor: pointer; display: grid; place-items: center; }
+.shop-filter {
+  display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 4px 0 10px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-2); color: var(--muted); min-width: 0;
+}
+.shop-filter:focus-within { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-soft); }
+.shop-filter input { width: 170px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
+.shop-filter .clear { border: 0; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; padding: 2px; }
+.shop-pick { height: 28px; max-width: 92px; border: 0; border-left: 1px solid var(--border); background: transparent; color: var(--text-2); font-size: 12.5px; cursor: pointer; outline: 0; }
+@media (max-width: 640px) { .shop-filter { flex: 1 1 100%; } .shop-filter input { flex: 1; width: auto; } }
 .toolbar-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
 .toolbar-actions .btn.success { margin-left: 0; }
 .btn.ghost { background: var(--surface); border-color: var(--border); color: var(--text-2); }

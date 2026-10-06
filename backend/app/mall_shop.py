@@ -286,11 +286,11 @@ def save(admin: dict, items: list[dict]) -> dict:
             cur.execute(f"""MERGE INTO {MAP_TABLE} T
                             USING (SELECT :m AS MALL_NM, :s AS NAVER_PAY_SELL_NO, :b AS BRD_CD FROM DUAL) S
                                ON (T.MALL_NM = S.MALL_NM AND T.NAVER_PAY_SELL_NO = S.NAVER_PAY_SELL_NO AND T.BRD_CD = S.BRD_CD)
-                             WHEN MATCHED THEN UPDATE SET SHOP_ID = :shop, USE_YN = :u, RMK = :r, UPT_USERID = :by, UPT_DAY = :d
+                             WHEN MATCHED THEN UPDATE SET SHOP_ID = :shop, USE_YN = :u, RMK = :r, UPT_USERID = :p_user, UPT_DAY = :d
                              WHEN NOT MATCHED THEN INSERT (MALL_NM, NAVER_PAY_SELL_NO, BRD_CD, SHOP_ID, USE_YN, RMK,
                                                            INS_USERID, INS_DAY, UPT_USERID, UPT_DAY)
-                                  VALUES (:m, :s, :b, :shop, :u, :r, :by, :d, :by, :d)""",
-                        {**key, "shop": shop, "u": use, "r": rmk, "by": admin["id"], "d": now})
+                                  VALUES (:m, :s, :b, :shop, :u, :r, :p_user, :d, :p_user, :d)""",
+                        {**key, "shop": shop, "u": use, "r": rmk, "p_user": admin["id"], "d": now})
             saved += 1
         conn.commit()
     changes = []
@@ -303,3 +303,43 @@ def save(admin: dict, items: list[dict]) -> dict:
     if changes:
         audit.record(admin, "MALL_SHOP_MAP", f"판매처 매장 연결 {len(changes)}건", summary=" / ".join(changes)[:1000])
     return {"saved": saved, "deleted": deleted, "changed": len(changes)}
+
+
+# ----------------------------------------------------------------------------
+# 수집 행 매장코드 채우기 (일자별 상세 [매장코드 채우기] 버튼)
+# 매일 02:00 스케줄(JOB_FILL_ONLINE_SHOP_ID)은 전일자만 채운다. 매핑을 새로 등록했을 때 화면에서 최근 며칠을 바로 반영한다.
+# ----------------------------------------------------------------------------
+FILL_PROC = "P_FILL_ONLINE_SHOP_ID"   # db/create_job_online_shop_id.sql
+FILL_DAYS = 7
+_fill_lock = threading.Lock()
+
+
+def fill_shop_ids(admin: dict, days: int = FILL_DAYS) -> dict:
+    """최근 days 일(당일 포함) 수집 행의 SHOP_ID 를 판매처 매장 연결 매핑으로 채운다. 같은 값이면 건드리지 않는다."""
+    import oracledb
+
+    if not _fill_lock.acquire(blocking=False):
+        _bad("다른 사용자가 매장코드를 채우는 중입니다. 잠시 후 다시 시도하세요.", 409)
+    try:
+        today = datetime.now()
+        frm, to = (today - timedelta(days=days - 1)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
+        start = time.time()
+        try:
+            with db.get_pool().acquire() as conn, conn.cursor() as cur:
+                n = cur.var(int)
+                cur.callproc(FILL_PROC, [frm, to, n])
+                updated = int(n.getvalue() or 0)
+        except oracledb.DatabaseError as ex:
+            if "PLS-00201" in str(ex):   # 프로시저 없음 / 실행 권한 없음
+                _bad("매장코드 채우기 프로시저가 없습니다. 관리자에게 db/create_job_online_shop_id.sql 실행을 요청하세요.")
+            raise
+        elapsed = round(time.time() - start, 1)
+    finally:
+        _fill_lock.release()
+    # 화면 캐시(일자별 상세·대시보드·판매처 매장 연결 반영률)를 비워 바로 보이게 한다
+    ds._day_cache._data.clear()
+    ds._dash_cache._data.clear()
+    with _lock:
+        _cache.clear()
+    audit.record(admin, "ONLINE_SHOP_FILL", f"매장코드 채우기 {frm}~{to}", summary=f"{updated:,}행 변경 · {elapsed}초")
+    return {"from": frm, "to": to, "updated": updated, "elapsedSec": elapsed}

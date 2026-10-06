@@ -15,6 +15,7 @@ import {
   Loader2,
   Percent,
   Search,
+  Store,
   X,
 } from 'lucide-react'
 import { api, downloadFile, type Column, type DateInfo, type RowsResponse } from '../api'
@@ -30,10 +31,14 @@ export type DetailState = {
   order: 'asc' | 'desc'
   minRate?: number
   maxRate?: number
+  /** 매장코드 IN 조건 (쉼표·공백 구분, '-' = 매장코드 없음) */
+  shops?: string
 }
 
 type Props = {
   userId: string
+  /** 판매처 매장 연결 권한이 있으면 [매장코드 채우기] 버튼 표시 */
+  canFillShop?: boolean
   dates: DateInfo[]
   initial: DetailState
   onStateChange: (s: DetailState) => void
@@ -45,8 +50,10 @@ const NUMERIC = new Set(['ONLINE_ID', 'PRICE', 'DC_PRICE', 'DC_RATE'])
 const PREF_KEY = 'detail.columns'
 
 const toNum = (s: string) => (s.trim() === '' || isNaN(Number(s)) ? undefined : Number(s))
+/** 'T15602 a15602,,' → 'T15602,A15602' (서버 요청 · URL 용) */
+const normShops = (s: string) => [...new Set(s.split(/[\s,;]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))].join(',')
 
-export default function DetailView({ userId, dates, initial, onStateChange }: Props) {
+export default function DetailView({ userId, canFillShop = false, dates, initial, onStateChange }: Props) {
   const [productCd, setProductCd] = useState<string | null>(null)
   const [dt, setDt] = useState(initial.dt)
   const [qInput, setQInput] = useState(initial.q)
@@ -56,6 +63,8 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
   const [minInput, setMinInput] = useState(initial.minRate?.toString() ?? '')
   const [maxInput, setMaxInput] = useState(initial.maxRate?.toString() ?? '')
   const [rate, setRate] = useState<{ min?: number; max?: number }>({ min: initial.minRate, max: initial.maxRate })
+  const [shopInput, setShopInput] = useState(initial.shops ?? '')
+  const [shops, setShops] = useState(normShops(initial.shops ?? ''))
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(100)
   const [data, setData] = useState<RowsResponse | null>(null)
@@ -65,6 +74,9 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
   const [hidden, setHidden] = useState<string[]>([])
   const [colMenu, setColMenu] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [filling, setFilling] = useState(false)
+  const [fillMsg, setFillMsg] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
   const colMenuRef = useRef<HTMLDivElement>(null)
 
   // 사용자별 컬럼 표시 설정 불러오기
@@ -94,28 +106,44 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
     const t = setTimeout(() => {
       setQ(qInput.trim())
       setRate({ min: toNum(minInput), max: toNum(maxInput) })
+      setShops(normShops(shopInput))
       setPage(1)
     }, 400)
     return () => clearTimeout(t)
-  }, [qInput, minInput, maxInput])
+  }, [qInput, minInput, maxInput, shopInput])
 
   // 상위(App)에 현재 조건 전달 → URL 공유
   useEffect(() => {
-    onStateChange({ dt, q, mall, sort: sort?.key, order: sort?.order ?? 'asc', minRate: rate.min, maxRate: rate.max })
+    onStateChange({ dt, q, mall, sort: sort?.key, order: sort?.order ?? 'asc', minRate: rate.min, maxRate: rate.max, shops })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dt, q, mall, sort, rate])
+  }, [dt, q, mall, sort, rate, shops])
 
   useEffect(() => {
     const ctl = new AbortController()
     setLoading(true)
     setError(null)
     api
-      .rows({ dt, page, size, sort: sort?.key, order: sort?.order ?? 'asc', q, mall, minRate: rate.min, maxRate: rate.max }, ctl.signal)
+      .rows({ dt, page, size, sort: sort?.key, order: sort?.order ?? 'asc', q, mall, minRate: rate.min, maxRate: rate.max, shops: shops || undefined }, ctl.signal)
       .then(setData)
       .catch((e) => e.name !== 'AbortError' && setError(e.message))
       .finally(() => !ctl.signal.aborted && setLoading(false))
     return () => ctl.abort()
-  }, [dt, page, size, sort, q, mall, rate])
+  }, [dt, page, size, sort, q, mall, rate, shops, reload])
+
+  const fillShops = async () => {
+    if (!confirm('최근 7일(오늘 포함) 수집 데이터의 매장코드를 판매처 매장 연결 기준으로 채웁니다.\n(매일 새벽 2시에 전일자는 자동으로 채워집니다)\n\n진행할까요?')) return
+    setFilling(true)
+    setFillMsg(null)
+    try {
+      const r = await api.fillShopIds()
+      setFillMsg(`${dtLabel(r.from)} ~ ${dtLabel(r.to)} · ${fmtNum(r.updated)}건 매장코드 반영 (${r.elapsedSec}초)`)
+      setReload((n) => n + 1)
+    } catch (e) {
+      alert((e as Error).message)
+    } finally {
+      setFilling(false)
+    }
+  }
 
   const visibleCols: Column[] = useMemo(() => (data?.columns ?? []).filter((c) => !hidden.includes(c.key)), [data, hidden])
 
@@ -143,6 +171,7 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
           mall,
           minRate: rate.min,
           maxRate: rate.max,
+          shops: shops || undefined,
           cols: hidden.length ? visibleCols.map((c) => c.key).join(',') : undefined,
         }),
         undefined,
@@ -169,8 +198,16 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
     setQInput('')
     setMinInput('')
     setMaxInput('')
+    setShopInput('')
     setMall('')
     setSort(null)
+  }
+
+  // 매장코드 목록에 추가 (그 날 수집에 나온 매장 선택)
+  const addShop = (id: string) => {
+    if (!id) return
+    const cur = normShops(shopInput).split(',').filter(Boolean)
+    if (!cur.includes(id)) setShopInput([...cur, id].join(', '))
   }
 
   const pageNumbers = useMemo(() => {
@@ -180,7 +217,7 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
     return Array.from({ length: Math.min(5, total) }, (_, i) => from + i)
   }, [data, page])
 
-  const filtered = !!(q || mall || rate.min !== undefined || rate.max !== undefined)
+  const filtered = !!(q || mall || shops || rate.min !== undefined || rate.max !== undefined)
 
   return (
     <div className="stack">
@@ -203,7 +240,7 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
 
         <div className="search">
           <Search size={16} />
-          <input placeholder="상품코드 · 상품명 · 사이트 · 매장정보 · 판매자ID 검색" value={qInput} onChange={(e) => setQInput(e.target.value)} />
+          <input placeholder="상품코드 · 상품명 · 사이트 · 매장정보 · 판매자ID · 매장 검색" value={qInput} onChange={(e) => setQInput(e.target.value)} />
           {qInput && (
             <button className="clear" onClick={() => setQInput('')} title="지우기">
               <X size={14} />
@@ -227,10 +264,31 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
           <input inputMode="decimal" placeholder="최대" value={maxInput} onChange={(e) => setMaxInput(e.target.value)} />
         </div>
 
+        <div className="shop-filter" title="매장코드 IN 조건 — 쉼표·공백으로 여러 개 (예: T15602, A15602). '-' 는 매장코드 없는(매장 연결 전) 행">
+          <Store size={14} />
+          <input placeholder="매장코드 (여러 개: 쉼표)" value={shopInput} onChange={(e) => setShopInput(e.target.value)} />
+          {shopInput && (
+            <button className="clear" onClick={() => setShopInput('')} title="지우기">
+              <X size={14} />
+            </button>
+          )}
+          {!!data?.shops.length && (
+            <select className="shop-pick" value="" onChange={(e) => addShop(e.target.value)} title="이 날 수집된 매장에서 추가">
+              <option value="">+ 매장</option>
+              <option value="-">- (매장코드 없음)</option>
+              {data.shops.map((s) => (
+                <option key={s.shopId} value={s.shopId}>
+                  {s.shopId} {s.shopNm ?? ''} · {fmtNum(s.rows)}건
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
         <div className="toolbar-actions">
           <div className="col-menu-wrap" ref={colMenuRef}>
             <button className={`btn ghost ${hidden.length ? 'on' : ''}`} onClick={() => setColMenu((o) => !o)}>
-              <Columns3 size={15} /> 컬럼{hidden.length ? ` (${(data?.columns.length ?? 12) - hidden.length})` : ''}
+              <Columns3 size={15} /> 컬럼{hidden.length ? ` (${(data?.columns.length ?? 14) - hidden.length})` : ''}
             </button>
             {colMenu && data && (
               <div className="col-menu">
@@ -256,6 +314,11 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
               </div>
             )}
           </div>
+          {canFillShop && (
+            <button className="btn ghost" onClick={fillShops} disabled={filling} title="최근 7일(오늘 포함) 수집 행의 매장코드를 판매처 매장 연결 기준으로 채웁니다. 전일자는 매일 02:00 자동 실행">
+              {filling ? <Loader2 size={15} className="spin" /> : <Store size={15} />} {filling ? '채우는 중…' : '매장코드 채우기'}
+            </button>
+          )}
           <button className="btn ghost" onClick={copyLink} title="현재 날짜·검색·정렬 조건이 담긴 링크 복사">
             {copied ? <Check size={15} /> : <Link2 size={15} />} {copied ? '복사됨' : '링크 복사'}
           </button>
@@ -271,6 +334,10 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
         {filtered && data && <Pill label="해당일 전체" value={`${fmtNum(data.totalAll)}건`} />}
         <Pill label="상품 수" value={data ? fmtNum(data.summary.products) : '-'} />
         <Pill label="사이트 수" value={data ? fmtNum(data.summary.malls) : '-'} />
+        <Pill
+          label="매장코드 있음"
+          value={data ? `${fmtNum(data.summary.shopRows)}건${data.summary.shops ? ` · ${fmtNum(data.summary.shops)}개 매장` : ''}` : '-'}
+        />
         <Pill label="평균 할인율" value={data ? fmtPct(data.summary.avgDcRate, 2) : '-'} />
         {sort && (
           <button className="pill sort-pill" onClick={() => setSort(null)} title="정렬 해제">
@@ -285,6 +352,12 @@ export default function DetailView({ userId, dates, initial, onStateChange }: Pr
       </section>
 
       {error && <div className="alert error">{error}</div>}
+      {fillMsg && (
+        <div className="alert success">
+          <Check size={15} /> {fillMsg}
+          <button className="clear" onClick={() => setFillMsg(null)} title="닫기"><X size={14} /></button>
+        </div>
+      )}
 
       <section className="card grid-card">
         <div className={`table-wrap tall ${loading ? 'is-loading' : ''}`}>
@@ -389,6 +462,8 @@ function CellValue({ k, v, onProduct }: { k: string; v: string | number | null |
     case 'TITLE':
     case 'RMK':
       return <span className="ellipsis-inline" title={String(v)}>{v}</span>
+    case 'SHOP_ID':
+      return <span className="mono">{v}</span>
     case 'PRDT_CD':
       return onProduct ? (
         <button className="btn-link mono" title="온라인 가격 · 매장 판매 비교" onClick={() => onProduct(String(v))}>{v}</button>

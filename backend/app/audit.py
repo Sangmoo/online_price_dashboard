@@ -34,6 +34,7 @@ ACTIONS = {
     "SETTINGS_RESTORE": "설정 복원",
     "FEEDBACK_UPDATE": "문의·신고 처리",
     "MALL_SHOP_MAP": "판매처 매장 연결",
+    "ONLINE_SHOP_FILL": "온라인 수집 매장코드 채우기",
 }
 FIELD_LABELS = {
     "role": "권한", "pages": "메뉴 권한", "ai_enabled": "AI 사용", "daily_questions": "일일 질문 한도",

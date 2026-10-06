@@ -23,7 +23,7 @@ type Props = {
   dates: DateInfo[]
   range: { start: string; end: string }
   onRangeChange: (r: { start: string; end: string }) => void
-  onOpenDetail: (dt: string, q?: string) => void
+  onOpenDetail: (dt: string, q?: string, shops?: string) => void
   canOpenDetail?: boolean
 }
 
@@ -122,7 +122,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
       <section className="kpi-grid">
         <Kpi icon={<Layers size={18} />} tone="indigo" label="총 수집 건수" value={k ? fmtNum(k.ROW_CNT) : null} sub={k ? `${k.DAY_CNT}일 · 일평균 ${fmtNum(Math.round(k.ROW_CNT / Math.max(k.DAY_CNT, 1)))}건` : ''} />
         <Kpi icon={<ShoppingBag size={18} />} tone="teal" label="수집 상품 수" value={k ? fmtNum(k.PRDT_CNT) : null} sub="고유 상품코드" />
-        <Kpi icon={<Store size={18} />} tone="sky" label="사이트 수" value={k ? fmtNum(k.MALL_CNT) : null} sub={k ? `판매자ID ${fmtNum(k.SELLER_CNT)}개` : ''} />
+        <Kpi icon={<Store size={18} />} tone="sky" label="사이트 수" value={k ? fmtNum(k.MALL_CNT) : null} sub={k ? `판매자 ${fmtNum(k.SELLER_CNT)} · 매장 ${fmtNum(k.SHOP_CNT ?? 0)}` : ''} />
         <Kpi icon={<Percent size={18} />} tone="amber" label="평균 할인율" value={k ? fmtPct(k.AVG_DC_RATE, 2) : null} sub="기준가 대비 사이트 할인가" />
         <Kpi icon={<Tag size={18} />} tone="rose" label="최대 할인율" value={k ? fmtPct(k.MAX_DC_RATE, 2) : null} sub="기간 내 최저가 기준" />
         <Kpi icon={<AlertTriangle size={18} />} tone="violet" label="30% 이상 고할인" value={k ? fmtNum(k.DEEP_DC_CNT) : null} sub={k && k.ROW_CNT ? `전체의 ${fmtPct((k.DEEP_DC_CNT / k.ROW_CNT) * 100, 2)}` : ''} />
@@ -183,6 +183,49 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
           </ResponsiveContainer>
         </Panel>
       </section>
+
+      <Panel
+        title="매장별 수집 Top 15"
+        hint={`매장코드(SHOP_ID)가 있는 수집 ${k ? `${fmtNum(k.SHOP_ROW_CNT ?? 0)}건 · 전체의 ${fmtPct(k.ROW_CNT ? ((k.SHOP_ROW_CNT ?? 0) / k.ROW_CNT) * 100 : 0, 1)}` : ''}${canOpenDetail ? ' — 행을 누르면 그 매장의 마지막 수집일 상세로 이동' : ''}`}
+        loading={loading && !data}
+      >
+        {data && !data.shops?.length ? (
+          <div className="empty">이 기간 수집에 매장코드가 들어간 행이 없습니다. 판매처 매장 연결에 등록한 매장코드는 다음 수집부터 들어갑니다.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>매장코드</th>
+                  <th>매장명</th>
+                  <th className="num">수집 건수</th>
+                  <th className="num">상품 수</th>
+                  <th className="num">사이트 수</th>
+                  <th className="num">평균 할인율</th>
+                  <th className="num">최대 할인율</th>
+                  <th>마지막 수집일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.shops ?? []).map((s, i) => (
+                  <tr key={s.SHOP_ID} className={canOpenDetail ? 'clickable' : ''} onClick={() => onOpenDetail(s.LAST_DT, undefined, s.SHOP_ID)}>
+                    <td className="muted">{i + 1}</td>
+                    <td className="mono">{s.SHOP_ID}</td>
+                    <td>{s.SHOP_NM ?? <span className="muted">-</span>}</td>
+                    <td className="num strong">{fmtNum(s.ROW_CNT)}</td>
+                    <td className="num">{fmtNum(s.PRDT_CNT)}</td>
+                    <td className="num">{s.MALL_CNT}</td>
+                    <td className="num"><RateBadge v={s.AVG_DC_RATE} /></td>
+                    <td className="num"><RateBadge v={s.MAX_DC_RATE} /></td>
+                    <td className="muted">{dtToIso(s.LAST_DT)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
 
       <Panel title="할인율 상위 상품 Top 20" hint={canOpenDetail ? '행을 누르면 최저가 수집일의 상세 내역으로 이동' : undefined} loading={loading && !data}>
         <div className="table-wrap">

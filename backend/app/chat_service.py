@@ -26,6 +26,7 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
 - DT(수집일, YYYYMMDD), PRDT_CD(상품코드), PRICE(기준가), DC_PRICE(사이트_할인가)
 - 할인율(%) = (기준가 - 사이트_할인가) / 기준가 * 100  (도구 결과의 DC_RATE)
 - MALL_NM(사이트명), RMK(매장정보: 모델번호/업체명/판매자 등), TITLE(사이트 상품명), INS_DAY(수집시간), NAVER_PAY_SELL_NO(판매자ID)
+- SHOP_ID(매장코드): 판매처 매장 연결(사이트·판매자번호·브랜드 → 매장코드)로 수집 시 채워짐. 비어 있으면 아직 연결 전. 매장별 조회는 shop_ids, 매장별 집계는 group_by SHOP_ID
 - 한 번의 조회 기간은 최대 31일입니다.
 
 [B] 매장 재고 실사계획 (메뉴: 데이터 관리 > 매장 재고 실사계획) — 도구: aggregate_invt_plans, search_invt_plans

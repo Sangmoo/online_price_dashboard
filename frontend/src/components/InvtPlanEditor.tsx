@@ -126,7 +126,15 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
   }
 
   const miss = (k: string) => missing.includes(k)
-  const input = (k: keyof InvtPlan, placeholder = '', type: 'text' | 'number' = 'text') => (
+  const input = (k: keyof InvtPlan, placeholder = '', type: 'text' | 'number' = 'text') =>
+    type === 'number' ? (
+      <NumInput
+        className={`input num ${miss(k) ? 'missing' : ''}`}
+        value={form[k]}
+        placeholder={miss(k) ? '데이터 없음 · 직접 입력' : placeholder}
+        onChange={(v) => set(k, v)}
+      />
+    ) : (
     <input
       className={`input ${miss(k) ? 'missing' : ''}`}
       type={type}
@@ -134,7 +142,7 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
       placeholder={miss(k) ? '데이터 없음 · 직접 입력' : placeholder}
       onChange={(e) => set(k, e.target.value)}
     />
-  )
+    )
   const dateInput = (k: keyof InvtPlan) => (
     <input
       className={`input ${miss(k) ? 'missing' : ''}`}
@@ -353,6 +361,48 @@ const fmtWonHint = (v: unknown) => {
   return n == null ? undefined : `${n > 0 ? '+' : ''}${fmtNum(n)}원`
 }
 const labelOf = (k: string) => LABELS[k] ?? k
+
+/** 숫자 입력: 천 단위 쉼표로 보여주고(150000 → 150,000) 폼에는 쉼표 없는 값을 넣는다. 음수(전실사결과) 허용. */
+function NumInput({ value, onChange, className, placeholder }: {
+  value: unknown
+  onChange: (v: string | null) => void
+  className: string
+  placeholder: string
+}) {
+  const raw = str(value).replaceAll(',', '')
+  const shown = /^-?\d+(\.\d*)?$/.test(raw) ? withComma(raw) : raw
+  return (
+    <input
+      className={className}
+      type="text"
+      inputMode="numeric"
+      value={shown}
+      placeholder={placeholder}
+      onChange={(e) => {
+        const el = e.target
+        // 커서 앞 숫자 개수를 기억했다가 쉼표를 다시 넣은 뒤 같은 위치로 돌린다
+        const digitsBefore = el.value.slice(0, el.selectionStart ?? el.value.length).replace(/[^\d.-]/g, '').length
+        let v = el.value.replace(/[^\d.-]/g, '')
+        v = (v.startsWith('-') ? '-' : '') + v.replace(/-/g, '')
+        const dot = v.indexOf('.')
+        if (dot >= 0) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '')
+        onChange(v === '' ? null : v)
+        requestAnimationFrame(() => {
+          const text = el.value
+          let pos = 0
+          for (let n = 0; pos < text.length && n < digitsBefore; pos++) if (/[\d.-]/.test(text[pos])) n++
+          el.setSelectionRange(pos, pos)
+        })
+      }}
+    />
+  )
+}
+const withComma = (s: string) => {
+  const [int, dec] = s.split('.')
+  const sign = int.startsWith('-') ? '-' : ''
+  const body = int.replace('-', '').replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return sign + body + (dec !== undefined ? `.${dec}` : '')
+}
 const fmtMil = (v: unknown) => {
   const n = numOrNull(v)
   return n == null ? undefined : `${fmtNum(Math.round(n / 1_000_000))}백만원`

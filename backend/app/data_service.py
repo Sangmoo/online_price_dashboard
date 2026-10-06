@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -29,10 +30,14 @@ COLUMNS: list[tuple[str, str]] = [
     ("RMK", "매장정보"),
     ("INS_DAY", "수집시간"),
     ("NAVER_PAY_SELL_NO", "판매자ID"),
+    ("SHOP_ID", "매장코드"),
+    ("SHOP_NM", "매장명"),
     ("URL", "URL"),
 ]
 COLUMN_KEYS = [c[0] for c in COLUMNS]
 NUMERIC_COLS = {"ONLINE_ID", "PRICE", "DC_PRICE", "DC_RATE"}
+NO_SHOP = "-"          # 매장코드 조건에서 '-' = 매장코드 없는(판매처 매장 연결 전) 행
+MAX_SHOP_IDS = 200
 
 # 할인율(%) 계산식 — 기준가 대비 사이트 할인가
 DC_RATE_SQL = "ROUND((PRICE - DC_PRICE) / NULLIF(PRICE, 0) * 100, 2)"
@@ -59,6 +64,17 @@ def validate_range(start: str, end: str) -> tuple[str, str]:
     if (e - s).days + 1 > config.MAX_RANGE_DAYS:
         raise ValueError(f"조회 기간은 최대 {config.MAX_RANGE_DAYS}일까지 가능합니다.")
     return fmt_dt(s), fmt_dt(e)
+
+
+def parse_shops(value: str | None) -> list[str]:
+    """매장코드 IN 조건: 쉼표·공백·줄바꿈으로 구분 ('T15602, A15602'). '-' 는 매장코드 없는 행."""
+    ids = list(dict.fromkeys(t.upper() for t in re.split(r"[\s,;]+", value or "") if t))
+    if len(ids) > MAX_SHOP_IDS:
+        raise ValueError(f"매장코드는 최대 {MAX_SHOP_IDS}개까지 넣을 수 있습니다.")
+    bad = [t for t in ids if t != NO_SHOP and not re.fullmatch(r"[A-Z0-9]{1,6}", t)]
+    if bad:
+        raise ValueError(f"매장코드 형식이 올바르지 않습니다: {', '.join(bad[:5])}")
+    return ids
 
 
 def _num(v):
@@ -125,7 +141,7 @@ def load_day(dt: str) -> pd.DataFrame:
     cols, rows = db.query(
         f"""
         SELECT ONLINE_ID, DT, PRDT_CD, PRICE, DC_PRICE, {DC_RATE_SQL} AS DC_RATE,
-               MALL_NM, TITLE, RMK, INS_DAY, NAVER_PAY_SELL_NO, URL
+               MALL_NM, TITLE, RMK, INS_DAY, NAVER_PAY_SELL_NO, SHOP_ID, URL
           FROM {TABLE}
          WHERE DT = :dt
         """,
@@ -134,22 +150,31 @@ def load_day(dt: str) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=cols)
     for c in ("PRICE", "DC_PRICE", "DC_RATE", "ONLINE_ID"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
+    from .sale_monthly import shop_names
+
+    names = shop_names(df["SHOP_ID"].dropna().unique().tolist())
+    df.insert(df.columns.get_loc("SHOP_ID") + 1, "SHOP_NM", df["SHOP_ID"].map(names))
     _day_cache.set(dt, df, _ttl_for(dt))
     return df
 
 
 def _filter_sort(df: pd.DataFrame, q: str | None, mall: str | None, sort: str | None, order: str,
-                 min_rate: float | None = None, max_rate: float | None = None) -> pd.DataFrame:
+                 min_rate: float | None = None, max_rate: float | None = None, shops: list[str] | None = None) -> pd.DataFrame:
     if min_rate is not None:
         df = df[df["DC_RATE"] >= min_rate]
     if max_rate is not None:
         df = df[df["DC_RATE"] <= max_rate]
     if mall:
         df = df[df["MALL_NM"] == mall]
+    if shops:
+        mask = df["SHOP_ID"].isin([s for s in shops if s != NO_SHOP])
+        if NO_SHOP in shops:
+            mask |= df["SHOP_ID"].isna()
+        df = df[mask]
     if q:
         q = q.strip().lower()
         mask = pd.Series(False, index=df.index)
-        for c in ("PRDT_CD", "TITLE", "MALL_NM", "RMK", "NAVER_PAY_SELL_NO"):
+        for c in ("PRDT_CD", "TITLE", "MALL_NM", "RMK", "NAVER_PAY_SELL_NO", "SHOP_ID", "SHOP_NM"):
             mask |= df[c].fillna("").astype(str).str.lower().str.contains(q, regex=False)
         df = df[mask]
     if sort in COLUMN_KEYS:
@@ -158,9 +183,9 @@ def _filter_sort(df: pd.DataFrame, q: str | None, mall: str | None, sort: str | 
 
 
 def day_rows(dt: str, page: int, size: int, sort: str | None, order: str, q: str | None, mall: str | None,
-             min_rate: float | None = None, max_rate: float | None = None) -> dict:
+             min_rate: float | None = None, max_rate: float | None = None, shops: str | None = None) -> dict:
     base = load_day(dt)
-    df = _filter_sort(base, q, mall, sort, order, min_rate, max_rate)
+    df = _filter_sort(base, q, mall, sort, order, min_rate, max_rate, parse_shops(shops))
     size = max(10, min(size, 500))
     total = len(df)
     pages = max(1, -(-total // size))
@@ -180,18 +205,29 @@ def day_rows(dt: str, page: int, size: int, sort: str | None, order: str, q: str
         "pages": pages,
         "size": size,
         "malls": sorted(base["MALL_NM"].dropna().unique().tolist()),
+        "shops": _shop_options(base),
         "summary": {
             "products": int(df["PRDT_CD"].nunique()),
             "malls": int(df["MALL_NM"].nunique()),
+            "shops": int(df["SHOP_ID"].nunique()),
+            "shopRows": int(df["SHOP_ID"].notna().sum()),
             "avgDcRate": _num(df["DC_RATE"].mean()) if total else None,
         },
     }
 
 
+def _shop_options(df: pd.DataFrame) -> list[dict]:
+    """매장코드 선택 목록: 그 날 수집에 나온 매장코드 (건수 많은 순)"""
+    g = df[df["SHOP_ID"].notna()].groupby("SHOP_ID").agg(n=("SHOP_ID", "size"), nm=("SHOP_NM", "first"))
+    return [{"shopId": k, "shopNm": r.nm if isinstance(r.nm, str) else None, "rows": int(r.n)}
+            for k, r in g.sort_values("n", ascending=False).iterrows()]
+
+
 HEADER_FILL = PatternFill("solid", fgColor="1F2A44")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 COL_WIDTHS = {"ONLINE_ID": 11, "DT": 11, "PRDT_CD": 16, "PRICE": 11, "DC_PRICE": 13, "DC_RATE": 10,
-              "MALL_NM": 16, "TITLE": 45, "RMK": 50, "INS_DAY": 15, "NAVER_PAY_SELL_NO": 16, "URL": 60}
+              "MALL_NM": 16, "TITLE": 45, "RMK": 50, "INS_DAY": 15, "NAVER_PAY_SELL_NO": 16, "SHOP_ID": 10,
+              "SHOP_NM": 16, "URL": 60}
 
 
 def write_xlsx(sheet_title: str, columns: list[tuple[str, str]], rows) -> bytes:
@@ -232,8 +268,9 @@ def _col_letter(idx: int) -> str:
 
 
 def export_day(dt: str, sort: str | None, order: str, q: str | None, mall: str | None,
-               min_rate: float | None = None, max_rate: float | None = None, cols: list[str] | None = None) -> bytes:
-    df = _filter_sort(load_day(dt), q, mall, sort, order, min_rate, max_rate)
+               min_rate: float | None = None, max_rate: float | None = None, cols: list[str] | None = None,
+               shops: str | None = None) -> bytes:
+    df = _filter_sort(load_day(dt), q, mall, sort, order, min_rate, max_rate, parse_shops(shops))
     df = df.astype(object).where(df.notna(), None)
     columns = [c for c in COLUMNS if not cols or c[0] in cols] or COLUMNS
     return write_xlsx(f"온라인가격_{dt}", columns, df.to_dict("records"))
@@ -262,7 +299,8 @@ def dashboard(start: str, end: str) -> dict:
                    COUNT(DISTINCT DT) AS DAY_CNT,
                    ROUND(AVG({DC_RATE_SQL}), 2) AS AVG_DC_RATE,
                    MAX({DC_RATE_SQL}) AS MAX_DC_RATE,
-                   SUM(CASE WHEN {DC_RATE_SQL} >= 30 THEN 1 ELSE 0 END) AS DEEP_DC_CNT
+                   SUM(CASE WHEN {DC_RATE_SQL} >= 30 THEN 1 ELSE 0 END) AS DEEP_DC_CNT,
+                   COUNT(SHOP_ID) AS SHOP_ROW_CNT, COUNT(DISTINCT SHOP_ID) AS SHOP_CNT
             {where}
             """,
             p,
@@ -305,6 +343,20 @@ def dashboard(start: str, end: str) -> dict:
             p,
         )
 
+        jobs["shops"] = pool.submit(
+            db.query_dicts,
+            f"""
+            SELECT * FROM (
+                SELECT SHOP_ID, COUNT(*) AS ROW_CNT, COUNT(DISTINCT PRDT_CD) AS PRDT_CNT,
+                       COUNT(DISTINCT MALL_NM) AS MALL_CNT, ROUND(AVG({DC_RATE_SQL}), 2) AS AVG_DC_RATE,
+                       MAX({DC_RATE_SQL}) AS MAX_DC_RATE, MAX(DT) AS LAST_DT
+                {where} AND SHOP_ID IS NOT NULL
+                GROUP BY SHOP_ID ORDER BY COUNT(*) DESC
+            ) WHERE ROWNUM <= 15
+            """,
+            p,
+        )
+
         jobs["hist"] = pool.submit(
             db.query_dicts,
             f"""
@@ -338,9 +390,14 @@ def dashboard(start: str, end: str) -> dict:
             p,
         )
     kpi = jobs["kpi"].result()[0]
-    daily, malls, mall_dc, hist, products = (
-        jobs[k].result() for k in ("daily", "malls", "mall_dc", "hist", "products")
+    daily, malls, mall_dc, hist, products, shops = (
+        jobs[k].result() for k in ("daily", "malls", "mall_dc", "hist", "products", "shops")
     )
+    from .sale_monthly import shop_names
+
+    names = shop_names([r["SHOP_ID"] for r in shops])
+    for r in shops:
+        r["SHOP_NM"] = names.get(r["SHOP_ID"])
 
     def clean(rows):
         return [{k: _num(v) if not isinstance(v, str) else v for k, v in r.items()} for r in rows]
@@ -354,6 +411,7 @@ def dashboard(start: str, end: str) -> dict:
         "mallDiscount": clean(mall_dc),
         "histogram": clean(hist),
         "topProducts": clean(products),
+        "shops": clean(shops),
         "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     _dash_cache.set(key, result, _ttl_for(end))

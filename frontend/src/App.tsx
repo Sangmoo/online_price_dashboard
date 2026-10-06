@@ -123,6 +123,7 @@ function readUrl(): UrlState {
       order: order === 'desc' || order === 'asc' ? order : undefined,
       minRate: num('minRate'),
       maxRate: num('maxRate'),
+      shops: p.get('shops') || undefined,
     },
   }
 }
@@ -280,6 +281,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             order: d.order ?? 'asc',
             minRate: d.minRate,
             maxRate: d.maxRate,
+            shops: d.shops ?? '',
           },
           nonce: 0,
         })
@@ -342,13 +344,13 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
     if (view === 'dashboard' && range) writeUrl({ view, start: range.start, end: range.end })
     else if (view === 'detail' && detail) {
       const s = detail.state
-      writeUrl({ view, dt: s.dt, q: s.q, mall: s.mall, sort: s.sort, order: s.sort ? s.order : undefined, minRate: s.minRate, maxRate: s.maxRate })
+      writeUrl({ view, dt: s.dt, q: s.q, mall: s.mall, sort: s.sort, order: s.sort ? s.order : undefined, minRate: s.minRate, maxRate: s.maxRate, shops: s.shops })
     } else if (view) writeUrl({ view })
   }, [view, range, detail])
 
-  const openDetail = (dt: string, q?: string) => {
+  const openDetail = (dt: string, q?: string, shops?: string) => {
     if (!user.pages.includes('detail')) return
-    setDetail({ state: { dt, q: q ?? '', mall: '', order: 'asc' }, nonce: Date.now() })
+    setDetail({ state: { dt, q: q ?? '', mall: '', order: 'asc', shops: shops ?? '' }, nonce: Date.now() })
     setView('detail')
   }
 
@@ -509,6 +511,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               <DetailView
                 key={detail.nonce}
                 userId={user.id}
+                canFillShop={user.pages.includes('mall_shop')}
                 dates={dates}
                 initial={detail.state}
                 onStateChange={(state) => setDetail((d) => (d ? { ...d, state } : d))}

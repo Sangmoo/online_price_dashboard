@@ -209,10 +209,11 @@ def rows(
     mall: str | None = None,
     minRate: float | None = None,
     maxRate: float | None = None,
+    shops: str | None = None,
     _: dict = Depends(require_page("detail")),
 ):
     try:
-        return ds.day_rows(dt, page, size, sort, order, q, mall, minRate, maxRate)
+        return ds.day_rows(dt, page, size, sort, order, q, mall, minRate, maxRate, shops)
     except ValueError as ex:
         _bad_request(ex)
 
@@ -227,10 +228,11 @@ def rows_export(
     minRate: float | None = None,
     maxRate: float | None = None,
     cols: str | None = None,
+    shops: str | None = None,
     _: dict = Depends(require_page("detail")),
 ):
     try:
-        content = ds.export_day(dt, sort, order, q, mall, minRate, maxRate, cols.split(",") if cols else None)
+        content = ds.export_day(dt, sort, order, q, mall, minRate, maxRate, cols.split(",") if cols else None, shops)
     except ValueError as ex:
         _bad_request(ex)
     return _xlsx_response(content, f"온라인가격수집_{dt}.xlsx")
@@ -628,6 +630,16 @@ def mall_shop_save(body: dict, me: dict = Depends(mall_page)):
     from . import mall_shop
 
     return mall_shop.save(me, body.get("items"))
+
+
+@app.post("/api/rows/fill-shop")
+def rows_fill_shop(me: dict = Depends(mall_page)):
+    """일자별 상세 [매장코드 채우기]: 최근 7일(당일 포함) 수집 행 SHOP_ID 를 판매처 매장 연결로 채움 (매핑 관리 권한 필요)"""
+    from . import mall_shop
+
+    if "detail" not in me["pages"]:
+        raise HTTPException(status_code=403, detail={"message": "'일자별 상세' 페이지 권한이 없습니다.", "code": "FORBIDDEN"})
+    return mall_shop.fill_shop_ids(me)
 sale_dash_page = require_page("sale_dashboard")
 
 

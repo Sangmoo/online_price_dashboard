@@ -48,11 +48,14 @@ export type Dashboard = {
     AVG_DC_RATE: number | null
     MAX_DC_RATE: number | null
     DEEP_DC_CNT: number
+    SHOP_ROW_CNT: number
+    SHOP_CNT: number
   }
   daily: { DT: string; ROW_CNT: number; PRDT_CNT: number; MALL_CNT: number; AVG_DC_RATE: number }[]
   malls: { MALL_NM: string; ROW_CNT: number; PRDT_CNT: number; AVG_DC_RATE: number }[]
   mallDiscount: { MALL_NM: string; ROW_CNT: number; AVG_DC_RATE: number }[]
   histogram: { BUCKET: number; ROW_CNT: number }[]
+  shops: { SHOP_ID: string; SHOP_NM: string | null; ROW_CNT: number; PRDT_CNT: number; MALL_CNT: number; AVG_DC_RATE: number | null; MAX_DC_RATE: number | null; LAST_DT: string }[]
   topProducts: {
     PRDT_CD: string
     TITLE: string
@@ -77,7 +80,8 @@ export type RowsResponse = {
   pages: number
   size: number
   malls: string[]
-  summary: { products: number; malls: number; avgDcRate: number | null }
+  shops: { shopId: string; shopNm: string | null; rows: number }[]
+  summary: { products: number; malls: number; shops: number; shopRows: number; avgDcRate: number | null }
 }
 
 export type RowsQuery = {
@@ -90,6 +94,7 @@ export type RowsQuery = {
   mall?: string
   minRate?: number
   maxRate?: number
+  shops?: string
 }
 
 // ----------------------------------------------------------------------------
@@ -178,6 +183,8 @@ export const api = {
     getJson<Dashboard>(`/api/dashboard?${qs({ start, end })}`, signal),
   rows: (p: RowsQuery, signal?: AbortSignal) => getJson<RowsResponse>(`/api/rows?${qs(p)}`, signal),
   rowsExportUrl: (p: Omit<RowsQuery, 'page' | 'size'> & { cols?: string }) => `/api/rows/export?${qs(p)}`,
+  /** 최근 7일(당일 포함) 수집 행 매장코드를 판매처 매장 연결로 채움 */
+  fillShopIds: () => sendJson<{ from: string; to: string; updated: number; elapsedSec: number }>('POST', '/api/rows/fill-shop'),
 
   // AI 대화
   usage: () => getJson<Usage>('/api/chat/usage'),
