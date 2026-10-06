@@ -9,6 +9,7 @@ import SeasonProgressPanel from './SeasonProgressPanel'
 import OnlineAlertPanel from './OnlineAlertPanel'
 import SaleHeavyShopsPanel from './SaleHeavyShopsPanel'
 import ProductInsightModal from './ProductInsightModal'
+import { HelpTip } from '../help/HelpTip'
 
 type Kpi = {
   amt: number
@@ -246,11 +247,12 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
       {error && <div className="alert error">{error}</div>}
 
       <section className="kpi-grid sd-kpis">
-        <SdKpi label={`${data.period.label} 실판금액`} value={eok(k.amt)} sub={`${fmtNum(k.amt)}원 · ${baseLbl} ${eok(k.baseAmt)}`} delta={k.change} deltaLabel={baseLbl}
+        <SdKpi help="sales.amt" label={`${data.period.label} 실판금액`} value={eok(k.amt)} sub={`${fmtNum(k.amt)}원 · ${baseLbl} ${eok(k.baseAmt)}`} delta={k.change} deltaLabel={baseLbl}
           extra={{ label: data.extra.label, v: k.extraChange }} />
         {data.hasGoals && (
           <SdKpi
             label="목표 달성률"
+            help="sales.achieve"
             value={pct(k.achieve)}
             sub={`목표 ${eok(k.goalAmt)} · 목표 매장 ${fmtNum(k.goalShops)}개${k.noGoalShops ? ` · 목표 없는 매장 ${fmtNum(k.noGoalShops)}개(${eok(k.noGoalAmt)}) 제외` : ''}`}
             deltaText={k.goalGap === null ? '-' : signedEok(k.goalGap)}
@@ -259,10 +261,11 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
             title="달성률 = 목표가 있는 매장의 실판금액 ÷ 목표금액 (T_SHOP_SELL_MGOAL, 매장별 목표를 매장의 판매 브랜드로 모음)"
           />
         )}
-        <SdKpi label={`${data.ym.slice(0, 4)}년 누계`} value={eok(k.ytdAmt)} sub={`전년 누계 ${eok(k.prevYtdAmt)} · ${ymLabel(data.ym)}까지`} delta={k.ytdYoy} deltaLabel="전년 누계" />
-        <SdKpi label="판매 수량" value={fmtNum(k.qty)} sub={`${baseLbl} ${fmtNum(k.baseQty)}`} delta={k.qtyChange} deltaLabel={baseLbl} />
+        <SdKpi help="sales.ytd" label={`${data.ym.slice(0, 4)}년 누계`} value={eok(k.ytdAmt)} sub={`전년 누계 ${eok(k.prevYtdAmt)} · ${ymLabel(data.ym)}까지`} delta={k.ytdYoy} deltaLabel="전년 누계" />
+        <SdKpi help="sales.amt" label="판매 수량" value={fmtNum(k.qty)} sub={`${baseLbl} ${fmtNum(k.baseQty)}`} delta={k.qtyChange} deltaLabel={baseLbl} />
         <SdKpi
           label="원가율"
+          help="sales.costRate"
           value={pct(k.costRate)}
           sub={`원가 ${eok(k.cost)} · ${baseLbl} ${pct(k.baseCostRate)}`}
           deltaText={pp(k.costRateDiff)}
@@ -272,6 +275,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
         />
         <SdKpi
           label="할인율"
+          help="sales.dsctRate"
           value={pct(k.dsctRate)}
           sub={`할인금액 ${eok(k.dsct)} (${fmtGrowth(k.dsctChange)}) · ${baseLbl} ${pct(k.baseDsctRate)}`}
           deltaText={pp(k.dsctRateDiff)}
@@ -281,6 +285,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
         />
         <SdKpi
           label="판매 매장"
+          help="sales.shops"
           value={`${fmtNum(k.shops)}개`}
           sub={`매출 발생 ${fmtNum(data.shopCounts.selling)}개 · 신규 ${fmtNum(data.shopCounts.new)}개 · 매장당 ${k.avgPerShop ? eok(k.avgPerShop) : '-'}`}
           title={`판매 기록(반품 포함)이 있는 매장 수 · ${baseLbl}(${data.base.label})와 같은 기준으로 비교`}
@@ -374,7 +379,8 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
   )
 }
 
-function SdKpi({ label, value, sub, delta, deltaText, deltaClass, deltaLabel, extra, title }: {
+function SdKpi({ label, value, sub, delta, deltaText, deltaClass, deltaLabel, extra, title, help }: {
+  help?: string
   label: string
   value: string
   sub?: string
@@ -391,7 +397,7 @@ function SdKpi({ label, value, sub, delta, deltaText, deltaClass, deltaLabel, ex
   return (
     <div className="card kpi sd-kpi" title={title}>
       <div className="kpi-body">
-        <div className="kpi-label">{label}</div>
+        <div className="kpi-label">{label}{help && <HelpTip id={help} label={label} />}</div>
         <div className="kpi-value">{value}</div>
         <div className="sd-delta">
           <span className={cls}>{cls !== 'muted' && (up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}{text}</span>

@@ -4,6 +4,7 @@ import './index.css'
 import './features.css'
 import './invt.css'
 import './sale.css'
+import './ops.css'
 import App from './App.tsx'
 import { ApiError, recordClientError } from './api'
 

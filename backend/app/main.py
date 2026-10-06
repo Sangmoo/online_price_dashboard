@@ -16,7 +16,7 @@ from . import logs
 
 logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
 
-from . import admin, appdb, auth, brand_scope, chat_service, menu_usage, config, data_service as ds, invt_plan, mv_refresh, sale_dashboard, sale_monthly, server_status, store, usage, userdb  # noqa: E402
+from . import admin, appdb, auth, downloads, brand_scope, chat_service, menu_usage, config, data_service as ds, invt_plan, mv_refresh, sale_dashboard, sale_monthly, server_status, store, usage, userdb  # noqa: E402
 from .auth import current_user, require_admin, require_page  # noqa: E402
 
 _log = logs.get("request")
@@ -41,13 +41,17 @@ except Exception:  # noqa: BLE001
 def _housekeeping() -> None:
     """6시간마다: 보관 기간이 지난 로그 파일·엑셀 임시 파일·완료된 문의의 첨부 이미지 정리 (보관 기간은 관리자 설정)"""
     time.sleep(30)
+    from . import downloads, feedback, jobs
+
     while True:
         try:
-            logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
-            sale_monthly.cleanup_exports()
-            from . import feedback
-
-            feedback.purge_images(userdb.get_settings().get("feedback_img_keep_months"))
+            with jobs.track("housekeeping") as run:
+                logs.cleanup(userdb.get_settings().get("log_keep_days") or logs.DEFAULT_KEEP_DAYS)
+                sale_monthly.cleanup_exports()
+                img = feedback.purge_images(userdb.get_settings().get("feedback_img_keep_months"))
+                dl = downloads.purge()
+                jobs.purge()
+                run.detail = f"문의 이미지 {img.get('deleted', 0) if isinstance(img, dict) else 0}건 · 다운로드 이력 {dl}건 정리"
         except Exception:  # noqa: BLE001
             logs.get("app").exception("정리 작업 실패")
         time.sleep(6 * 3600)
@@ -229,12 +233,14 @@ def rows_export(
     maxRate: float | None = None,
     cols: str | None = None,
     shops: str | None = None,
-    _: dict = Depends(require_page("detail")),
+    me: dict = Depends(require_page("detail")),
 ):
     try:
         content = ds.export_day(dt, sort, order, q, mall, minRate, maxRate, cols.split(",") if cols else None, shops)
     except ValueError as ex:
         _bad_request(ex)
+    downloads.record(me, "online_detail", f"온라인가격수집_{dt}", {"dt": dt, "q": q, "mall": mall, "minRate": minRate,
+                                                                   "maxRate": maxRate, "shops": shops, "sort": sort}, size=len(content))
     return _xlsx_response(content, f"온라인가격수집_{dt}.xlsx")
 
 
@@ -245,10 +251,11 @@ class TableExport(BaseModel):
 
 
 @app.post("/api/export/table")
-def export_table(body: TableExport, _: dict = Depends(current_user)):
+def export_table(body: TableExport, me: dict = Depends(current_user)):
     cols = [(c["key"], c.get("label", c["key"])) for c in body.columns if "key" in c]
     content = ds.write_xlsx("조회결과", cols, body.rows)
     safe = "".join(ch for ch in body.title if ch not in '\\/:*?"<>|').strip() or "조회결과"
+    downloads.record(me, "table", safe, {"columns": [c[1] for c in cols][:20]}, rows=len(body.rows), size=len(content))
     return _xlsx_response(content, f"{safe}.xlsx")
 
 
@@ -269,6 +276,7 @@ def chat_export_full(body: FullExport, user: dict = Depends(current_user)):
     content = ds.write_xlsx("조회결과", cols, t["rows"])
     safe = "".join(ch for ch in body.title if ch not in '\\/:*?"<>|').strip()[:80] or "AI 조회결과"
     suffix = f"_상위{t['max']:,}행" if t["capped"] else ""
+    downloads.record(user, "ai_full", safe, {"tool": body.tool, "input": body.input}, rows=len(t["rows"]), size=len(content))
     return _xlsx_response(content, f"{safe}{suffix}.xlsx")
 
 
@@ -488,6 +496,7 @@ def admin_backup(me: dict = Depends(require_admin)):
 
     body = _json.dumps(backup.export(me), ensure_ascii=False, indent=1).encode("utf-8")
     name = f"ERP영업관리_설정백업_{time.strftime('%Y%m%d_%H%M')}.json"
+    downloads.record(me, "settings_backup", name, size=len(body))
     return Response(body, media_type="application/json",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
@@ -508,7 +517,10 @@ def admin_restore_apply(body: dict, me: dict = Depends(require_admin)):
 
 @app.get("/api/admin/data-freshness")
 def admin_data_freshness(_: dict = Depends(require_admin)):
-    return mv_refresh.freshness()
+    """관리자 상단 배너 (주기 확인): 새 월 마감 · 점검 모드 켜짐"""
+    from . import notices
+
+    return {**mv_refresh.freshness(), "maintenance": notices.maintenance()}
 
 
 @app.get("/api/admin/data-status/refresh")
@@ -597,6 +609,123 @@ def admin_kill_session(sid: str, me: dict = Depends(require_admin)):
 
 
 # ----------------------------------------------------------------------------
+# 관리자 홈 · 스케줄/배치 · 다운로드 이력 · 공지/점검 모드
+# ----------------------------------------------------------------------------
+@app.get("/api/admin/home")
+def admin_home(fresh: bool = False, _: dict = Depends(require_admin)):
+    from . import admin_home as home
+
+    return home.overview(fresh)
+
+
+@app.get("/api/admin/jobs")
+def admin_jobs(days: int = 14, fresh: bool = False, _: dict = Depends(require_admin)):
+    from . import jobs
+
+    if fresh:
+        jobs.clear_cache()
+    return jobs.overview(days)
+
+
+@app.get("/api/admin/downloads")
+def admin_downloads(days: int = 30, usr: str | None = None, kind: str | None = None, _: dict = Depends(require_admin)):
+    names = {u["id"]: u["name"] for u in admin.list_users()}
+    return downloads.report(days, usr, kind, names)
+
+
+@app.get("/api/admin/notices")
+def admin_notices(_: dict = Depends(require_admin)):
+    from . import notices
+
+    return {**notices.list_all(), "maintenance": notices.maintenance()}
+
+
+@app.post("/api/admin/notices")
+def admin_notice_create(body: dict, me: dict = Depends(require_admin)):
+    from . import notices
+
+    return notices.save(me, body)
+
+
+@app.put("/api/admin/notices/{notice_id}")
+def admin_notice_update(notice_id: str, body: dict, me: dict = Depends(require_admin)):
+    from . import notices
+
+    return notices.save(me, body, notice_id)
+
+
+@app.delete("/api/admin/notices/{notice_id}")
+def admin_notice_delete(notice_id: str, me: dict = Depends(require_admin)):
+    from . import notices
+
+    return notices.delete(me, notice_id)
+
+
+@app.put("/api/admin/maintenance")
+def admin_maintenance(body: dict, me: dict = Depends(require_admin)):
+    """점검 모드 켜기/끄기 {on, message, until} — 켜면 관리자 외 사용자는 로그인·사용이 막힌다"""
+    from . import notices
+
+    return notices.set_maintenance(me, body)
+
+
+@app.get("/api/notices")
+def notices_active(_: dict = Depends(current_user)):
+    """오늘 게시 중인 공지 (로그인 후 팝업)"""
+    from . import notices
+
+    return {"notices": notices.active()}
+
+
+@app.get("/api/notices/board")
+def notices_board(q: str | None = None, me: dict = Depends(current_user)):
+    """공지사항 게시판 (게시가 시작된 공지, 지난 공지 포함 · 관리자는 전체)"""
+    from . import notices
+
+    return notices.board(me, q)
+
+
+@app.get("/api/notices/{notice_id}")
+def notice_detail(notice_id: str, me: dict = Depends(current_user)):
+    from . import notices
+
+    return notices.detail(me, notice_id)
+
+
+@app.get("/api/notices/{notice_id}/files/{no}")
+def notice_file(notice_id: str, no: int, me: dict = Depends(current_user)):
+    """본문 이미지는 화면에 바로 보이고(inline), 첨부파일은 내려받기(attachment)"""
+    from . import notices
+
+    data, mime, name, kind = notices.get_file(me, notice_id, no)
+    disp = "inline" if kind == "image" else "attachment"
+    return Response(content=data, media_type=mime, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f"{disp}; filename*=UTF-8''{quote(name)}"})
+
+
+@app.post("/api/notices/{notice_id}/comments")
+def notice_comment_add(notice_id: str, body: dict, me: dict = Depends(current_user)):
+    from . import notices
+
+    return notices.add_comment(me, notice_id, body)
+
+
+@app.put("/api/notices/{notice_id}/comments/{cmt_id}")
+def notice_comment_edit(notice_id: str, cmt_id: str, body: dict, me: dict = Depends(current_user)):
+    from . import notices
+
+    return notices.edit_comment(me, notice_id, cmt_id, body)
+
+
+@app.delete("/api/notices/{notice_id}/comments/{cmt_id}")
+def notice_comment_delete(notice_id: str, cmt_id: str, me: dict = Depends(current_user)):
+    from . import notices
+
+    return notices.delete_comment(me, notice_id, cmt_id)
+
+
+# ----------------------------------------------------------------------------
 # 데이터 관리 > 매장 재고 실사계획
 # ----------------------------------------------------------------------------
 invt_page = require_page("invt_plan")
@@ -666,7 +795,9 @@ def sale_dashboard_export(args: dict = Depends(_dash_args), me: dict = Depends(s
     except Exception:  # noqa: BLE001 - 상품 집계가 실패해도 나머지 보고서는 만든다
         logs.get("app").exception("보고용 엑셀 상품 시트 생략")
         pr = None
-    return _xlsx_response(rpt.build(d, pr), rpt.filename(d))
+    content = rpt.build(d, pr)
+    downloads.record(me, "sale_report", rpt.filename(d).removesuffix(".xlsx"), {k: v for k, v in args.items() if v}, size=len(content))
+    return _xlsx_response(content, rpt.filename(d))
 
 
 @app.get("/api/sale-dashboard/products")
@@ -813,6 +944,8 @@ def sale_export_cancel(job_id: str, me: dict = Depends(sale_page)):
 @app.get("/api/sale-monthly/exports/{job_id}/file")
 def sale_export_file(job_id: str, me: dict = Depends(sale_page)):
     path, name = sale_monthly.export_file(me["id"], job_id)
+    job = sale_monthly._jobs.get(job_id) or {}
+    downloads.record(me, "sale_monthly", name, job.get("cond"), rows=job.get("total"), size=os.path.getsize(path))
     return FileResponse(path, media_type=XLSX,
                         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
@@ -838,12 +971,14 @@ def invt_list(_: dict = Depends(invt_page)):
 
 
 @app.get("/api/invt-plans/export")
-def invt_export(ids: str | None = None, _: dict = Depends(invt_page)):
+def invt_export(ids: str | None = None, me: dict = Depends(invt_page)):
     plans = invt_plan.list_plans()
     if ids:  # 화면에서 필터·정렬된 순서 그대로 내보내기
         order = {int(x): i for i, x in enumerate(ids.split(",")) if x.strip().isdigit()}
         plans = sorted((p for p in plans if p["planId"] in order), key=lambda p: order[p["planId"]])
-    return _xlsx_response(invt_plan.export_xlsx(plans), "매장재고실사계획.xlsx")
+    content = invt_plan.export_xlsx(plans)
+    downloads.record(me, "invt_plan", "매장재고실사계획", {"selected": len(plans) if ids else "전체"}, rows=len(plans), size=len(content))
+    return _xlsx_response(content, "매장재고실사계획.xlsx")
 
 
 @app.get("/api/invt-plans/shops")
@@ -883,6 +1018,9 @@ def shop_profile(shop_id: str, ctx: str | None = None, me: dict = Depends(curren
         keys = ("planId", "invtPlanDt", "invtPlanNote", "lastInvtDt", "prevInvtType", "shopRankNm", "stockQty", "twiceYearYn")
         out["invtPlans"] = [{k: p.get(k) for k in keys} for p in invt_plan.list_plans() if p.get("shopId") == sid]
         out["managers"] = [m for m in invt_plan.shop_managers(sid) if m["current"]]
+        if any(m.get("smasrHp") for m in out["managers"]):
+            downloads.record(me, "manager_phone", f"매장 {sid} 매니저 연락처", {"shopId": sid, "screen": "매장 정보 팝업"},
+                             rows=len(out["managers"]))
     return out
 
 
@@ -893,8 +1031,12 @@ def invt_shop_trend(shop_id: str, _: dict = Depends(invt_page)):
 
 
 @app.get("/api/invt-plans/shops/{shop_id}/managers")
-def invt_shop_managers(shop_id: str, _: dict = Depends(invt_page)):
-    return {"managers": invt_plan.shop_managers(shop_id)}
+def invt_shop_managers(shop_id: str, me: dict = Depends(invt_page)):
+    rows = invt_plan.shop_managers(shop_id)
+    if any(m.get("smasrHp") for m in rows):
+        downloads.record(me, "manager_phone", f"매장 {shop_id} 매니저 연락처", {"shopId": shop_id, "screen": "실사계획 매니저 불러오기"},
+                         rows=len(rows))
+    return {"managers": rows}
 
 
 @app.post("/api/invt-plans")

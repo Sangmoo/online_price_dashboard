@@ -22,6 +22,7 @@ import { api, downloadFile, type Column, type DateInfo, type RowsResponse } from
 import { dtLabel, fmtNum, fmtPct, insDay } from '../format'
 import { RateBadge } from './DashboardView'
 import ProductInsightModal from './ProductInsightModal'
+import { HelpTip } from '../help/HelpTip'
 
 export type DetailState = {
   dt: string
@@ -336,9 +337,10 @@ export default function DetailView({ userId, canFillShop = false, dates, initial
         <Pill label="사이트 수" value={data ? fmtNum(data.summary.malls) : '-'} />
         <Pill
           label="매장코드 있음"
+          help="online.shopId"
           value={data ? `${fmtNum(data.summary.shopRows)}건${data.summary.shops ? ` · ${fmtNum(data.summary.shops)}개 매장` : ''}` : '-'}
         />
-        <Pill label="평균 할인율" value={data ? fmtPct(data.summary.avgDcRate, 2) : '-'} />
+        <Pill label="평균 할인율" help="online.avgDcRate" value={data ? fmtPct(data.summary.avgDcRate, 2) : '-'} />
         {sort && (
           <button className="pill sort-pill" onClick={() => setSort(null)} title="정렬 해제">
             정렬: {data?.columns.find((c) => c.key === sort.key)?.label} {sort.order === 'asc' ? '오름차순' : '내림차순'} <X size={12} />
@@ -432,10 +434,10 @@ export default function DetailView({ userId, canFillShop = false, dates, initial
   )
 }
 
-function Pill({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Pill({ label, value, strong, help }: { label: string; value: string; strong?: boolean; help?: string }) {
   return (
     <div className={`pill ${strong ? 'strong' : ''}`}>
-      <span>{label}</span>
+      <span>{label}{help && <HelpTip id={help} label={label} />}</span>
       <b>{value}</b>
     </div>
   )

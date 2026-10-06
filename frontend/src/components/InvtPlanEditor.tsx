@@ -12,6 +12,7 @@ import {
   type ShopRow,
 } from '../invtApi'
 import { fmtNum } from '../format'
+import { HelpTip } from '../help/HelpTip'
 
 type Props = {
   plan: InvtPlan | null
@@ -206,9 +207,9 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
               <Field label="유통" auto missing={miss('shopFormNm')}>{input('shopFormNm')}</Field>
               <Field label="매장명" auto missing={miss('shopNm')}>{input('shopNm')}</Field>
               <Field label="관리등급" auto missing={miss('shopRankNm')} hint="최종실사일 기준">{input('shopRankNm')}</Field>
-              <Field label="전년 매출(원)" auto missing={miss('prevSaleAmt')} hint={fmtMil(form.prevSaleAmt)}>{input('prevSaleAmt', '', 'number')}</Field>
-              <Field label="당년 매출(원)" auto missing={miss('currSaleAmt')} hint={fmtMil(form.currSaleAmt)}>{input('currSaleAmt', '', 'number')}</Field>
-              <Field label="증감율">
+              <Field label="전년 매출(원)" help="invt.sales" auto missing={miss('prevSaleAmt')} hint={fmtMil(form.prevSaleAmt)}>{input('prevSaleAmt', '', 'number')}</Field>
+              <Field label="당년 매출(원)" help="invt.sales" auto missing={miss('currSaleAmt')} hint={fmtMil(form.currSaleAmt)}>{input('currSaleAmt', '', 'number')}</Field>
+              <Field label="증감율" help="invt.sales">
                 <div className={`readonly ${saleRate && Number(saleRate) > 0 ? 'up' : saleRate && Number(saleRate) < 0 ? 'down' : ''}`}>
                   {saleRate ? `${Number(saleRate) > 0 ? '+' : ''}${saleRate}%` : '-'}
                 </div>
@@ -245,12 +246,12 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
             <div className="form-section-title">직전 실사 · 재고</div>
             <div className="form-grid">
               <Field label="최종실사일" auto missing={miss('lastInvtDt')}>{dateInput('lastInvtDt')}</Field>
-              <Field label="경과일"><div className="readonly">{elapsed != null ? `${fmtNum(elapsed)}일` : '-'}</div></Field>
+              <Field label="경과일" help="invt.lastInvt"><div className="readonly">{elapsed != null ? `${fmtNum(elapsed)}일` : '-'}</div></Field>
               <Field label="전실사유형" auto missing={miss('prevInvtType')}>{select('prevInvtType', options.invtTypes)}</Field>
-              <Field label="전실사결과" auto missing={miss('prevInvtResult')} hint={fmtWonHint(form.prevInvtResult)}>
+              <Field label="전실사결과" help="invt.lastInvt" auto missing={miss('prevInvtResult')} hint={fmtWonHint(form.prevInvtResult)}>
                 {input('prevInvtResult', '숫자', 'number')}
               </Field>
-              <Field label="재고 수량" auto missing={miss('stockQty')} hint={form.stockBaseDt ? `${ymdToIso(form.stockBaseDt)} 기준` : '당일 기준'}>
+              <Field label="재고 수량" help="invt.cost" auto missing={miss('stockQty')} hint={form.stockBaseDt ? `${ymdToIso(form.stockBaseDt)} 기준` : '당일 기준'}>
                 {input('stockQty', '', 'number')}
               </Field>
             </div>
@@ -263,8 +264,8 @@ export default function InvtPlanEditor({ plan, options, onClose, onSaved }: Prop
               <Field label="실사예정" wide>
                 <textarea className="input textarea" rows={2} value={str(form.invtPlanNote)} placeholder="자유롭게 작성" onChange={(e) => set('invtPlanNote', e.target.value)} />
               </Field>
-              <Field label="기본료(원)" hint="수도권 15만 · 그 외 20만">{input('baseFee', '권역 선택 시 자동', 'number')}</Field>
-              <Field label="실사예상액(원)" hint="재고 수량 × 85">{input('expectAmt', '재고 입력 시 자동', 'number')}</Field>
+              <Field label="기본료(원)" help="invt.cost" hint="수도권 15만 · 그 외 20만">{input('baseFee', '권역 선택 시 자동', 'number')}</Field>
+              <Field label="실사예상액(원)" help="invt.cost" hint="재고 수량 × 85">{input('expectAmt', '재고 입력 시 자동', 'number')}</Field>
               <Field label="실사예정일" hint="비우면 미정">
                 <div className="date-with-clear">
                   {dateInput('invtPlanDt')}
@@ -417,7 +418,9 @@ function Field({
   hint,
   wide,
   error,
+  help,
 }: {
+  help?: string
   label: string
   children: ReactNode
   auto?: boolean
@@ -430,6 +433,7 @@ function Field({
     <label className={`field ${wide ? 'wide' : ''}`}>
       <span className="field-label">
         {label}
+        {help && <HelpTip id={help} label={label} />}
         {auto && !missing && <span className="tag auto">자동</span>}
         {missing && <span className="tag miss">데이터 없음</span>}
         {hint && <span className={`field-hint ${error ? 'err' : ''}`}>{hint}</span>}

@@ -122,6 +122,8 @@ export function recordClientError(e: Omit<ClientError, 'at'>) {
 
 export const SESSION_EXPIRED_EVENT = 'opd:session-expired'
 export const SESSION_EXTENDED_EVENT = 'opd:session-extended'
+// 점검 모드(503 MAINTENANCE): 관리자 외 사용자는 점검 안내 화면으로
+export const MAINTENANCE_EVENT = 'opd:maintenance'
 
 // 사람 조작 없이 화면이 스스로 보내는 요청(주기 확인 등): 서버가 세션을 연장하지 않는다
 export const BACKGROUND_HEADERS = { 'X-Background': '1' }
@@ -139,6 +141,9 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
     if (res.status !== 401) recordClientError({ kind: 'api', status: res.status, url: url.split('?')[0], message })
     if (res.status === 401 && !url.startsWith('/api/auth/login')) {
       window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: message }))
+    }
+    if (res.status === 503 && code === 'MAINTENANCE' && !url.startsWith('/api/auth/login')) {
+      window.dispatchEvent(new CustomEvent(MAINTENANCE_EVENT, { detail: message }))
     }
     throw new ApiError(res.status, message, code, typeof d === 'object' ? d : {})
   }
@@ -377,7 +382,10 @@ export type Feedback = {
 }
 export type FeedbackLeadStats = { doneCount: number; avgHours: number | null; medianHours: number | null; oldestOpenHours: number | null }
 export type FeedbackLimits = { maxText: number; maxFiles: number; maxFileBytes: number; types: string[] }
-export type DataFreshness = { behind: boolean; mvMaxMonth: string | null; baseMaxMonth: string | null; lastRefresh: string | null; refreshing: boolean }
+export type DataFreshness = {
+  behind: boolean; mvMaxMonth: string | null; baseMaxMonth: string | null; lastRefresh: string | null; refreshing: boolean
+  maintenance?: { on: boolean; message: string; until: string | null }
+}
 export type MvRefresh = {
   status: 'idle' | 'running' | 'done' | 'error'
   started: string | null

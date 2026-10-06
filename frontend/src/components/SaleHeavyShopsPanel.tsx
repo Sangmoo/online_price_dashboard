@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { apiFetch } from '../api'
 import { growthClass } from './ShopTrendModal'
+import { HelpTip } from '../help/HelpTip'
 
 type Shop = {
   shopId: string; shopNm: string | null; event: boolean; team: string; brand: string; amt: number; discAmt: number
@@ -45,7 +46,7 @@ export default function SaleHeavyShopsPanel({ query, onShop }: { query: string; 
   return (
     <section className="card panel sale-heavy-panel">
       <div className="panel-head row">
-        <h3>세일 비중이 높은 매장</h3>
+        <h3>세일 비중이 높은 매장<HelpTip id="sales.saleShare" label="세일 비중" /></h3>
         <span className="panel-hint">
           {data.period} · 매장 실판금액 중 세일 판매 비중 − 같은 브랜드 전체 비중 · 월평균 {eok(data.minMonthlyAmt)} 이상 · 폐점 제외 ·
           {' '}대상 {data.candidateCount}개{loading ? ' · 갱신 중…' : ''}

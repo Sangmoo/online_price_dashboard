@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { apiFetch } from '../api'
+import { HelpTip } from '../help/HelpTip'
 import { fmtNum } from '../format'
 
 type Row = {
@@ -68,6 +69,7 @@ export default function OnlineAlertPanel({ query, onProduct }: { query: string; 
         <h3>
           {data.alertCount > 0 && <AlertTriangle size={16} className="warn-icon" />} 온라인 할인 주의 상품
           {data.alertCount > 0 && <span className="count-badge warn">{data.alertCount}</span>}
+          <HelpTip id="sales.onlineAlert" label="온라인 할인 주의 상품" />
         </h3>
         <span className="panel-hint">
           매장 {data.period} 실판금액 상위 {data.total}개 상품 중 온라인 최근 {data.recentDays}일({data.recentFrom}~) 평균 할인율이 그 전 4주보다

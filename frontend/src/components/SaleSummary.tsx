@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Download, Loader2 } from 'lucide-react
 import { apiFetch, exportTable } from '../api'
 import { fmtNum } from '../format'
 import ShopTrendModal, { fmtGrowth, growthClass } from './ShopTrendModal'
+import { HelpTip } from '../help/HelpTip'
 
 export type SummaryCond = { ymFrom: string; ymTo: string; shops: string; planYys: string; seasons: string }
 type Dim = { key: string; label: string }
@@ -167,11 +168,11 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
           <section className="summary-pills">
             <div className="pill strong"><span>실판금액</span><b>{fmtNum(data.total.amt)}원</b></div>
             <div className="pill"><span>전년 동기</span><b>{fmtNum(data.total.prevAmt)}원</b></div>
-            <div className="pill"><span>증감</span><b className={growthClass(data.total.growth)}>{fmtGrowth(data.total.growth)}</b></div>
+            <div className="pill"><span>증감<HelpTip id="sales.growth" label="증감" /></span><b className={growthClass(data.total.growth)}>{fmtGrowth(data.total.growth)}</b></div>
             <div className="pill"><span>수량</span><b>{fmtNum(data.total.qty)}</b><span className="muted">(전년 {fmtNum(data.total.prevQty)})</span></div>
             <div className="pill"><span>할인금액</span><b>{fmtNum(data.total.dsct)}원</b></div>
             <div className="pill" title="원가율 = 원가 금액(제조원가×수량) ÷ 실판금액">
-              <span>원가율</span><b>{pct(data.total.costRate)}</b>
+              <span>원가율<HelpTip id="sales.costRate" label="원가율" /></span><b>{pct(data.total.costRate)}</b>
               <span className="muted">(전년 {pct(data.total.prevCostRate)}, </span>
               <b className={growthClass(data.total.costRateDiff)}>{pp(data.total.costRateDiff)}</b><span className="muted">)</span>
             </div>

@@ -482,3 +482,35 @@
 .action-card .action-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .mall-table td.group-cell { vertical-align: top; background: var(--surface, transparent); border-right: 1px solid var(--border); }
 .mall-table tr.group-start td { border-top: 1px solid color-mix(in srgb, var(--text) 18%, transparent); }
+
+/* ---------- 팝업이 열려 있으면 뒤 페이지는 스크롤하지 않는다 (팝업 안만 스크롤) ----------
+   html 에 스크롤 막대 자리를 늘 남겨 두어, 팝업을 열고 닫을 때 막대가 사라지며 화면이 옆으로 밀리지 않게 한다. */
+html { scrollbar-gutter: stable; }
+html:has(.modal-backdrop) { overflow: hidden; }
+.modal-backdrop, .modal-backdrop * { overscroll-behavior: contain; }
+
+/* ---------- 지표 정의 · 도움말 ---------- */
+.help-tip {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 3px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted); vertical-align: middle; cursor: help; flex: none;
+}
+.help-tip:hover, .help-tip:focus-visible { color: var(--primary); background: var(--primary-soft); outline: 0; }
+.help-btn { margin-left: auto; }
+.help-btn + .feedback-btn { margin-left: 8px; }
+.help-modal { max-width: 760px; max-height: calc(100vh - 40px); padding: 18px 20px; gap: 10px; overflow: hidden; }
+.help-modal .modal-head h3 { display: flex; align-items: center; gap: 8px; }
+.help-search { width: 100%; }
+.help-nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.help-body { overflow-y: auto; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 18px; padding-right: 4px; scroll-padding-top: 4px; }
+.help-group { display: flex; flex-direction: column; gap: 10px; }
+.help-group-head { position: sticky; top: 0; z-index: 1; padding: 6px 0; background: var(--surface); border-bottom: 1px solid var(--border); }
+.help-entry { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); scroll-margin-top: 44px; }
+.help-entry.active { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-soft); }
+.help-entry h4 { margin: 0 0 8px; font-size: 14.5px; }
+.help-formula { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.7; color: var(--text); }
+.help-entry dl { display: grid; grid-template-columns: 64px 1fr; gap: 4px 10px; margin: 10px 0 0; font-size: 12.5px; }
+.help-entry dt { color: var(--muted); }
+.help-entry dd { margin: 0; color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
+.help-entry ul { margin: 0; padding-left: 16px; }
+.mono-soft { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; }
+@media (max-width: 640px) { .help-entry dl { grid-template-columns: 1fr; } .help-btn span { display: none; } }

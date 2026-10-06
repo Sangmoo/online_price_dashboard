@@ -74,6 +74,10 @@ def warm(reason: str) -> dict:
                        "error": "; ".join(errors) or None, "reason": reason})
         _log.info("판매 현황 미리 계산 (%s) 브랜드 조합 %d개 %.1f초%s", reason, len(sc), sec,
                   f" 실패: {errors}" if errors else "")
+        from . import jobs
+
+        jobs.record("prewarm", t0, time.time(), "error" if errors else "ok",
+                    f"{reason} · 브랜드 조합 {len(sc)}개" + (f" · 실패 {'; '.join(errors)}" if errors else ""))
     finally:
         _lock.release()
     return state()

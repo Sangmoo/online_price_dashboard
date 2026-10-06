@@ -318,8 +318,11 @@ def fill_shop_ids(admin: dict, days: int = FILL_DAYS) -> dict:
     """최근 days 일(당일 포함) 수집 행의 SHOP_ID 를 판매처 매장 연결 매핑으로 채운다. 같은 값이면 건드리지 않는다."""
     import oracledb
 
+    from . import jobs
+
     if not _fill_lock.acquire(blocking=False):
         _bad("다른 사용자가 매장코드를 채우는 중입니다. 잠시 후 다시 시도하세요.", 409)
+    t0 = time.time()
     try:
         today = datetime.now()
         frm, to = (today - timedelta(days=days - 1)).strftime("%Y%m%d"), today.strftime("%Y%m%d")
@@ -334,6 +337,9 @@ def fill_shop_ids(admin: dict, days: int = FILL_DAYS) -> dict:
                 _bad("매장코드 채우기 프로시저가 없습니다. 관리자에게 db/create_job_online_shop_id.sql 실행을 요청하세요.")
             raise
         elapsed = round(time.time() - start, 1)
+    except Exception as ex:
+        jobs.record("shop_fill", t0, time.time(), "error", str(getattr(ex, "detail", ex))[:300], admin.get("id"))
+        raise
     finally:
         _fill_lock.release()
     # 화면 캐시(일자별 상세·대시보드·판매처 매장 연결 반영률)를 비워 바로 보이게 한다
@@ -342,4 +348,5 @@ def fill_shop_ids(admin: dict, days: int = FILL_DAYS) -> dict:
     with _lock:
         _cache.clear()
     audit.record(admin, "ONLINE_SHOP_FILL", f"매장코드 채우기 {frm}~{to}", summary=f"{updated:,}행 변경 · {elapsed}초")
+    jobs.record("shop_fill", t0, time.time(), "ok", f"{frm}~{to} · {updated:,}행 변경", admin.get("id"))
     return {"from": frm, "to": to, "updated": updated, "elapsedSec": elapsed}

@@ -146,6 +146,7 @@ def login(usr_id: str, password: str, ip: str | None, user_agent: str | None) ->
     if not me["active"]:
         _record(usr_id, False, "INACTIVE", ip)
         raise AuthError(403, "사용이 중지된 계정입니다. 관리자에게 문의하세요.", "INACTIVE")
+    _check_maintenance(me, lambda: _record(usr_id, False, "MAINTENANCE", ip))
 
     token = secrets.token_urlsafe(32)
     appdb.session_purge(now)
@@ -169,6 +170,19 @@ BACKGROUND_HEADER = "X-Background"
 def is_background(request: Request) -> bool:
     headers = getattr(request, "headers", None) or {}
     return headers.get(BACKGROUND_HEADER) == "1"
+
+
+def _check_maintenance(me: dict, on_block=None) -> None:
+    """점검 모드면 관리자 외 사용자는 막는다 (503 MAINTENANCE). 세션은 지우지 않아 점검이 끝나면 그대로 이어서 쓴다."""
+    if me["role"] == "ADMIN":
+        return
+    from . import notices
+
+    msg = notices.blocked_message()
+    if msg:
+        if on_block:
+            on_block()
+        raise AuthError(503, msg, "MAINTENANCE")
 
 
 def current_user(request: Request) -> dict:
@@ -196,8 +210,9 @@ def current_user(request: Request) -> dict:
         appdb.session_touch(token, now, expires)
     else:
         expires = sess["expires_at"]
-    request.state.session_expires = int(expires)
     request.state.usr_id = me["id"]
+    _check_maintenance(me)
+    request.state.session_expires = int(expires)
     me["ip"] = request.client.host if getattr(request, "client", None) else None  # 관리자 변경 이력용
     me["sessionExpiresAt"] = int(expires)
     return me

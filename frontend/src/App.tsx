@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import {
   BarChart3,
+  BookOpen,
   ChartLine,
   ClipboardList,
   Clock,
@@ -9,8 +10,10 @@ import {
   Loader2,
   Link2,
   LogOut,
+  Megaphone,
   MessageSquareWarning,
   Moon,
+  Wrench,
   PanelLeftClose,
   PanelLeftOpen,
   ShieldCheck,
@@ -18,10 +21,15 @@ import {
   Table2,
   TrendingDown,
 } from 'lucide-react'
-import { api, SESSION_EXPIRED_EVENT, SESSION_EXTENDED_EVENT, type DataFreshness, type DateInfo, type PageKey, type User } from './api'
+import { api, ApiError, MAINTENANCE_EVENT, SESSION_EXPIRED_EVENT, SESSION_EXTENDED_EVENT, type DataFreshness, type DateInfo, type PageKey, type User } from './api'
+import { opsApi, type Notice } from './opsApi'
+import { hiddenToday } from './noticeHide'
+import NoticePopup from './components/NoticePopup'
+import MaintenanceScreen from './components/MaintenanceScreen'
 import { addDays } from './format'
 import type { DetailState } from './components/DetailView'
 import LoginView from './components/LoginView'
+import { OPEN_HELP_EVENT } from './help/openHelp'
 import type { Tab as AdminTab } from './components/AdminView'
 
 // 메뉴별 화면은 처음 열 때 내려받는다 (첫 접속 파일 크기 축소). 로그인 화면만 기본 파일에 포함.
@@ -52,6 +60,8 @@ const SaleMonthlyView = lazyView(() => import('./components/SaleMonthlyView'))
 const SaleDashboardView = lazyView(() => import('./components/SaleDashboardView'))
 const FeedbackModal = lazyView(() => import('./components/FeedbackModal'))
 const MallShopView = lazyView(() => import('./components/MallShopView'))
+const HelpModal = lazyView(() => import('./components/HelpModal'))
+const NoticeBoardView = lazyView(() => import('./components/NoticeBoardView'))
 
 type Theme = 'light' | 'dark'
 
@@ -86,22 +96,25 @@ function initialCollapsed(): boolean {
   return readStorage('sidebar') === 'collapsed'
 }
 
-type MenuGroup = 'view' | 'sales' | 'data' | 'admin'
-const MENU: { key: PageKey; label: string; desc: string; icon: typeof Home; group: MenuGroup }[] = [
+type MenuGroup = 'view' | 'sales' | 'data' | 'common' | 'admin'
+// 화면 = 메뉴 권한이 있는 페이지 + 공지사항(모든 사용자)
+type ViewKey = PageKey | 'notice'
+const MENU: { key: ViewKey; label: string; desc: string; icon: typeof Home; group: MenuGroup }[] = [
   { key: 'dashboard', label: '대시보드', desc: '기간별 수집 현황', icon: Home, group: 'view' },
   { key: 'detail', label: '일자별 상세', desc: '일자별 원본 · 엑셀', icon: Table2, group: 'view' },
   { key: 'mall_shop', label: '판매처 매장 연결', desc: '사이트 · 판매자 → 매장코드', icon: Link2, group: 'view' },
   { key: 'sale_dashboard', label: '판매 현황', desc: '월 실적 · 전년 대비', icon: ChartLine, group: 'sales' },
   { key: 'sale_monthly', label: '월별 매장별 판매 집계', desc: '마감 매출 · 엑셀', icon: BarChart3, group: 'sales' },
   { key: 'invt_plan', label: '매장 재고 실사계획', desc: '실사 일정 · 예상 비용', icon: ClipboardList, group: 'data' },
+  { key: 'notice', label: '공지사항', desc: '공지 · 첨부 · 댓글', icon: Megaphone, group: 'common' },
   { key: 'admin', label: '관리자', desc: '사용자 · 권한 · AI 설정', icon: ShieldCheck, group: 'admin' },
 ]
-const GROUP_LABELS: Record<MenuGroup, string> = { view: '온라인 가격', sales: '판매 분석', data: '데이터 관리', admin: '시스템' }
+const GROUP_LABELS: Record<MenuGroup, string> = { view: '온라인 가격', sales: '판매 분석', data: '데이터 관리', common: '공통', admin: '시스템' }
 
 // ----------------------------------------------------------------------------
 // URL 상태 (링크 공유)
 // ----------------------------------------------------------------------------
-type UrlState = { view?: PageKey; start?: string; end?: string; detail: Partial<DetailState> }
+type UrlState = { view?: ViewKey; start?: string; end?: string; detail: Partial<DetailState> }
 
 function readUrl(): UrlState {
   const p = new URLSearchParams(window.location.search)
@@ -109,7 +122,7 @@ function readUrl(): UrlState {
     const v = p.get(k)
     return v !== null && v !== '' && !isNaN(Number(v)) ? Number(v) : undefined
   }
-  const view = p.get('view') as PageKey | null
+  const view = p.get('view') as ViewKey | null
   const order = p.get('order')
   return {
     view: view && MENU.some((m) => m.key === view) ? view : undefined,
@@ -142,6 +155,7 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [user, setUser] = useState<User | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
+  const [maintenance, setMaintenance] = useState<string | null>(null)
   const [loginNotice, setLoginNotice] = useState<string | null>(null)
 
   useEffect(() => {
@@ -154,8 +168,18 @@ export default function App() {
     api
       .me()
       .then(({ user }) => setUser(user))
-      .catch(() => setUser(null))
+      .catch((e) => {
+        if (e instanceof ApiError && e.code === 'MAINTENANCE') setMaintenance(e.message)
+        else setUser(null)
+      })
       .finally(() => setAuthChecked(true))
+  }, [])
+
+  // 점검 모드(관리자 외 접속 차단): 어느 API 에서든 503 MAINTENANCE → 점검 안내 화면
+  useEffect(() => {
+    const on = (e: Event) => setMaintenance((e as CustomEvent<string>).detail || '시스템 점검 중입니다.')
+    window.addEventListener(MAINTENANCE_EVENT, on)
+    return () => window.removeEventListener(MAINTENANCE_EVENT, on)
   }, [])
 
   // 어느 API 에서든 401 → 로그인 화면
@@ -178,6 +202,31 @@ export default function App() {
       <div className="boot">
         <Loader2 className="spin" size={28} />
       </div>
+    )
+  }
+  if (maintenance) {
+    return (
+      <MaintenanceScreen
+        message={maintenance}
+        onRetry={async () => {
+          try {
+            const { user } = await api.me()
+            setMaintenance(null)
+            setUser(user)
+          } catch (e) {
+            if (e instanceof ApiError && e.code === 'MAINTENANCE') setMaintenance(e.message)
+            else {
+              setMaintenance(null)
+              setUser(null)
+            }
+          }
+        }}
+        onLogin={() => {
+          api.logout().catch(() => undefined)
+          setMaintenance(null)
+          setUser(null)
+        }}
+      />
     )
   }
   if (!user) {
@@ -209,10 +258,15 @@ type ShellProps = { user: User; theme: Theme; onTheme: () => void; onLogout: (no
 
 function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [initialUrl] = useState(readUrl)
-  const allowed = MENU.filter((m) => user.pages.includes(m.key))
-  const [view, setView] = useState<PageKey | null>(() =>
-    initialUrl.view && user.pages.includes(initialUrl.view) ? initialUrl.view : (allowed[0]?.key ?? null),
+  const allowed = MENU.filter((m) => m.key === 'notice' || user.pages.includes(m.key))
+  const [view, setView] = useState<ViewKey | null>(() =>
+    initialUrl.view && allowed.some((m) => m.key === initialUrl.view) ? initialUrl.view : (allowed[0]?.key ?? null),
   )
+  const [noticeFocus, setNoticeFocus] = useState<{ id: string; nonce: number } | null>(null)
+  const openNotice = useCallback((id: string) => {
+    setNoticeFocus({ id, nonce: Date.now() })
+    setView('notice')
+  }, [])
   const [collapsed, setCollapsed] = useState(initialCollapsed)
   const [dates, setDates] = useState<DateInfo[]>([])
   const [datesError, setDatesError] = useState<string | null>(null)
@@ -222,7 +276,35 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [saleCtx, setSaleCtx] = useState<Record<string, string>>({})
   const [saleDashCtx, setSaleDashCtx] = useState<Record<string, string>>({})
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  // 지표 정의 · 도움말: 상단 [도움말] 또는 화면의 (?) 아이콘(openHelp 이벤트)으로 연다
+  const [help, setHelp] = useState<{ focus?: string } | null>(null)
+  useEffect(() => {
+    const open = (e: Event) => setHelp({ focus: (e as CustomEvent<string | undefined>).detail })
+    window.addEventListener(OPEN_HELP_EVENT, open)
+    return () => window.removeEventListener(OPEN_HELP_EVENT, open)
+  }, [])
   const [badge, setBadge] = useState<{ newAnswers: number; open: number | null }>({ newAnswers: 0, open: null })
+  // 공지: 게시 중인 공지 중 오늘 숨기지 않았고 이번 접속에서 아직 닫지 않은 것을 팝업으로. 상단 [공지] 로 다시 볼 수 있다
+  const [notices, setNotices] = useState<Notice[]>([])
+  const [noticePopup, setNoticePopup] = useState<{ list: Notice[]; auto: boolean } | null>(null)
+  const seenNotices = useRef(new Set<string>())
+  const checkNotices = useCallback(() => {
+    opsApi
+      .activeNotices()
+      .then(({ notices }) => {
+        setNotices(notices)
+        const hidden = hiddenToday(user.id)
+        const fresh = notices.filter((n) => !hidden.includes(n.id) && !seenNotices.current.has(n.id))
+        if (fresh.length) setNoticePopup((cur) => cur ?? { list: fresh, auto: true })
+      })
+      .catch(() => undefined)
+  }, [user.id])
+  const closeNotices = useCallback(() => {
+    setNoticePopup((cur) => {
+      cur?.list.forEach((n) => seenNotices.current.add(n.id))
+      return null
+    })
+  }, [])
   const [expiresAt, setExpiresAt] = useState<number>(user.sessionExpiresAt ?? Math.floor(Date.now() / 1000) + 3600)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   const lastTouch = useRef(0)
@@ -258,6 +340,16 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [checkBadge])
+  useEffect(() => {
+    checkNotices()
+    const t = setInterval(checkNotices, BADGE_INTERVAL_MS)
+    const onVisible = () => document.visibilityState === 'visible' && checkNotices()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [checkNotices])
   useEffect(() => {
     if (!feedbackOpen) checkBadge()
   }, [feedbackOpen, view, checkBadge])
@@ -454,14 +546,28 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </button>
             <div>
               <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
-              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'mall_shop' ? '온라인 가격 · T_SELECT_ONLINE_MALL_SHOP' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
+              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'mall_shop' ? '온라인 가격 · T_SELECT_ONLINE_MALL_SHOP' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : view === 'notice' ? '공통 · T_ERP_WEB_NOTICE' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
+            {notices.length > 0 && (
+              <button className="btn ghost notice-btn" onClick={() => setNoticePopup({ list: notices, auto: false })} title="게시 중인 공지 보기">
+                <Megaphone size={15} /> <span>공지</span> <span className="count-badge">{notices.length}</span>
+              </button>
+            )}
+            <button className="btn ghost help-btn" onClick={() => setHelp({})} title="지표 정의 · 계산식 · 원천 테이블">
+              <BookOpen size={15} /> <span>도움말</span>
+            </button>
             <button className="btn ghost feedback-btn" onClick={() => setFeedbackOpen(true)} title="오류 신고 · 기능 요청 · 문의 (현재 화면과 조회 조건이 함께 전달됩니다)">
               <MessageSquareWarning size={15} /> 문의·신고
               {badge.newAnswers > 0 && <span className="count-badge danger" title="새 답변이 있습니다">새 답변 {badge.newAnswers}</span>}
             </button>
           </div>
         </header>
+        {noticePopup && <NoticePopup userId={user.id} notices={noticePopup.list} auto={noticePopup.auto} onClose={closeNotices} onOpen={(id) => { closeNotices(); openNotice(id) }} />}
+        {help && (
+          <Suspense fallback={null}>
+            <HelpModal focus={help.focus} onClose={() => setHelp(null)} />
+          </Suspense>
+        )}
         {feedbackOpen && (
           <Suspense fallback={null}>
             <FeedbackModal page={view ?? ''} pageLabel={current?.label ?? '-'} context={chatContext} onClose={() => setFeedbackOpen(false)} />
@@ -477,6 +583,14 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
           </div>
         )}
 
+        {freshness?.maintenance?.on && (
+          <div className="fresh-warn maint-warn">
+            <Wrench size={15} /> 점검 모드가 켜져 있습니다 — 관리자 외 사용자는 로그인·사용할 수 없습니다.
+            <button className="btn-link" onClick={() => { setAdminTab({ tab: 'notices', nonce: Date.now() }); setView('admin') }}>
+              점검 모드 관리
+            </button>
+          </div>
+        )}
         {freshness?.behind && (
           <div className="fresh-warn">
             <DatabaseZap size={15} />
@@ -526,7 +640,9 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
           )}
           {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
           {view === 'mall_shop' && user.pages.includes('mall_shop') && <MallShopView />}
-          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge} />}
+          {view === 'notice' && <NoticeBoardView key={noticeFocus?.nonce ?? 0} me={user} focusId={noticeFocus?.id} onChange={checkNotices} />}
+          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge}
+            onOpsChange={() => { api.admin.dataFreshness().then(setFreshness).catch(() => undefined); checkNotices() }} />}
           {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
           </Suspense>
         </main>

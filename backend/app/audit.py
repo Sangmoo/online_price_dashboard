@@ -35,8 +35,13 @@ ACTIONS = {
     "FEEDBACK_UPDATE": "문의·신고 처리",
     "MALL_SHOP_MAP": "판매처 매장 연결",
     "ONLINE_SHOP_FILL": "온라인 수집 매장코드 채우기",
+    "NOTICE_SAVE": "공지 등록·수정",
+    "NOTICE_DELETE": "공지 삭제",
+    "MAINTENANCE": "점검 모드",
 }
 FIELD_LABELS = {
+    "on": "점검 모드", "message": "안내 문구", "until": "종료 예정", "title": "제목", "level": "구분", "start": "게시 시작",
+    "end": "게시 종료", "use": "사용", "body": "내용",
     "role": "권한", "pages": "메뉴 권한", "ai_enabled": "AI 사용", "daily_questions": "일일 질문 한도",
     "daily_cost_usd": "일일 비용 한도($)", "active": "계정 사용", "usr_nm": "이름", "brands": "브랜드 권한",
     "ai_enabled_global": "AI 기능", "default_daily_questions": "기본 질문 한도", "default_daily_cost_usd": "기본 비용 한도($)",

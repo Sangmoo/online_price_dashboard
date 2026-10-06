@@ -52,6 +52,126 @@ def temp_store(tmp_path, monkeypatch):
         del store._local.conn
 
 
+@pytest.fixture(autouse=True)
+def _no_local_records(monkeypatch, request):
+    """작업 실행 기록(jobs) · 다운로드 이력(downloads)이 실제 서버 로컬 app.db / Oracle 에 남지 않게 기본으로 막는다.
+    두 모듈 자체를 시험할 때는 real_records 픽스처를 쓴다 (임시 SQLite)."""
+    if "real_records" in request.fixturenames:
+        return
+    from app import downloads, jobs
+
+    calls: list = []
+    monkeypatch.setattr(jobs, "record", lambda *a, **k: calls.append(("job", a, k)))
+    monkeypatch.setattr(downloads, "record", lambda *a, **k: calls.append(("download", a, k)))
+    request.node.recorded = calls
+
+
+ADMIN_OPS_DDL = """
+CREATE TABLE T_ERP_WEB_DOWNLOAD_LOG (DL_ID TEXT PRIMARY KEY, DL_DAY TEXT NOT NULL, USR_ID TEXT NOT NULL, KIND_CD TEXT NOT NULL,
+    TITLE TEXT, PARAMS TEXT, ROW_CNT INTEGER, FILE_BYTES INTEGER, IP TEXT);
+CREATE TABLE T_ERP_WEB_NOTICE (NOTICE_ID TEXT PRIMARY KEY, TITLE TEXT NOT NULL, BODY TEXT, LEVEL_CD TEXT NOT NULL, START_DT TEXT NOT NULL,
+    END_DT TEXT NOT NULL, USE_YN TEXT NOT NULL, INS_USERID TEXT, INS_DAY TEXT, UPT_USERID TEXT, UPT_DAY TEXT);
+CREATE TABLE T_ERP_WEB_NOTICE_FILE (NOTICE_ID TEXT NOT NULL, FILE_NO INTEGER NOT NULL, KIND_CD TEXT NOT NULL, FILE_NM TEXT NOT NULL,
+    MIME_TYPE TEXT NOT NULL, FILE_SIZE INTEGER NOT NULL, FILE_DATA BLOB NOT NULL, INS_DAY TEXT NOT NULL, PRIMARY KEY (NOTICE_ID, FILE_NO));
+CREATE TABLE T_ERP_WEB_NOTICE_COMMENT (CMT_ID TEXT PRIMARY KEY, NOTICE_ID TEXT NOT NULL, PARENT_ID TEXT, USR_ID TEXT NOT NULL, USR_NM TEXT,
+    BODY TEXT, DEL_YN TEXT NOT NULL, INS_DAY TEXT NOT NULL, UPT_DAY TEXT NOT NULL);
+CREATE TABLE T_ERP_WEB_JOB_RUN (RUN_ID TEXT PRIMARY KEY, JOB_CD TEXT NOT NULL, START_DAY TEXT NOT NULL, END_DAY TEXT, STATUS_CD TEXT NOT NULL,
+    DETAIL TEXT, USR_ID TEXT);
+"""
+
+
+class _FakeCursor:
+    def __init__(self, conn):
+        self._c = conn.cursor()
+        self.arraysize = 100
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self._c.close()
+        return False
+
+    def setinputsizes(self, **kw):
+        pass
+
+    def execute(self, sql, params=None):
+        self._c.execute(sql, params or {})
+
+    def executemany(self, sql, rows):
+        self._c.executemany(sql, rows)
+
+    @property
+    def description(self):
+        return self._c.description
+
+    @property
+    def rowcount(self):
+        return self._c.rowcount
+
+    def fetchall(self):
+        return self._c.fetchall()
+
+    def close(self):
+        pass
+
+
+class _FakeConn:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self):
+        return _FakeCursor(self._conn)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+
+class _FakePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _FakeConn(self._conn)
+
+
+@pytest.fixture
+def fake_oracle(monkeypatch):
+    """운영 기능 테이블(공지 · 첨부 · 댓글 · 다운로드 이력 · 작업 실행)을 메모리 DB 로 흉내 낸 Oracle 연결 풀.
+    같은 SQL(:이름 바인드)을 그대로 실행한다. 테이블 확인(ALL_TABLES)은 '있음' 으로."""
+    import sqlite3
+
+    from app import db, downloads, jobs, notices, tables
+
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.executescript(ADMIN_OPS_DDL)
+    monkeypatch.setattr(db, "get_pool", lambda: _FakePool(conn))
+    monkeypatch.setattr(tables.Tables, "missing", lambda self: [])
+    from app import audit
+
+    audited: list = []
+    monkeypatch.setattr(audit, "record", lambda *a, **k: audited.append((a, k)))   # 변경 이력은 실제 저장소에 남기지 않음
+    from types import SimpleNamespace
+
+    yield SimpleNamespace(conn=conn, audited=audited)
+    conn.close()
+
+
+@pytest.fixture
+def real_records(fake_oracle):
+    """jobs · downloads 기록을 실제로 실행 (메모리 DB)"""
+    yield fake_oracle
+
+
 _oracle_ok: bool | None = None
 
 

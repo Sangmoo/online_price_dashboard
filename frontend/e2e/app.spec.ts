@@ -214,6 +214,7 @@ test('관리자: 사용자 브랜드 권한을 바꾸면 선택한 브랜드로 
   }))
   api.on('PUT', '/api/admin/users/170046', (req) => ({ json: { user: adminUser((req.postDataJSON() as { brands: string[] | null }).brands) } }))
   await page.goto('/?view=admin')
+  await page.locator('.admin-tab', { hasText: '사용자 · 권한' }).click()   // 관리자 화면은 '홈' 탭부터
   const row = page.getByRole('row', { name: /홍길동/ })
   await expect(row).toContainText('모든 브랜드')
   await row.getByRole('button', { name: '설정' }).nth(1).click()
@@ -343,10 +344,10 @@ test('판매 현황 아래에 판매형태 구성·상품 순위·아이템 비�
   await page.goto('/?view=sale_dashboard')
   await expect(page.getByRole('heading', { name: '판매형태 구성' })).toBeVisible()
   await expect(page.getByRole('row', { name: /^세일/ }).first()).toContainText('+8.5%p')
-  await page.getByRole('button', { name: '수량' }).click()
+  await page.getByRole('button', { name: '수량', exact: true }).click()
   await expect(page.getByRole('button', { name: 'SWWSTQ32150' })).toBeVisible()
-  await page.getByRole('button', { name: '실판금액' }).click()
-  await page.getByRole('button', { name: '품군' }).click()
+  await page.getByRole('button', { name: '실판금액', exact: true }).click()
+  await page.getByRole('button', { name: '품군', exact: true }).click()
   await expect(page.getByRole('cell', { name: '우븐', exact: true })).toBeVisible()
   expect(Object.fromEntries(api.find('GET', '/api/sale-dashboard/products')[0].query)).toEqual({ ym: '202608', from: '202608', cmp: 'yoy' })
 

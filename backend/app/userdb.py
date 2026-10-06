@@ -27,6 +27,9 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "auto_model": ("AI_AUTO_MODEL", "yn"),
     "simple_model": ("AI_SIMPLE_MODEL", "str"),
     "feedback_img_keep_months": ("FEEDBACK_IMG_KEEP_MONTHS", "int"),
+    "maintenance_on": ("MAINTENANCE_ON", "yn"),          # 점검 모드: 관리자 외 접속 차단 (notices.py)
+    "maintenance_msg": ("MAINTENANCE_MSG", "str"),
+    "maintenance_until": ("MAINTENANCE_UNTIL", "str"),    # 종료 예정 'YYYY-MM-DD HH:MI' (안내용)
 }
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
@@ -38,6 +41,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_model": False,
     "simple_model": None,
     "feedback_img_keep_months": 12,   # 완료된 문의의 첨부 이미지 보관 개월 (0 = 계속 보관)
+    "maintenance_on": False,
+    "maintenance_msg": None,
+    "maintenance_until": None,
 }
 
 _lock = threading.Lock()

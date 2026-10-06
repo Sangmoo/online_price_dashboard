@@ -14,6 +14,7 @@ import {
 import { AlertTriangle, CalendarRange, Layers, Percent, RefreshCw, ShoppingBag, Store, Tag } from 'lucide-react'
 import { api, type Dashboard, type DateInfo } from '../api'
 import ProductInsightModal from './ProductInsightModal'
+import { HelpTip } from '../help/HelpTip'
 import { addDays, compact, daysBetween, dtLabel, dtShort, dtToIso, fmtNum, fmtPct, fmtWon, isoToDt } from '../format'
 
 const MAX_DAYS = 31
@@ -120,12 +121,12 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
       {error && <div className="alert error">{error}</div>}
 
       <section className="kpi-grid">
-        <Kpi icon={<Layers size={18} />} tone="indigo" label="총 수집 건수" value={k ? fmtNum(k.ROW_CNT) : null} sub={k ? `${k.DAY_CNT}일 · 일평균 ${fmtNum(Math.round(k.ROW_CNT / Math.max(k.DAY_CNT, 1)))}건` : ''} />
+        <Kpi icon={<Layers size={18} />} tone="indigo" label="총 수집 건수" help="online.counts" value={k ? fmtNum(k.ROW_CNT) : null} sub={k ? `${k.DAY_CNT}일 · 일평균 ${fmtNum(Math.round(k.ROW_CNT / Math.max(k.DAY_CNT, 1)))}건` : ''} />
         <Kpi icon={<ShoppingBag size={18} />} tone="teal" label="수집 상품 수" value={k ? fmtNum(k.PRDT_CNT) : null} sub="고유 상품코드" />
-        <Kpi icon={<Store size={18} />} tone="sky" label="사이트 수" value={k ? fmtNum(k.MALL_CNT) : null} sub={k ? `판매자 ${fmtNum(k.SELLER_CNT)} · 매장 ${fmtNum(k.SHOP_CNT ?? 0)}` : ''} />
-        <Kpi icon={<Percent size={18} />} tone="amber" label="평균 할인율" value={k ? fmtPct(k.AVG_DC_RATE, 2) : null} sub="기준가 대비 사이트 할인가" />
-        <Kpi icon={<Tag size={18} />} tone="rose" label="최대 할인율" value={k ? fmtPct(k.MAX_DC_RATE, 2) : null} sub="기간 내 최저가 기준" />
-        <Kpi icon={<AlertTriangle size={18} />} tone="violet" label="30% 이상 고할인" value={k ? fmtNum(k.DEEP_DC_CNT) : null} sub={k && k.ROW_CNT ? `전체의 ${fmtPct((k.DEEP_DC_CNT / k.ROW_CNT) * 100, 2)}` : ''} />
+        <Kpi icon={<Store size={18} />} tone="sky" label="사이트 수" help="online.counts" value={k ? fmtNum(k.MALL_CNT) : null} sub={k ? `판매자 ${fmtNum(k.SELLER_CNT)} · 매장 ${fmtNum(k.SHOP_CNT ?? 0)}` : ''} />
+        <Kpi icon={<Percent size={18} />} tone="amber" label="평균 할인율" help="online.avgDcRate" value={k ? fmtPct(k.AVG_DC_RATE, 2) : null} sub="기준가 대비 사이트 할인가" />
+        <Kpi icon={<Tag size={18} />} tone="rose" label="최대 할인율" help="online.maxDcRate" value={k ? fmtPct(k.MAX_DC_RATE, 2) : null} sub="기간 내 최저가 기준" />
+        <Kpi icon={<AlertTriangle size={18} />} tone="violet" label="30% 이상 고할인" help="online.maxDcRate" value={k ? fmtNum(k.DEEP_DC_CNT) : null} sub={k && k.ROW_CNT ? `전체의 ${fmtPct((k.DEEP_DC_CNT / k.ROW_CNT) * 100, 2)}` : ''} />
       </section>
 
       <section className="grid-2-1">
@@ -142,7 +143,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
             </ComposedChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel title="할인율 분포" hint="기준가 대비 할인율 구간별 건수" loading={loading && !data}>
+        <Panel title="할인율 분포" help="online.dcRate" hint="기준가 대비 할인율 구간별 건수" loading={loading && !data}>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={hist} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid stroke={C.grid} vertical={false} />
@@ -186,6 +187,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
 
       <Panel
         title="매장별 수집 Top 15"
+        help="online.shopId"
         hint={`매장코드(SHOP_ID)가 있는 수집 ${k ? `${fmtNum(k.SHOP_ROW_CNT ?? 0)}건 · 전체의 ${fmtPct(k.ROW_CNT ? ((k.SHOP_ROW_CNT ?? 0) / k.ROW_CNT) * 100 : 0, 1)}` : ''}${canOpenDetail ? ' — 행을 누르면 그 매장의 마지막 수집일 상세로 이동' : ''}`}
         loading={loading && !data}
       >
@@ -283,12 +285,12 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
   )
 }
 
-function Kpi({ icon, label, value, sub, tone }: { icon: ReactNode; label: string; value: string | null; sub: string; tone: string }) {
+function Kpi({ icon, label, value, sub, tone, help }: { icon: ReactNode; label: string; value: string | null; sub: string; tone: string; help?: string }) {
   return (
     <div className="card kpi">
       <div className={`kpi-icon tone-${tone}`}>{icon}</div>
       <div className="kpi-body">
-        <div className="kpi-label">{label}</div>
+        <div className="kpi-label">{label}{help && <HelpTip id={help} label={label} />}</div>
         {value === null ? <div className="shimmer kpi-shimmer" /> : <div className="kpi-value">{value}</div>}
         <div className="kpi-sub">{sub}</div>
       </div>
@@ -296,11 +298,11 @@ function Kpi({ icon, label, value, sub, tone }: { icon: ReactNode; label: string
   )
 }
 
-function Panel({ title, hint, loading, children }: { title: string; hint?: string; loading?: boolean; children: ReactNode }) {
+function Panel({ title, hint, loading, children, help }: { title: string; hint?: string; loading?: boolean; children: ReactNode; help?: string }) {
   return (
     <div className="card panel">
       <div className="panel-head">
-        <h3>{title}</h3>
+        <h3>{title}{help && <HelpTip id={help} label={title} />}</h3>
         {hint && <span className="panel-hint">{hint}</span>}
       </div>
       {loading ? <div className="shimmer panel-shimmer" /> : children}

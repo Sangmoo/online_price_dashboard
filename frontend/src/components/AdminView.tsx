@@ -6,7 +6,11 @@ import {
   BarChart3,
   History,
   Bot,
+  CalendarClock,
   Check,
+  Download,
+  Home,
+  Megaphone,
   KeyRound,
   LayoutGrid,
   Loader2,
@@ -48,10 +52,15 @@ import MenuUsageTab from './admin/MenuUsageTab'
 import BackupTab from './admin/BackupTab'
 import FeedbackTab from './admin/FeedbackTab'
 import AiToolStatsCard from './admin/AiToolStatsCard'
+import HomeTab from './admin/HomeTab'
+import JobsTab from './admin/JobsTab'
+import DownloadsTab from './admin/DownloadsTab'
+import NoticeTab from './admin/NoticeTab'
 
-export type Tab = 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
+export type Tab = 'home' | 'jobs' | 'downloads' | 'notices' | 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
+  { key: 'home', label: '홈', icon: Home },
   { key: 'users', label: '사용자 · 권한', icon: Users },
   { key: 'menus', label: '메뉴 권한', icon: LayoutGrid },
   { key: 'ai', label: 'AI 사용 설정', icon: Bot },
@@ -59,21 +68,26 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
   { key: 'menuusage', label: '메뉴 이용', icon: BarChart3 },
   { key: 'feedback', label: '문의·신고', icon: MessageSquareWarning },
+  { key: 'notices', label: '공지 · 점검', icon: Megaphone },
   { key: 'logins', label: '로그인 · 잠금', icon: KeyRound },
   { key: 'sessions', label: '접속 세션', icon: MonitorSmartphone },
   { key: 'audit', label: '변경 이력', icon: History },
+  { key: 'downloads', label: '다운로드 이력', icon: Download },
   { key: 'backup', label: '설정 백업', icon: Archive },
+  { key: 'jobs', label: '스케줄 · 배치', icon: CalendarClock },
   { key: 'status', label: '서버 상태', icon: Server },
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
 
-export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedbackChange }: {
+export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedbackChange, onOpsChange }: {
   me: User
   initialTab?: Tab
   feedbackOpen?: number
   onFeedbackChange?: () => void
+  /** 공지 · 점검 모드를 바꿨을 때 (상단 배너 · 공지 다시 확인) */
+  onOpsChange?: () => void
 }) {
-  const [tab, setTab] = useState<Tab>(initialTab ?? 'users')
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'home')
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
 
   const notify = useCallback((text: string, error = false) => {
@@ -91,6 +105,10 @@ export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedback
           </button>
         ))}
       </div>
+      {tab === 'home' && <HomeTab notify={notify} go={setTab} />}
+      {tab === 'jobs' && <JobsTab notify={notify} />}
+      {tab === 'downloads' && <DownloadsTab notify={notify} />}
+      {tab === 'notices' && <NoticeTab notify={notify} onChange={onOpsChange} />}
       {tab === 'users' && <UsersTab me={me} notify={notify} />}
       {tab === 'menus' && <MenuPermTab notify={notify} />}
       {tab === 'ai' && <AiTab notify={notify} />}

@@ -100,6 +100,7 @@ def _run(admin: dict) -> None:
                                      f"{before['maxMonth']} → {after['maxMonth']}")
         with _lock:
             _state.update({"status": "done", "finished": time.time(), "elapsedSec": sec})
+        _job("ok", f"{sec}초 · 행 {before['rows']:,} → {after['rows']:,} · 최신 월 {before['maxMonth']} → {after['maxMonth']}", admin)
         # 그날 첫 사용자도 기다리지 않게 기본 조건 판매 현황을 미리 계산 (완료 표시 뒤, 같은 스레드에서)
         from . import prewarm
 
@@ -111,6 +112,13 @@ def _run(admin: dict) -> None:
         with _lock:
             _state.update({"status": "error", "finished": time.time(), "error": msg,
                            "elapsedSec": int(time.time() - (_state["started"] or time.time()))})
+        _job("error", msg[:300], admin)
+
+
+def _job(status: str, detail: str, admin: dict) -> None:
+    from . import jobs
+
+    jobs.record("mv_refresh", _state["started"] or time.time(), time.time(), status, detail, admin.get("id"))
 
 
 def _audit(admin: dict, before, after, summary: str) -> None:

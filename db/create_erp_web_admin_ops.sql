@@ -1,0 +1,198 @@
+-- ============================================================================
+-- ERP 영업 관리 웹 서비스: 관리자 운영 기능 (SS10 스키마에서 실행)
+--
+-- 1) T_ERP_WEB_DOWNLOAD_LOG    : 데이터 다운로드 · 민감 정보 조회 이력 (관리자 > 다운로드 이력)
+-- 2) T_ERP_WEB_NOTICE           : 공지사항 (로그인 후 팝업 · 공지사항 게시판, 관리자 > 공지 · 점검)
+--    T_ERP_WEB_NOTICE_FILE      : 공지 첨부파일(최대 3개) · 본문 이미지(최대 5개, 클립보드 붙여넣기)
+--    T_ERP_WEB_NOTICE_COMMENT   : 공지 댓글 · 대댓글
+-- 3) T_ERP_WEB_JOB_RUN          : 서버 자동 작업 실행 기록 (관리자 > 스케줄 · 배치)
+-- 4) F_ERP_WEB_SCHED_JOBS / F_ERP_WEB_SCHED_RUNS : DB 스케줄(DBMS_SCHEDULER) 상태 · 실행 이력 조회 함수
+--    (관리자 > 스케줄 · 배치). 앱 계정(SS10DEV)은 SS10 의 USER_SCHEDULER_* 를 직접 볼 수 없어서,
+--    SS10 권한으로 실행되는 함수(정의자 권한)로 필요한 열만 돌려준다. 앱 계정에는 실행 권한만 준다.
+--
+-- 이 기능들은 Oracle 테이블에만 저장한다 (서버 로컬 저장 없음). 테이블이 없으면 관리자 화면에 이 파일 실행 안내가 나오고,
+-- 공지 등록은 막히며 다운로드 이력 · 작업 실행 기록은 남지 않는다. 실행 후 1분 안에 화면에 반영된다.
+-- 점검 모드는 기존 설정 테이블(T_ERP_WEB_SETTING)의 MAINTENANCE_ON / MAINTENANCE_MSG / MAINTENANCE_UNTIL 키를 쓴다 (화면에서 저장 시 자동 추가).
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1) 다운로드 · 민감 정보 조회 이력
+-- ----------------------------------------------------------------------------
+CREATE TABLE T_ERP_WEB_DOWNLOAD_LOG (
+    DL_ID       VARCHAR2(32)    NOT NULL,
+    DL_DAY      VARCHAR2(14)    NOT NULL,
+    USR_ID      VARCHAR2(20)    NOT NULL,
+    KIND_CD     VARCHAR2(30)    NOT NULL,
+    TITLE       VARCHAR2(300),
+    PARAMS      VARCHAR2(2000),
+    ROW_CNT     NUMBER(10),
+    FILE_BYTES  NUMBER(12),
+    IP          VARCHAR2(45),
+    CONSTRAINT PK_ERP_WEB_DOWNLOAD_LOG PRIMARY KEY (DL_ID)
+);
+
+CREATE INDEX IX_ERP_WEB_DOWNLOAD_LOG_01 ON T_ERP_WEB_DOWNLOAD_LOG (DL_DAY);
+CREATE INDEX IX_ERP_WEB_DOWNLOAD_LOG_02 ON T_ERP_WEB_DOWNLOAD_LOG (USR_ID, DL_DAY);
+
+COMMENT ON TABLE  T_ERP_WEB_DOWNLOAD_LOG            IS 'ERP 영업 관리 웹 - 데이터 다운로드 · 민감 정보 조회 이력 (400일 보관)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.DL_ID      IS '이력ID';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.DL_DAY     IS '일시(YYYYMMDDHH24MISS)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.USR_ID     IS '사용자ID';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.KIND_CD    IS '종류(online_detail/table/ai_full/sale_report/sale_monthly/invt_plan/settings_backup/manager_phone)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.TITLE      IS '파일명 · 대상';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.PARAMS     IS '조회 조건(JSON)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.ROW_CNT    IS '행 수(알 수 있을 때)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.FILE_BYTES IS '파일 크기(바이트)';
+COMMENT ON COLUMN T_ERP_WEB_DOWNLOAD_LOG.IP         IS '접속 IP';
+
+GRANT SELECT, INSERT, DELETE ON T_ERP_WEB_DOWNLOAD_LOG TO SS10DEV;
+CREATE SYNONYM SS10DEV.T_ERP_WEB_DOWNLOAD_LOG FOR SS10.T_ERP_WEB_DOWNLOAD_LOG;
+
+-- ----------------------------------------------------------------------------
+-- 2) 공지
+-- ----------------------------------------------------------------------------
+CREATE TABLE T_ERP_WEB_NOTICE (
+    NOTICE_ID   VARCHAR2(32)    NOT NULL,
+    TITLE       VARCHAR2(400)   NOT NULL,
+    BODY        VARCHAR2(4000),
+    LEVEL_CD    VARCHAR2(10)    DEFAULT 'info' NOT NULL,
+    START_DT    VARCHAR2(8)     NOT NULL,
+    END_DT      VARCHAR2(8)     NOT NULL,
+    USE_YN      CHAR(1)         DEFAULT 'Y' NOT NULL,
+    INS_USERID  VARCHAR2(20),
+    INS_DAY     VARCHAR2(14),
+    UPT_USERID  VARCHAR2(20),
+    UPT_DAY     VARCHAR2(14),
+    CONSTRAINT PK_ERP_WEB_NOTICE PRIMARY KEY (NOTICE_ID),
+    CONSTRAINT CK_ERP_WEB_NOTICE_01 CHECK (LEVEL_CD IN ('info', 'warn', 'important')),
+    CONSTRAINT CK_ERP_WEB_NOTICE_02 CHECK (USE_YN IN ('Y', 'N'))
+);
+
+COMMENT ON TABLE  T_ERP_WEB_NOTICE            IS 'ERP 영업 관리 웹 - 공지 (게시 기간 동안 로그인 후 팝업)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.NOTICE_ID  IS '공지ID';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.TITLE      IS '제목';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.BODY       IS '내용';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.LEVEL_CD   IS '구분(info 안내 / warn 주의 / important 중요)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.START_DT   IS '게시 시작일(YYYYMMDD, 포함)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.END_DT     IS '게시 종료일(YYYYMMDD, 포함)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE.USE_YN     IS '사용 여부';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON T_ERP_WEB_NOTICE TO SS10DEV;
+CREATE SYNONYM SS10DEV.T_ERP_WEB_NOTICE FOR SS10.T_ERP_WEB_NOTICE;
+
+CREATE TABLE T_ERP_WEB_NOTICE_FILE (
+    NOTICE_ID   VARCHAR2(32)    NOT NULL,
+    FILE_NO     NUMBER(3)       NOT NULL,
+    KIND_CD     VARCHAR2(10)    NOT NULL,
+    FILE_NM     VARCHAR2(300)   NOT NULL,
+    MIME_TYPE   VARCHAR2(100)   NOT NULL,
+    FILE_SIZE   NUMBER(10)      NOT NULL,
+    FILE_DATA   BLOB            NOT NULL,
+    INS_DAY     VARCHAR2(14)    NOT NULL,
+    CONSTRAINT PK_ERP_WEB_NOTICE_FILE PRIMARY KEY (NOTICE_ID, FILE_NO),
+    CONSTRAINT CK_ERP_WEB_NOTICE_FILE_01 CHECK (KIND_CD IN ('file', 'image'))
+);
+
+COMMENT ON TABLE  T_ERP_WEB_NOTICE_FILE           IS 'ERP 영업 관리 웹 - 공지 첨부파일(최대 3개, 10MB) · 본문 이미지(최대 5개, 5MB)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_FILE.KIND_CD   IS '종류(file 첨부파일 / image 본문 이미지)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_FILE.FILE_NM   IS '파일명';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_FILE.MIME_TYPE IS '형식 (파일 내용으로 확인한 값)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_FILE.FILE_DATA IS '파일 내용';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON T_ERP_WEB_NOTICE_FILE TO SS10DEV;
+CREATE SYNONYM SS10DEV.T_ERP_WEB_NOTICE_FILE FOR SS10.T_ERP_WEB_NOTICE_FILE;
+
+CREATE TABLE T_ERP_WEB_NOTICE_COMMENT (
+    CMT_ID      VARCHAR2(32)    NOT NULL,
+    NOTICE_ID   VARCHAR2(32)    NOT NULL,
+    PARENT_ID   VARCHAR2(32),
+    USR_ID      VARCHAR2(20)    NOT NULL,
+    USR_NM      VARCHAR2(100),
+    BODY        VARCHAR2(4000),
+    DEL_YN      CHAR(1)         DEFAULT 'N' NOT NULL,
+    INS_DAY     VARCHAR2(14)    NOT NULL,
+    UPT_DAY     VARCHAR2(14)    NOT NULL,
+    CONSTRAINT PK_ERP_WEB_NOTICE_COMMENT PRIMARY KEY (CMT_ID),
+    CONSTRAINT CK_ERP_WEB_NOTICE_COMMENT_01 CHECK (DEL_YN IN ('Y', 'N'))
+);
+
+CREATE INDEX IX_ERP_WEB_NOTICE_COMMENT_01 ON T_ERP_WEB_NOTICE_COMMENT (NOTICE_ID);
+
+COMMENT ON TABLE  T_ERP_WEB_NOTICE_COMMENT           IS 'ERP 영업 관리 웹 - 공지 댓글 · 대댓글 (답글 1단계)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_COMMENT.PARENT_ID IS '부모 댓글ID (답글이면)';
+COMMENT ON COLUMN T_ERP_WEB_NOTICE_COMMENT.DEL_YN    IS '삭제 여부 (답글이 달린 댓글은 삭제 표시로 남김)';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON T_ERP_WEB_NOTICE_COMMENT TO SS10DEV;
+CREATE SYNONYM SS10DEV.T_ERP_WEB_NOTICE_COMMENT FOR SS10.T_ERP_WEB_NOTICE_COMMENT;
+
+-- ----------------------------------------------------------------------------
+-- 3) 서버 자동 작업 실행 기록 (90일 보관)
+-- ----------------------------------------------------------------------------
+CREATE TABLE T_ERP_WEB_JOB_RUN (
+    RUN_ID      VARCHAR2(32)    NOT NULL,
+    JOB_CD      VARCHAR2(30)    NOT NULL,
+    START_DAY   VARCHAR2(14)    NOT NULL,
+    END_DAY     VARCHAR2(14),
+    STATUS_CD   VARCHAR2(10)    NOT NULL,
+    DETAIL      VARCHAR2(1000),
+    USR_ID      VARCHAR2(20),
+    CONSTRAINT PK_ERP_WEB_JOB_RUN PRIMARY KEY (RUN_ID)
+);
+
+CREATE INDEX IX_ERP_WEB_JOB_RUN_01 ON T_ERP_WEB_JOB_RUN (JOB_CD, START_DAY);
+
+COMMENT ON TABLE  T_ERP_WEB_JOB_RUN           IS 'ERP 영업 관리 웹 - 서버 자동 작업 실행 기록 (미리 계산 · 뷰 갱신 · 정리 · 매장코드 채우기)';
+COMMENT ON COLUMN T_ERP_WEB_JOB_RUN.RUN_ID    IS '실행ID (기록 시각 순)';
+COMMENT ON COLUMN T_ERP_WEB_JOB_RUN.JOB_CD    IS '작업(prewarm/mv_refresh/housekeeping/shop_fill)';
+COMMENT ON COLUMN T_ERP_WEB_JOB_RUN.STATUS_CD IS '결과(ok/error)';
+COMMENT ON COLUMN T_ERP_WEB_JOB_RUN.DETAIL    IS '처리 내용 · 오류';
+COMMENT ON COLUMN T_ERP_WEB_JOB_RUN.USR_ID    IS '실행한 사용자 (자동이면 비움)';
+
+GRANT SELECT, INSERT, DELETE ON T_ERP_WEB_JOB_RUN TO SS10DEV;
+CREATE SYNONYM SS10DEV.T_ERP_WEB_JOB_RUN FOR SS10.T_ERP_WEB_JOB_RUN;
+
+-- ----------------------------------------------------------------------------
+-- 4) DB 스케줄 조회 함수 (정의자 권한: SS10 의 USER_SCHEDULER_* 를 읽는다). p_jobs = 'JOB_A,JOB_B' (쉼표 구분)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION F_ERP_WEB_SCHED_JOBS (p_jobs IN VARCHAR2) RETURN SYS_REFCURSOR AS
+    c SYS_REFCURSOR;
+BEGIN
+    OPEN c FOR
+        SELECT J.JOB_NAME, J.ENABLED, J.STATE, J.RUN_COUNT, J.FAILURE_COUNT, J.REPEAT_INTERVAL, J.COMMENTS,
+               TO_CHAR(J.LAST_START_DATE AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS LAST_START,
+               TO_CHAR(J.NEXT_RUN_DATE AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS NEXT_RUN
+          FROM USER_SCHEDULER_JOBS J
+         WHERE INSTR(',' || p_jobs || ',', ',' || J.JOB_NAME || ',') > 0;
+    RETURN c;
+END F_ERP_WEB_SCHED_JOBS;
+/
+
+CREATE OR REPLACE FUNCTION F_ERP_WEB_SCHED_RUNS (p_jobs IN VARCHAR2, p_days IN NUMBER) RETURN SYS_REFCURSOR AS
+    c SYS_REFCURSOR;
+BEGIN
+    OPEN c FOR
+        SELECT * FROM (
+            SELECT D.JOB_NAME, D.STATUS, D.ERROR# AS ERROR_NO,
+                   TO_CHAR(D.ACTUAL_START_DATE AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS ACTUAL_START,
+                   TO_CHAR(D.LOG_DATE AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI:SS') AS LOG_DATE,
+                   EXTRACT(DAY FROM D.RUN_DURATION) * 86400 + EXTRACT(HOUR FROM D.RUN_DURATION) * 3600
+                     + EXTRACT(MINUTE FROM D.RUN_DURATION) * 60 + ROUND(EXTRACT(SECOND FROM D.RUN_DURATION)) AS DURATION_SEC,
+                   TO_CHAR(SUBSTR(D.ADDITIONAL_INFO, 1, 1000)) AS ADDITIONAL_INFO
+              FROM USER_SCHEDULER_JOB_RUN_DETAILS D
+             WHERE D.LOG_DATE >= SYSTIMESTAMP - NUMTODSINTERVAL(LEAST(NVL(p_days, 14), 90), 'DAY')
+               AND INSTR(',' || p_jobs || ',', ',' || D.JOB_NAME || ',') > 0
+             ORDER BY D.LOG_DATE DESC)
+         WHERE ROWNUM <= 500;
+    RETURN c;
+END F_ERP_WEB_SCHED_RUNS;
+/
+
+GRANT EXECUTE ON F_ERP_WEB_SCHED_JOBS TO SS10DEV;
+GRANT EXECUTE ON F_ERP_WEB_SCHED_RUNS TO SS10DEV;
+CREATE SYNONYM SS10DEV.F_ERP_WEB_SCHED_JOBS FOR SS10.F_ERP_WEB_SCHED_JOBS;
+CREATE SYNONYM SS10DEV.F_ERP_WEB_SCHED_RUNS FOR SS10.F_ERP_WEB_SCHED_RUNS;
+
+-- 확인 (SS10 에서)
+-- SELECT F_ERP_WEB_SCHED_JOBS('JOB_FILL_ONLINE_SHOP_ID,JOB_LOAD_CLOSE_SALE_BASE') FROM DUAL;
+-- SELECT F_ERP_WEB_SCHED_RUNS('JOB_FILL_ONLINE_SHOP_ID,JOB_LOAD_CLOSE_SALE_BASE', 14) FROM DUAL;
+-- 새 스케줄을 화면에 추가하려면 backend/app/jobs.py 의 DB_JOBS 에 이름을 넣는다 (함수는 그대로).

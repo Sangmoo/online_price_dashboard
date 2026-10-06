@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react'
 import { apiFetch } from '../api'
 import { fmtNum } from '../format'
 import { fmtGrowth, growthClass } from './ShopTrendModal'
+import { HelpTip } from '../help/HelpTip'
 
 type Month = { ym: string; label: string; step: number; prevYm: string; amt: number | null; qty: number | null; cum: number | null; prevAmt: number; prevCum: number }
 type Season = {
@@ -95,7 +96,7 @@ export default function SeasonProgressPanel({ ym, brand }: { ym: string; brand: 
   return (
     <section className="card panel season-panel">
       <div className="panel-head row">
-        <h3>시즌 판매 진척</h3>
+        <h3>시즌 판매 진척<HelpTip id="sales.seasonProgress" label="시즌 판매 진척" /></h3>
         <span className="panel-hint">
           {data.toLabel}까지 · {data.startLabel} 시작 {data.step}개월째 · 같은 시점 = 전년 같은 달 · {data.brand ?? '브랜드 전체'} · {data.source}{loading ? ' · 갱신 중…' : ''}
         </span>
