@@ -26,7 +26,7 @@ export type AdminHome = {
   } & CardError
   ai: { enabled: boolean; questions: number; costUsd: number; users: number } & CardError
   jobs: { total: number; problems: number; problemNames: string[]; dbReady: boolean; appReady: boolean } & CardError
-  downloads: { ready: boolean; today: number; week: number; sensitiveWeek: number; topUser: { id: string; name: string; count: number } | null } & CardError
+  downloads: { ready: boolean; alerts: number; alertMessages: string[]; today: number; week: number; sensitiveWeek: number; topUser: { id: string; name: string; count: number } | null } & CardError
   notices: { active: number; titles: string[]; endingSoon: number; maintenance: Maintenance; table: TableStatus } & CardError
 }
 
@@ -59,7 +59,11 @@ export type DownloadReport = {
   daily: { day: string; count: number }[]
   rows: DownloadRow[]
   truncated: boolean
+  alerts: DownloadAlert[]
+  alertSettings: AlertSettings
 }
+export type DownloadAlert = { usrId: string; name: string; kind: 'count' | 'phone' | 'rows'; at: string | null; count: number; message: string }
+export type AlertSettings = { count: number; phone: number; rows: number }
 
 export type NoticeLevel = 'info' | 'warn' | 'important'
 export type NoticeFile = { no: number; kind: 'image' | 'file'; name: string; type: string; size: number }
@@ -67,6 +71,16 @@ export type Notice = {
   id: string; title: string; body: string; level: NoticeLevel; levelLabel: string; start: string; end: string; use: boolean
   status: 'active' | 'scheduled' | 'ended' | 'off'; createdBy: string | null; createdAt: string | null; updatedBy: string | null; updatedAt: string | null
   images: NoticeFile[]; files: NoticeFile[]; commentCount: number
+  /** 대상 · 상단 고정 · 필독 (db/alter_erp_web_admin_ops_2.sql 실행 후) */
+  target: NoticeTarget & { label: string }; pin: boolean; mustAck: boolean
+  /** 사용자: 읽음 · 필독 확인 여부 / 관리자 목록: 읽은 사람 · 확인한 사람 수 */
+  read?: boolean; acked?: boolean; readCount?: number; ackCount?: number
+}
+export type NoticeTarget = { type: 'all' | 'pages' | 'brands' | 'users'; values: string[] }
+export type NoticeReads = {
+  ready: boolean; table?: TableStatus; mustAck?: boolean; target?: NoticeTarget & { label: string }
+  counts: { target: number; read: number; ack: number } | null
+  users: { id: string; name: string; lastLoginAt: string | null; target: boolean; readAt: string | null; ackAt: string | null }[]
 }
 export type NoticeComment = {
   id: string; parentId: string | null; userId: string | null; userName: string | null; body: string; deleted: boolean
@@ -77,23 +91,59 @@ export type NoticeInput = {
   title: string; body: string; level: NoticeLevel; start: string; end: string; use: boolean
   /** 남길 기존 파일 번호 (수정 시) · 새로 올릴 파일 (base64) */
   keepFiles?: number[]; newFiles?: NewNoticeFile[]
+  target?: NoticeTarget; pin?: boolean; mustAck?: boolean
 }
 export type NoticeLimits = { attach: number; attachMb: number; images: number; imageMb: number; attachTypes: string[] }
 export const fileSize = (b: number) => (b < 1024 ? `${b}B` : b < 1024 ** 2 ? `${Math.round(b / 1024)}KB` : `${(b / 1024 ** 2).toFixed(1)}MB`)
 export const noticeFileUrl = (id: string, no: number) => `/api/notices/${id}/files/${no}`
-export type Maintenance = { on: boolean; message: string; until: string | null }
+/** on: 지금 막는 중 (직접 켬 또는 예약 시간 안) · manual: 직접 켬 · start/until: 예약 */
+export type Maintenance = { on: boolean; manual?: boolean; scheduledNow?: boolean; scheduled?: boolean; message: string; start?: string | null; until: string | null }
+export type UpcomingMaintenance = { start: string; until: string; message: string }
+
+export type RoleConf = { pages: string[]; brands: string[] | null; aiEnabled: boolean; dailyQuestions: number | null; dailyCostUsd: number | null }
+export type Role = {
+  id: string; name: string; description: string; conf: RoleConf; pageLabels: string[]
+  members: { id: string; name: string; appliedAt: string | null; by: string | null }[]; updatedBy: string | null; updatedAt: string | null
+}
+export type RolesData = { table: TableStatus; roles: Role[]; pages: { key: string; label: string; group: string }[]; brandOptions: string[]; brandReady: boolean }
+export type CleanupData = {
+  days: number; periods: number[]
+  idle: { id: string; name: string; role: string; lastLoginAt: string | null; createdAt: string | null; pages: string[]; idleDays: number | null }[]
+  unused: { id: string; name: string; lastLoginAt: string | null; pages: { key: string; label: string }[]; keep: string[] }[]
+}
+export type MyOverview = {
+  user: import('./api').User; usage: { questions: number; costUsd: number; questionLimit: number; costLimitUsd: number; enabled: boolean }
+  lastLoginAt: string | null; createdAt: string | null; pages: { key: string; label: string }[]
+  role: { name: string; appliedAt: string | null } | null; accents: string[]
+  downloads: { total: number; rows: DownloadRow[] } | null
+}
 
 export const opsApi = {
   home: (fresh = false) => json<AdminHome>(`/api/admin/home?${qs({ fresh: fresh ? 'true' : undefined })}`),
   jobs: (days: number, fresh = false) => json<JobsOverview>(`/api/admin/jobs?${qs({ days, fresh: fresh ? 'true' : undefined })}`),
   downloads: (p: { days: number; usr?: string; kind?: string }) => json<DownloadReport>(`/api/admin/downloads?${qs(p)}`),
-  notices: () => json<{ notices: Notice[]; levels: Record<NoticeLevel, string>; table: TableStatus; titleMax: number; bodyMax: number; limits: NoticeLimits; maintenance: Maintenance }>('/api/admin/notices'),
+  notices: () => json<{ notices: Notice[]; levels: Record<NoticeLevel, string>; table: TableStatus; ext: TableStatus; targetTypes: Record<string, string>
+    titleMax: number; bodyMax: number; limits: NoticeLimits; maintenance: Maintenance }>('/api/admin/notices'),
+  noticeReads: (id: string) => json<NoticeReads>(`/api/admin/notices/${id}/reads`),
+  saveAlertSettings: (body: AlertSettings) => send<AlertSettings>('PUT', '/api/admin/downloads/alert-settings', body),
+  roles: () => json<RolesData>('/api/admin/roles'),
+  saveRole: (body: { name: string; description: string; conf: RoleConf; reapply?: boolean }, id?: string) =>
+    send<{ id: string; reapplied: { applied: string[]; skipped: { id: string; reason: string }[] } | null }>(id ? 'PUT' : 'POST', id ? `/api/admin/roles/${id}` : '/api/admin/roles', body),
+  deleteRole: (id: string) => send<{ ok: boolean }>('DELETE', `/api/admin/roles/${id}`),
+  applyRole: (id: string, userIds: string[]) => send<{ applied: string[]; skipped: { id: string; reason: string }[]; role: string }>('POST', `/api/admin/roles/${id}/apply`, { userIds }),
+  cleanup: (days: number) => json<CleanupData>(`/api/admin/cleanup?${qs({ days })}`),
+  applyCleanup: (body: { deactivate: string[]; revoke: { id: string; pages: string[] }[] }) =>
+    send<{ deactivated: string[]; revoked: { id: string; pages: string[] }[]; skipped: { id: string; reason: string }[] }>('POST', '/api/admin/cleanup/apply', body),
+  viewAs: (id: string, resume = false) => json<{ user: import('./api').User }>(`/api/admin/view-as/${encodeURIComponent(id)}${resume ? '?resume=true' : ''}`),
+  myOverview: () => json<MyOverview>('/api/me/overview'),
   createNotice: (body: NoticeInput) => send<{ notice: Notice }>('POST', '/api/admin/notices', body),
   updateNotice: (id: string, body: NoticeInput) => send<{ notice: Notice }>('PUT', `/api/admin/notices/${id}`, body),
   deleteNotice: (id: string) => send<{ ok: boolean }>('DELETE', `/api/admin/notices/${id}`),
-  setMaintenance: (body: { on: boolean; message?: string; until?: string }) => send<Maintenance>('PUT', '/api/admin/maintenance', body),
+  setMaintenance: (body: { on: boolean; message?: string; until?: string; start?: string }) => send<Maintenance>('PUT', '/api/admin/maintenance', body),
   // 사용자: 오늘 게시 중인 공지 (주기 확인 → 세션 연장 안 함)
-  activeNotices: () => json<{ notices: Notice[] }>('/api/notices', { headers: BACKGROUND_HEADERS }),
+  activeNotices: () => json<{ notices: Notice[]; maintenance: UpcomingMaintenance | null }>('/api/notices', { headers: BACKGROUND_HEADERS }),
+  markRead: (ids: string[]) => send<{ marked: number }>('POST', '/api/notices/read', { ids }),
+  ackNotice: (id: string) => send<{ ok: boolean }>('POST', `/api/notices/${id}/ack`),
   // 공지사항 게시판 · 상세 · 댓글
   noticeBoard: (q?: string) => json<{ notices: Notice[]; total: number; table: TableStatus }>(`/api/notices/board?${qs({ q })}`),
   noticeDetail: (id: string) => json<{ notice: Notice & { comments: NoticeComment[] }; commentMax: number }>(`/api/notices/${id}`),

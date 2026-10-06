@@ -6,6 +6,9 @@ import {
   BarChart3,
   History,
   Bot,
+  Eye,
+  Layers,
+  UserX,
   CalendarClock,
   Check,
   Download,
@@ -53,16 +56,22 @@ import BackupTab from './admin/BackupTab'
 import FeedbackTab from './admin/FeedbackTab'
 import AiToolStatsCard from './admin/AiToolStatsCard'
 import HomeTab from './admin/HomeTab'
+import RolesTab from './admin/RolesTab'
+import CleanupTab from './admin/CleanupTab'
+import { opsApi } from '../opsApi'
+import { startViewAs } from '../viewAs'
 import JobsTab from './admin/JobsTab'
 import DownloadsTab from './admin/DownloadsTab'
 import NoticeTab from './admin/NoticeTab'
 
-export type Tab = 'home' | 'jobs' | 'downloads' | 'notices' | 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
+export type Tab = 'home' | 'roles' | 'cleanup' | 'jobs' | 'downloads' | 'notices' | 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'home', label: '홈', icon: Home },
   { key: 'users', label: '사용자 · 권한', icon: Users },
   { key: 'menus', label: '메뉴 권한', icon: LayoutGrid },
+  { key: 'roles', label: '권한 묶음', icon: Layers },
+  { key: 'cleanup', label: '계정 정리', icon: UserX },
   { key: 'ai', label: 'AI 사용 설정', icon: Bot },
   { key: 'aitools', label: 'AI 도구', icon: Wrench },
   { key: 'usage', label: 'AI 사용 현황', icon: Activity },
@@ -111,6 +120,8 @@ export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedback
       {tab === 'notices' && <NoticeTab notify={notify} onChange={onOpsChange} />}
       {tab === 'users' && <UsersTab me={me} notify={notify} />}
       {tab === 'menus' && <MenuPermTab notify={notify} />}
+      {tab === 'roles' && <RolesTab notify={notify} />}
+      {tab === 'cleanup' && <CleanupTab notify={notify} />}
       {tab === 'ai' && <AiTab notify={notify} />}
       {tab === 'aitools' && <AiToolsTab notify={notify} />}
       {tab === 'usage' && <UsageTab />}
@@ -218,7 +229,15 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
                           {u.name} {u.online && <span className="online-dot" title="접속 중" />}
                           {u.id === me.id && <span className="me-tag">나</span>}
                         </div>
-                        <div className="muted mono">{u.id}{u.superAdmin && ' · 최고관리자'}</div>
+                        <div className="muted mono">
+                          {u.id}{u.superAdmin && ' · 최고관리자'}
+                          {!u.superAdmin && u.id !== me.id && u.active && (
+                            <button className="btn-link small viewas-btn" title="이 사용자 권한으로 화면 미리보기 (읽기 전용)"
+                              onClick={() => opsApi.viewAs(u.id).then(() => startViewAs(u.id)).catch((e) => notify(e.message, true))}>
+                              <Eye size={12} /> 화면 보기
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -737,7 +756,7 @@ function UsageTab() {
             <YAxis yAxisId="l" tick={tick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={48} />
             <YAxis yAxisId="r" orientation="right" tick={tick} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
             <Tooltip />
-            <Bar yAxisId="l" dataKey="cost" name="비용($)" fill="#6366f1" radius={[5, 5, 0, 0]} maxBarSize={28} />
+            <Bar yAxisId="l" dataKey="cost" name="비용($)" fill="var(--primary-2)" radius={[5, 5, 0, 0]} maxBarSize={28} />
             <Line yAxisId="r" dataKey="questions" name="질문 수" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
           </ComposedChart>
         </ResponsiveContainer>

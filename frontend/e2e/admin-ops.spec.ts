@@ -9,7 +9,7 @@ const notice = (id: string, extra: Record<string, unknown> = {}) => ({
   id, title: `공지 ${id}`, body: '10/10(금) 13시에 마감 매출을 적재합니다.\n적재 후 판매 현황에 반영됩니다.', level: 'important', levelLabel: '중요',
   start: '2026-10-06', end: '2026-10-10', use: true, status: 'active', createdBy: '900001', createdAt: '2026-10-06 09:00',
   updatedBy: '900001', updatedAt: '2026-10-06 09:00', images: [], files: [{ no: 1, kind: 'file', name: '적재일정.pdf', type: 'application/pdf', size: 20480 }],
-  commentCount: 1, ...extra,
+  commentCount: 1, target: { type: 'all', values: [], label: '전체' }, pin: false, mustAck: false, ...extra,
 })
 const TABLE_OK = { ready: true, missing: [], ddl: 'db/create_erp_web_admin_ops.sql' }
 const TABLE_NO = { ready: false, missing: ['T_ERP_WEB_JOB_RUN'], ddl: 'db/create_erp_web_admin_ops.sql' }
@@ -72,7 +72,7 @@ test('관리자 공지 등록: 첨부파일 · 클립보드 이미지 붙여넣�
   const api = await mockApi(makeUser('ADMIN'))
   api.on('GET', '/api/admin/home', () => ({ json: { generatedAt: '2026-10-06 09:00:00', feedback: { open: 0 }, users: { error: 'x' }, server: { error: 'x' },
     data: { error: 'x' }, ai: { error: 'x' }, jobs: { error: 'x' }, downloads: { error: 'x' }, notices: { error: 'x' } } }))
-  api.on('GET', '/api/admin/notices', () => ({ json: { notices: [], levels: { info: '안내', warn: '주의', important: '중요' }, table: TABLE_OK, titleMax: 100, bodyMax: 1000,
+  api.on('GET', '/api/admin/notices', () => ({ json: { notices: [], levels: { info: '안내', warn: '주의', important: '중요' }, table: TABLE_OK, ext: TABLE_OK, targetTypes: { all: '전체', pages: '메뉴 권한자', brands: '브랜드 담당자', users: '특정 사용자' }, titleMax: 100, bodyMax: 1000,
     limits: { attach: 3, attachMb: 10, images: 5, imageMb: 5, attachTypes: ['pdf', 'xlsx', 'png'] }, maintenance: { on: false, message: '점검 중', until: null } } }))
   api.on('POST', '/api/admin/notices', () => ({ json: { notice: notice('new') } }))
   await page.goto('/?view=admin')
@@ -140,7 +140,8 @@ test('관리자 홈 · 스케줄 · 다운로드 이력: 카드 요약, 테이�
   api.on('GET', '/api/admin/downloads', () => ({ json: { days: 30, table: TABLE_OK, total: 1, kinds: { manager_phone: '매장 매니저 연락처 조회' }, sensitiveKinds: ['manager_phone'],
     byUser: [{ id: '900002', name: '홍길동', count: 1, sensitive: 1, rows: 1, last: '2026-10-06 10:00:00', kinds: { manager_phone: 1 } }], byKind: [], daily: [],
     rows: [{ id: 'd1', at: '2026-10-06 10:00:00', usrId: '900002', name: '홍길동', kind: 'manager_phone', kindLabel: '매장 매니저 연락처 조회', title: '매장 S31019 매니저 연락처',
-      params: { shopId: 'S31019' }, rows: 1, bytes: null, ip: '10.0.0.2', sensitive: true }], truncated: false } }))
+      params: { shopId: 'S31019' }, rows: 1, bytes: null, ip: '10.0.0.2', sensitive: true }], truncated: false,
+    alerts: [], alertSettings: { count: 10, phone: 20, rows: 100000 } } }))
   await page.goto('/?view=admin')
   await expect(page.locator('.home-card', { hasText: '문의 · 신고' })).toContainText('미처리 2건')
   await expect(page.locator('.home-card', { hasText: '스케줄 · 배치' })).toContainText('DDL 실행 필요')

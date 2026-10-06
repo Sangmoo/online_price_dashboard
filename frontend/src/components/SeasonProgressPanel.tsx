@@ -138,9 +138,9 @@ export default function SeasonProgressPanel({ ym, brand }: { ym: string; brand: 
             labelFormatter={(l, p) => (p?.[0]?.payload?.prevYm ? `${l} (전년 ${String(p[0].payload.prevYm).slice(2, 4)}-${String(p[0].payload.prevYm).slice(4)})` : l)}
           />
           <Legend />
-          <Bar yAxisId="m" dataKey={`${cur} 월`} fill="rgba(99,102,241,.35)" maxBarSize={18} />
+          <Bar yAxisId="m" dataKey={`${cur} 월`} fill="rgba(var(--accent-rgb), .35)" maxBarSize={18} />
           <Bar yAxisId="m" dataKey={`${prev} 월`} fill="rgba(245,158,11,.3)" maxBarSize={18} />
-          <Line yAxisId="c" type="monotone" dataKey={`${cur} 누적`} stroke="#6366f1" strokeWidth={2.6} dot={{ r: 3 }} connectNulls={false} />
+          <Line yAxisId="c" type="monotone" dataKey={`${cur} 누적`} stroke="var(--primary-2)" strokeWidth={2.6} dot={{ r: 3 }} connectNulls={false} />
           <Line yAxisId="c" type="monotone" dataKey={`${prev} 누적`} stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
         </ComposedChart>
       </ResponsiveContainer>

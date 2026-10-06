@@ -54,8 +54,12 @@ def record(me: dict, kind: str, title: str | None = None, params: dict | None = 
                 _log.warning("다운로드 이력을 남기지 못했습니다: %s", tables.message())
             return
         clean = {k: v for k, v in (params or {}).items() if v not in (None, "", [], {})}
+        usr = me.get("id")
+        if me.get("viewAs"):   # 관리자가 다른 사용자 화면을 미리보는 중: 실제로 본 관리자 이름으로 남긴다
+            usr = me["viewAs"]["by"]
+            title = f"[미리보기 {me.get('id')}] {title or ''}"
         db.execute(_INSERT, {
-            "dl_id": uuid.uuid4().hex, "dl_day": datetime.now().strftime("%Y%m%d%H%M%S"), "usr_id": str(me.get("id") or "-")[:20],
+            "dl_id": uuid.uuid4().hex, "dl_day": datetime.now().strftime("%Y%m%d%H%M%S"), "usr_id": str(usr or "-")[:20],
             "kind_cd": kind[:30], "title": cut_bytes(title, 300),
             "params": cut_bytes(json.dumps(clean, ensure_ascii=False, default=str), 2000) if clean else None,
             "row_cnt": rows, "file_bytes": size, "ip": cut_bytes(me.get("ip"), 45),
@@ -74,7 +78,8 @@ def report(days: int = 30, usr: str | None = None, kind: str | None = None, name
     days = max(1, min(int(days), 365))
     base = {"days": days, "table": tables.status(), "kinds": KINDS, "sensitiveKinds": sorted(SENSITIVE)}
     if not tables.ready():
-        return {**base, "total": 0, "byUser": [], "byKind": [], "daily": [], "rows": [], "truncated": False}
+        return {**base, "total": 0, "byUser": [], "byKind": [], "daily": [], "rows": [], "truncated": False, "alerts": [],
+                "alertSettings": alert_settings()}
     if kind and kind not in KINDS:
         kind = None
     conds, p = ["DL_DAY >= :s"], {"s": (datetime.now() - timedelta(days=days - 1)).strftime("%Y%m%d") + "000000"}
@@ -105,7 +110,7 @@ def report(days: int = 30, usr: str | None = None, kind: str | None = None, name
         u["last"] = _fmt(u["last"])
         u["kinds"] = dict(u["kinds"])
     return {
-        **base, "total": len(rows), "byUser": users,
+        **base, "total": len(rows), "byUser": users, "alerts": alerts(names), "alertSettings": alert_settings(),
         "byKind": [{"kind": k, "label": KINDS.get(k, k), "count": n} for k, n in sorted(by_kind.items(), key=lambda x: -x[1])],
         "daily": [{"day": f"{d[:4]}-{d[4:6]}-{d[6:]}", "count": n} for d, n in sorted(daily.items())],
         "rows": [{"id": r["dl_id"], "at": _fmt(r["dl_day"]), "usrId": r["usr_id"], "name": names.get(r["usr_id"], r["usr_id"]),
@@ -116,12 +121,77 @@ def report(days: int = 30, usr: str | None = None, kind: str | None = None, name
     }
 
 
+EXCEL_KINDS = set(KINDS) - SENSITIVE
+
+
+def alert_settings() -> dict:
+    from . import userdb
+
+    st = userdb.get_settings()
+    return {"count": int(st.get("dl_alert_count") or 10), "phone": int(st.get("dl_alert_phone") or 20),
+            "rows": int(st.get("dl_alert_rows") or 100000)}
+
+
+def save_alert_settings(adm: dict, body: dict) -> dict:
+    from fastapi import HTTPException
+
+    from . import audit, userdb
+
+    vals = {}
+    for key, skey, lo, hi in (("count", "dl_alert_count", 1, 1000), ("phone", "dl_alert_phone", 1, 1000), ("rows", "dl_alert_rows", 1000, 10_000_000)):
+        v = body.get(key)
+        if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+            raise HTTPException(400, {"message": f"알림 기준이 올바르지 않습니다 ({key}: {lo}~{hi:,})", "code": "BAD_REQUEST"})
+        vals[skey] = v
+    before = alert_settings()
+    userdb.save_settings(vals, adm["id"])
+    after = alert_settings()
+    audit.record(adm, "SETTING_UPDATE", "대량 다운로드 알림 기준", before=before, after=after)
+    return after
+
+
+def alerts(names: dict[str, str] | None = None, now: datetime | None = None) -> list[dict]:
+    """대량 다운로드 의심: 최근 1시간 엑셀 n건 이상 · 매니저 연락처 조회 n건 이상, 최근 24시간 한 번에 n행 이상 엑셀"""
+    if not tables.ready():
+        return []
+    now = now or datetime.now()
+    cfg = alert_settings()
+    h1 = (now - timedelta(hours=1)).strftime("%Y%m%d%H%M%S")
+    h24 = (now - timedelta(hours=24)).strftime("%Y%m%d%H%M%S")
+    rows = [{k.lower(): v for k, v in r.items()} for r in db.query_dicts(
+        f"SELECT {', '.join(COLS)} FROM {ORA_TABLE} WHERE DL_DAY >= :s ORDER BY DL_DAY DESC", {"s": h24})]
+    names = names or {}
+    out: list[dict] = []
+    by_user: dict[str, dict[str, list]] = {}
+    for r in rows:
+        if r["dl_day"] >= h1:
+            g = by_user.setdefault(r["usr_id"], {"excel": [], "phone": []})
+            if r["kind_cd"] in EXCEL_KINDS:
+                g["excel"].append(r)
+            elif r["kind_cd"] == "manager_phone":
+                g["phone"].append(r)
+        if r["kind_cd"] in EXCEL_KINDS and (r["row_cnt"] or 0) >= cfg["rows"]:
+            out.append({"usrId": r["usr_id"], "name": names.get(r["usr_id"], r["usr_id"]), "kind": "rows", "at": _fmt(r["dl_day"]),
+                        "count": int(r["row_cnt"]), "message": f"한 번에 {int(r['row_cnt']):,}행 엑셀 ({r['title'] or KINDS.get(r['kind_cd'])})"})
+    for uid, g in by_user.items():
+        if len(g["excel"]) >= cfg["count"]:
+            out.append({"usrId": uid, "name": names.get(uid, uid), "kind": "count", "at": _fmt(g["excel"][0]["dl_day"]),
+                        "count": len(g["excel"]), "message": f"최근 1시간 엑셀 {len(g['excel'])}건"})
+        if len(g["phone"]) >= cfg["phone"]:
+            out.append({"usrId": uid, "name": names.get(uid, uid), "kind": "phone", "at": _fmt(g["phone"][0]["dl_day"]),
+                        "count": len(g["phone"]), "message": f"최근 1시간 매니저 연락처 조회 {len(g['phone'])}건"})
+    out.sort(key=lambda x: x["at"] or "", reverse=True)
+    return out
+
+
 def today_summary() -> dict:
     """관리자 홈: 오늘 · 최근 7일 건수와 최근 7일 가장 많이 받은 사용자"""
     week = report(7)
     today = datetime.now().strftime("%Y-%m-%d")
     top = week["byUser"][0] if week["byUser"] else None
-    return {"ready": week["table"]["ready"], "today": sum(d["count"] for d in week["daily"] if d["day"] == today), "week": week["total"],
+    al = alerts({u["id"]: u["name"] for u in week["byUser"]})
+    return {"ready": week["table"]["ready"], "alerts": len(al), "alertMessages": [f"{a['name']} · {a['message']}" for a in al[:3]],
+            "today": sum(d["count"] for d in week["daily"] if d["day"] == today), "week": week["total"],
             "sensitiveWeek": sum(u["sensitive"] for u in week["byUser"]),
             "topUser": {"id": top["id"], "name": top["name"], "count": top["count"]} if top else None}
 

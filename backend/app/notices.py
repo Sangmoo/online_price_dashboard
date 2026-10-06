@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import os
 import threading
 import time
@@ -64,6 +65,59 @@ def _ins_sql(table: str, cols: tuple[str, ...]) -> str:
 
 
 tables = Tables(ORA_TABLE, FILE_TABLE, CMT_TABLE)
+# 2차 (db/alter_erp_web_admin_ops_2.sql): 공지 대상 · 상단 고정 · 필독 컬럼과 읽음 기록. 없으면 '전체 대상 · 고정/필독 없음' 으로 동작
+READ_TABLE = "T_ERP_WEB_NOTICE_READ"
+EXT_COLS = ("TARGET_JSON", "PIN_YN", "MUST_ACK_YN")
+ext = Tables(READ_TABLE, columns={"T_ERP_WEB_NOTICE 컬럼(TARGET_JSON · PIN_YN · MUST_ACK_YN)":
+                                  f"SELECT TARGET_JSON, PIN_YN, MUST_ACK_YN FROM {ORA_TABLE} WHERE 1 = 0"},
+             ddl="db/alter_erp_web_admin_ops_2.sql")
+TARGET_TYPES = {"all": "전체", "pages": "메뉴 권한자", "brands": "브랜드 담당자", "users": "특정 사용자"}
+
+
+def _cols() -> tuple[str, ...]:
+    return COLS + (EXT_COLS if ext.ready() else ())
+
+
+def _norm(rows: list[dict]) -> list[dict]:
+    for r in rows:
+        r.setdefault("target_json", None)
+        r["pin_yn"] = r.get("pin_yn") or "N"
+        r["must_ack_yn"] = r.get("must_ack_yn") or "N"
+    return rows
+
+
+def _target_of(r: dict) -> dict:
+    try:
+        t = json.loads(r.get("target_json") or "null") or {}
+    except ValueError:
+        t = {}
+    typ = t.get("type") if t.get("type") in TARGET_TYPES else "all"
+    vals = [str(v) for v in (t.get("values") or [])] if typ != "all" else []
+    return {"type": typ, "values": vals}
+
+
+def _target_label(t: dict) -> str:
+    if t["type"] == "all":
+        return "전체"
+    if t["type"] == "pages":
+        from . import auth
+
+        return "메뉴: " + ", ".join(auth.PAGE_LABELS.get(v, v) for v in t["values"])
+    if t["type"] == "brands":
+        return "브랜드: " + ", ".join(t["values"])
+    return f"사용자 {len(t['values'])}명"
+
+
+def targeted(t: dict, me: dict) -> bool:
+    """me(effective 사용자)가 공지 대상인지. 브랜드 대상은 '모든 브랜드' 권한 사용자도 포함"""
+    if t["type"] == "all":
+        return True
+    if t["type"] == "pages":
+        return any(p in (me.get("pages") or []) for p in t["values"])
+    if t["type"] == "brands":
+        brands = me.get("brands")
+        return brands is None or any(b in brands for b in t["values"])
+    return me.get("id") in t["values"]
 
 
 def _bad(msg: str, status: int = 400):
@@ -112,7 +166,7 @@ def _exec(sql: str, params: dict) -> int:
 def _all() -> list[dict]:
     if not tables.ready():
         return []
-    return _q(f"SELECT {', '.join(COLS)} FROM {ORA_TABLE} ORDER BY START_DT DESC, INS_DAY DESC")
+    return _norm(_q(f"SELECT {', '.join(_cols())} FROM {ORA_TABLE} ORDER BY START_DT DESC, INS_DAY DESC"))
 
 
 def _status(r: dict, today: str) -> str:
@@ -126,10 +180,10 @@ def _status(r: dict, today: str) -> str:
 
 
 def _visible(r: dict, me: dict | None, today: str) -> bool:
-    """사용자는 게시가 시작된 사용 중 공지(지난 공지 포함)만, 관리자는 모두"""
+    """사용자는 게시가 시작된 사용 중 공지(지난 공지 포함) 중 자기가 대상인 것만, 관리자는 모두"""
     if me and me.get("role") == "ADMIN":
         return True
-    return r["use_yn"] == "Y" and r["start_dt"] <= today
+    return r["use_yn"] == "Y" and r["start_dt"] <= today and (me is None or targeted(_target_of(r), me))
 
 
 def _file_meta(ids: list[str]) -> dict[str, list[dict]]:
@@ -162,7 +216,8 @@ def _out(r: dict, today: str, files: list[dict] | None = None, comments: int | N
             "use": r["use_yn"] == "Y", "status": _status(r, today),
             "createdBy": r["ins_userid"], "createdAt": _fmt14(r["ins_day"]), "updatedBy": r["upt_userid"], "updatedAt": _fmt14(r["upt_day"]),
             "images": [f for f in files if f["kind"] == "image"], "files": [f for f in files if f["kind"] == "file"],
-            "commentCount": comments or 0}
+            "commentCount": comments or 0, "target": {**_target_of(r), "label": _target_label(_target_of(r))},
+            "pin": r.get("pin_yn") == "Y", "mustAck": r.get("must_ack_yn") == "Y"}
 
 
 def _with_extras(rows: list[dict], today: str) -> list[dict]:
@@ -183,8 +238,25 @@ def _sort(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _my_reads(usr_id: str) -> dict[str, dict]:
+    if not ext.ready():
+        return {}
+    return {r["notice_id"]: r for r in _q(f"SELECT NOTICE_ID, READ_DAY, ACK_DAY FROM {READ_TABLE} WHERE USR_ID = :u", {"u": usr_id})}
+
+
+def active_for(me: dict) -> list[dict]:
+    """로그인 사용자 팝업: 오늘 게시 중이고 그 사용자가 대상인 공지 + 읽음 · 필독 확인 여부"""
+    rows = [dict(n) for n in active() if targeted(n["target"], me)]
+    reads = _my_reads(me["id"]) if rows else {}
+    for n in rows:
+        r = reads.get(n["id"])
+        n["read"] = bool(r)
+        n["acked"] = bool(r and r.get("ack_day"))
+    return rows
+
+
 def active(today: date | None = None) -> list[dict]:
-    """오늘 게시 중인 공지 (로그인 후 팝업). 중요 → 주의 → 안내, 시작일 최신 순. 30초 캐시."""
+    """오늘 게시 중인 공지 (대상 구분 전 전체). 중요 → 주의 → 안내, 시작일 최신 순. 30초 캐시."""
     global _cache
     now = time.time()
     t = (today or date.today()).strftime("%Y%m%d")
@@ -200,26 +272,29 @@ def active(today: date | None = None) -> list[dict]:
 
 
 def board(me: dict, q: str | None = None) -> dict:
+    """공지사항 게시판: 상단 고정 → 게시 중(중요 순) → 지난 공지(최신 순). 관리자는 예정 · 사용 안 함 · 대상 밖 공지도 본다."""
     if not tables.ready():
         return {"notices": [], "total": 0, "table": tables.status()}
-    """공지사항 게시판: 게시 중(중요 순) → 지난 공지(최신 순). 관리자는 예정 · 사용 안 함 공지도 본다."""
     t = _today()
     rows = [r for r in _all() if _visible(r, me, t)]
     k = (q or "").strip().lower()
     if k:
         rows = [r for r in rows if k in (r["title"] or "").lower() or k in (r["body"] or "").lower()]
     items = _with_extras(rows[:300], t)
-    act = _sort([x for x in items if x["status"] == "active"])
+    pinned = _sort([x for x in items if x["pin"] and x["status"] == "active"])
+    act = _sort([x for x in items if x["status"] == "active" and not x["pin"]])
     rest = [x for x in items if x["status"] != "active"]
-    for x in act + rest:
+    reads = _my_reads(me["id"])
+    for x in pinned + act + rest:
         x["body"] = x["body"][:120]
-    return {"notices": act + rest, "total": len(rows), "table": tables.status()}
+        x["read"] = x["id"] in reads
+        x["acked"] = bool(reads.get(x["id"], {}).get("ack_day"))
+    return {"notices": pinned + act + rest, "total": len(rows), "table": tables.status()}
 
 
 def _get(notice_id: str) -> dict | None:
     tables.require()
-    rows = _q(f"SELECT {', '.join(COLS)} FROM {ORA_TABLE} WHERE NOTICE_ID = :nid",
-              {"nid": notice_id})
+    rows = _norm(_q(f"SELECT {', '.join(_cols())} FROM {ORA_TABLE} WHERE NOTICE_ID = :nid", {"nid": notice_id}))
     return rows[0] if rows else None
 
 
@@ -235,13 +310,101 @@ def detail(me: dict, notice_id: str) -> dict:
     t = _today()
     out = _with_extras([r], t)[0]
     out["comments"] = _comments(me, notice_id)
+    mark_read(me, [notice_id])
+    rd = _my_reads(me["id"]).get(notice_id)
+    out["read"], out["acked"] = bool(rd), bool(rd and rd.get("ack_day"))
     return {"notice": out, "commentMax": COMMENT_MAX}
+
+
+# ----------------------------------------------------------------------------
+# 읽음 · 필독 확인
+# ----------------------------------------------------------------------------
+_MERGE_READ = f"""MERGE INTO {READ_TABLE} T USING (SELECT :nid AS NOTICE_ID, :u AS USR_ID FROM DUAL) S
+    ON (T.NOTICE_ID = S.NOTICE_ID AND T.USR_ID = S.USR_ID)
+    WHEN MATCHED THEN UPDATE SET ACK_DAY = NVL(T.ACK_DAY, :ack)
+    WHEN NOT MATCHED THEN INSERT (NOTICE_ID, USR_ID, READ_DAY, ACK_DAY) VALUES (:nid, :u, :d, :ack)"""
+
+
+def mark_read(me: dict, ids: list[str], ack: bool = False) -> int:
+    """읽음(처음 본 시각) · 필독 확인 기록. 미리보기(관리자가 다른 사용자 화면을 보는 중)에는 남기지 않는다."""
+    if not ids or me.get("viewAs") or not ext.ready():
+        return 0
+    t, now, n = _today(), _now14(), 0
+    rows = {r["notice_id"]: r for r in _all()}
+    for nid in dict.fromkeys(str(x) for x in ids[:50]):
+        r = rows.get(nid)
+        if not r or not _visible(r, me, t):
+            continue
+        _save_read(nid, me["id"], now, now if ack else None)
+        n += 1
+    return n
+
+
+def _save_read(nid: str, usr: str, day: str, ack: str | None) -> None:
+    db.execute(_MERGE_READ, {"nid": nid, "u": usr, "d": day, "ack": ack})
+
+
+def acknowledge(me: dict, notice_id: str) -> dict:
+    if not ext.ready():
+        _bad(ext.message())
+    r = _get_visible(me, notice_id)
+    if r.get("must_ack_yn") != "Y":
+        _bad("필독 공지가 아닙니다.")
+    mark_read(me, [notice_id], ack=True)
+    return {"ok": True}
+
+
+def _target_users(t: dict) -> list[dict]:
+    """공지 대상인 사용 중 계정 (관리자 화면 읽음 현황)"""
+    from . import auth
+
+    st = userdb.get_settings()
+    out = []
+    for u in userdb.list_users():
+        e = auth.effective(u, st)
+        if e["active"] and targeted(t, e):
+            out.append({"id": e["id"], "name": e["name"], "lastLoginAt": u.get("last_login_at")})
+    return out
+
+
+def read_status(notice_id: str) -> dict:
+    """관리자: 대상자별 읽음 · 확인 시각 (대상이 아닌데 읽은 사람도 함께)"""
+    r = _get(notice_id)
+    if r is None:
+        _bad("공지를 찾을 수 없습니다.", 404)
+    if not ext.ready():
+        return {"ready": False, "table": ext.status(), "users": [], "counts": None}
+    reads = {x["usr_id"]: x for x in _q(f"SELECT USR_ID, READ_DAY, ACK_DAY FROM {READ_TABLE} WHERE NOTICE_ID = :n", {"n": notice_id})}
+    target = _target_of(r)
+    users = _target_users(target)
+    ids = {u["id"] for u in users}
+    names = {u["usr_id"]: u["usr_nm"] for u in userdb.list_users()}
+    rows = [{**u, "target": True, "readAt": _fmt14(reads.get(u["id"], {}).get("read_day")),
+             "ackAt": _fmt14(reads.get(u["id"], {}).get("ack_day"))} for u in users]
+    rows += [{"id": k, "name": names.get(k, k), "lastLoginAt": None, "target": False, "readAt": _fmt14(v["read_day"]),
+              "ackAt": _fmt14(v["ack_day"])} for k, v in reads.items() if k not in ids]
+    rows.sort(key=lambda x: (not x["target"], x["readAt"] is not None, x["name"] or ""))
+    return {"ready": True, "mustAck": r.get("must_ack_yn") == "Y", "target": {**target, "label": _target_label(target)},
+            "counts": {"target": len(users), "read": sum(1 for x in rows if x["target"] and x["readAt"]),
+                       "ack": sum(1 for x in rows if x["target"] and x["ackAt"])},
+            "users": rows}
+
+
+def _read_counts() -> dict[str, tuple[int, int]]:
+    if not ext.ready():
+        return {}
+    return {r["notice_id"]: (int(r["cnt"]), int(r["acks"])) for r in _q(
+        f"SELECT NOTICE_ID, COUNT(*) AS CNT, COUNT(ACK_DAY) AS ACKS FROM {READ_TABLE} GROUP BY NOTICE_ID")}
 
 
 def list_all() -> dict:
     t = _today()
     rows = _with_extras(_all()[:300], t)
-    return {"notices": rows, "levels": LEVELS, "table": tables.status(), "titleMax": TITLE_MAX, "bodyMax": BODY_MAX,
+    counts = _read_counts()
+    for n in rows:
+        n["readCount"], n["ackCount"] = counts.get(n["id"], (0, 0))
+    return {"notices": rows, "levels": LEVELS, "table": tables.status(), "ext": ext.status(), "targetTypes": TARGET_TYPES,
+            "titleMax": TITLE_MAX, "bodyMax": BODY_MAX,
             "limits": {"attach": MAX_ATTACH, "attachMb": MAX_ATTACH_BYTES // 1024 // 1024, "images": MAX_IMAGES,
                        "imageMb": MAX_IMAGE_BYTES // 1024 // 1024, "attachTypes": sorted(ATTACH_TYPES)}}
 
@@ -359,15 +522,33 @@ def _validate(body: dict) -> dict:
         _bad("종료일이 시작일보다 빠릅니다.")
     if (datetime.strptime(end, "%Y%m%d") - datetime.strptime(start, "%Y%m%d")).days >= MAX_SPAN_DAYS:
         _bad(f"게시 기간은 {MAX_SPAN_DAYS}일 이내로 정하세요.")
-    return {"title": title, "body": text or None, "level_cd": level, "start_dt": start, "end_dt": end,
-            "use_yn": "N" if body.get("use") is False else "Y"}
+    out = {"title": title, "body": text or None, "level_cd": level, "start_dt": start, "end_dt": end,
+           "use_yn": "N" if body.get("use") is False else "Y"}
+    target = body.get("target") or {"type": "all"}
+    if not isinstance(target, dict) or target.get("type", "all") not in TARGET_TYPES:
+        _bad("공지 대상이 올바르지 않습니다.")
+    typ = target.get("type", "all")
+    vals = [str(v).strip() for v in (target.get("values") or []) if str(v).strip()] if typ != "all" else []
+    if typ != "all" and not vals:
+        _bad(f"공지 대상({TARGET_TYPES[typ]})을 하나 이상 고르세요.")
+    pin, must = bool(body.get("pin")), bool(body.get("mustAck"))
+    if not ext.ready():
+        if typ != "all" or pin or must:
+            _bad(f"공지 대상 · 상단 고정 · 필독은 {ext.ddl} 실행 후 쓸 수 있습니다.")
+    else:
+        tj = json.dumps({"type": typ, "values": sorted(set(vals))}, ensure_ascii=False) if typ != "all" else None
+        if tj and len(tj.encode("utf-8")) > 2000:
+            _bad("공지 대상이 너무 많습니다 (사용자 대상은 100명 이내로 골라 주세요).")
+        out.update({"target_json": tj, "pin_yn": "Y" if pin else "N", "must_ack_yn": "Y" if must else "N"})
+    return out
 
 
 def _snap(r: dict | None, files: list[dict] | None = None) -> dict | None:
     if r is None:
         return None
     return {"title": r["title"], "level": r["level_cd"], "start": r["start_dt"], "end": r["end_dt"], "use": r["use_yn"],
-            "body": (r["body"] or "")[:200], "files": [f["name"] for f in files or []]}
+            "body": (r["body"] or "")[:200], "files": [f["name"] for f in files or []], "target": _target_label(_target_of(r)),
+            "pin": r.get("pin_yn"), "mustAck": r.get("must_ack_yn")}
 
 
 def save(admin: dict, body: dict, notice_id: str | None = None) -> dict:
@@ -405,6 +586,8 @@ def delete(admin: dict, notice_id: str) -> dict:
     if before is None:
         _bad("공지를 찾을 수 없습니다.", 404)
     p = {"nid": notice_id}
+    if ext.ready():
+        _exec(f"DELETE FROM {READ_TABLE} WHERE NOTICE_ID = :nid", p)
     _exec(f"DELETE FROM {CMT_TABLE} WHERE NOTICE_ID = :nid", p)
     _exec(f"DELETE FROM {FILE_TABLE} WHERE NOTICE_ID = :nid", p)
     _exec(f"DELETE FROM {ORA_TABLE} WHERE NOTICE_ID = :nid", p)
@@ -508,24 +691,58 @@ def delete_comment(me: dict, notice_id: str, cmt_id: str) -> dict:
 # ----------------------------------------------------------------------------
 # 점검 모드
 # ----------------------------------------------------------------------------
+MAINT_NOTICE_MIN = 60   # 예약 점검 시작 몇 분 전부터 사용자에게 예고 배너
+
+
+def _now_hm() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
 def maintenance() -> dict:
+    """on: 지금 막고 있는지 (직접 켬 또는 예약 시간 안). manual: 직접 켬. start/until: 예약 (until 은 직접 켤 때 종료 예정 안내로도 쓴다)"""
     s = userdb.get_settings()
-    return {"on": bool(s.get("maintenance_on")), "message": s.get("maintenance_msg") or DEFAULT_MAINT_MSG,
-            "until": s.get("maintenance_until")}
+    start, until = s.get("maintenance_start"), s.get("maintenance_until")
+    now = _now_hm()
+    scheduled_now = bool(start and until and start <= now < until)
+    return {"on": bool(s.get("maintenance_on")) or scheduled_now, "manual": bool(s.get("maintenance_on")),
+            "scheduledNow": scheduled_now, "message": s.get("maintenance_msg") or DEFAULT_MAINT_MSG,
+            "start": start, "until": until, "scheduled": bool(start and until and now < until)}
+
+
+def upcoming_maintenance() -> dict | None:
+    """예약 점검이 MAINT_NOTICE_MIN 분 안에 시작하면 모든 사용자에게 예고 (상단 배너)"""
+    m = maintenance()
+    if not (m["start"] and m["until"]) or m["on"]:
+        return None
+    lim = (datetime.now() + timedelta(minutes=MAINT_NOTICE_MIN)).strftime("%Y-%m-%d %H:%M")
+    if _now_hm() < m["start"] <= lim:
+        return {"start": m["start"], "until": m["until"], "message": m["message"]}
+    return None
 
 
 def set_maintenance(admin: dict, body: dict) -> dict:
+    """{on: 지금 직접 켜기/끄기, message, until: 종료(예정), start: 예약 시작}. start+until 이면 그 시간에 자동으로 켜지고 꺼진다."""
     on = bool(body.get("on"))
     msg = str(body.get("message") or "").strip() or None
     until = str(body.get("until") or "").strip() or None
+    start = str(body.get("start") or "").strip() or None
     if msg and len(msg) > 300:
         _bad("안내 문구는 300자 이내로 입력하세요.")
-    if until and not _valid_until(until):
-        _bad("종료 예정 시각 형식이 올바르지 않습니다 (예: 2026-10-10 15:00).")
+    for v, label in ((until, "종료 예정"), (start, "예약 시작")):
+        if v and not _valid_until(v):
+            _bad(f"{label} 시각 형식이 올바르지 않습니다 (예: 2026-10-10 15:00).")
+    if start and not until:
+        _bad("예약하려면 종료 시각도 입력하세요.")
+    if start and until and start >= until:
+        _bad("종료 시각이 시작 시각보다 늦어야 합니다.")
+    if start and until <= _now_hm():
+        _bad("이미 지난 시간으로는 예약할 수 없습니다.")
     before = maintenance()
-    userdb.save_settings({"maintenance_on": on, "maintenance_msg": msg, "maintenance_until": until}, admin["id"])
+    userdb.save_settings({"maintenance_on": on, "maintenance_msg": msg, "maintenance_until": until, "maintenance_start": start},
+                         admin["id"])
     after = maintenance()
-    audit.record(admin, "MAINTENANCE", "점검 모드 " + ("켜기" if on else "끄기"), before=before, after=after)
+    what = "켜기" if on else f"예약 {start} ~ {until}" if start else "끄기"
+    audit.record(admin, "MAINTENANCE", f"점검 모드 {what}", before=before, after=after)
     return after
 
 

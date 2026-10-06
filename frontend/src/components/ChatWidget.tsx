@@ -669,7 +669,7 @@ function ResultChart({
             <XAxis dataKey="label" tick={tick} tickLine={false} axisLine={false} />
             <YAxis tick={tick} tickLine={false} axisLine={false} width={44} tickFormatter={(v) => compact(Number(v))} />
             <Tooltip formatter={(v) => [fmtNum(v), label]} />
-            <Line dataKey="value" name={label} stroke="#6366f1" strokeWidth={2.5} dot={{ r: 3 }} type="monotone" />
+            <Line dataKey="value" name={label} stroke="var(--primary-2)" strokeWidth={2.5} dot={{ r: 3 }} type="monotone" />
           </LineChart>
         ) : (
           <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, left: 4, bottom: 0 }}>
@@ -677,7 +677,7 @@ function ResultChart({
             <XAxis type="number" tick={tick} tickLine={false} axisLine={false} tickFormatter={(v) => compact(Number(v))} />
             <YAxis type="category" dataKey="label" tick={tick} tickLine={false} axisLine={false} width={110} />
             <Tooltip formatter={(v) => [fmtNum(v), label]} />
-            <Bar dataKey="value" name={label} fill="#6366f1" radius={[0, 5, 5, 0]} barSize={14} />
+            <Bar dataKey="value" name={label} fill="var(--primary-2)" radius={[0, 5, 5, 0]} barSize={14} />
           </BarChart>
         )}
       </ResponsiveContainer>

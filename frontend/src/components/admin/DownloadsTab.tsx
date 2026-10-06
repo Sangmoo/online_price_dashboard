@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { AlertTriangle, Loader2, RefreshCw, ShieldAlert, X } from 'lucide-react'
-import { opsApi, type DownloadReport } from '../../opsApi'
+import { AlertTriangle, BellRing, Check, Loader2, RefreshCw, ShieldAlert, X } from 'lucide-react'
+import { opsApi, type AlertSettings, type DownloadReport } from '../../opsApi'
 import { fmtNum } from '../../format'
 
 type Notify = (text: string, error?: boolean) => void
@@ -86,11 +86,13 @@ export default function DownloadsTab({ notify }: { notify: Notify }) {
               <XAxis dataKey="name" tick={tick} tickLine={false} axisLine={false} />
               <YAxis tick={tick} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
               <Tooltip />
-              <Bar dataKey="건수" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="건수" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={22} />
             </BarChart>
           </ResponsiveContainer>
         )}
       </section>
+
+      {data.alertSettings && <AlertsPanel data={{ ...data, alerts: data.alerts ?? [] }} notify={notify} onSaved={load} onPick={setUsr} />}
 
       {!usr && (
         <section className="card panel">
@@ -145,5 +147,58 @@ export default function DownloadsTab({ notify }: { notify: Notify }) {
         </div>
       </section>
     </div>
+  )
+}
+
+/** 대량 다운로드 알림: 최근 1시간 엑셀 n건 · 매니저 연락처 조회 n건, 최근 24시간 한 번에 n행 이상 엑셀 (기준은 관리자가 저장) */
+function AlertsPanel({ data, notify, onSaved, onPick }: {
+  data: DownloadReport; notify: (text: string, error?: boolean) => void; onSaved: () => void; onPick: (id: string) => void
+}) {
+  const [cfg, setCfg] = useState<AlertSettings>(data.alertSettings)
+  const [saving, setSaving] = useState(false)
+  const dirty = cfg.count !== data.alertSettings.count || cfg.phone !== data.alertSettings.phone || cfg.rows !== data.alertSettings.rows
+  const save = async () => {
+    setSaving(true)
+    try {
+      await opsApi.saveAlertSettings(cfg)
+      notify('알림 기준을 저장했습니다.')
+      onSaved()
+    } catch (e) {
+      notify((e as Error).message, true)
+    } finally {
+      setSaving(false)
+    }
+  }
+  const num = (k: keyof AlertSettings) => (e: React.ChangeEvent<HTMLInputElement>) => setCfg((c) => ({ ...c, [k]: Number(e.target.value) || 0 }))
+  return (
+    <section className={`card panel ${data.alerts.length ? 'dl-alert-panel' : ''}`}>
+      <div className="panel-head row">
+        <h3><BellRing size={16} /> 대량 다운로드 알림 {data.alerts.length > 0 && <span className="count-badge danger">{data.alerts.length}</span>}</h3>
+        <span className="panel-hint">기준을 넘으면 여기와 관리자 홈에 표시됩니다 (자동으로 막지는 않음)</span>
+      </div>
+      <div className="dl-alert-cfg">
+        <label className="check-label">1시간에 엑셀 <input className="input small num-input" type="number" min={1} max={1000} value={cfg.count} onChange={num('count')} /> 건 이상</label>
+        <label className="check-label">1시간에 매니저 연락처 조회 <input className="input small num-input" type="number" min={1} max={1000} value={cfg.phone} onChange={num('phone')} /> 건 이상</label>
+        <label className="check-label">한 번에 <input className="input small num-input wide" type="number" min={1000} step={1000} value={cfg.rows} onChange={num('rows')} /> 행 이상 엑셀</label>
+        <button className="btn ghost sm" disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 size={12} className="spin" /> : <Check size={12} />} 기준 저장</button>
+      </div>
+      {data.alerts.length ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>마지막</th><th>사용자</th><th>내용</th><th /></tr></thead>
+            <tbody>
+              {data.alerts.map((a, i) => (
+                <tr key={i}>
+                  <td className="mono nowrap">{a.at}</td>
+                  <td className="nowrap"><b>{a.name}</b> <span className="muted mono small">{a.usrId}</span></td>
+                  <td className="bad-text">{a.message}</td>
+                  <td><button className="btn-link small" onClick={() => onPick(a.usrId)}>기록 보기</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="muted small">최근 24시간 기준을 넘은 다운로드가 없습니다.</div>}
+    </section>
   )
 }

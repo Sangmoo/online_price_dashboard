@@ -93,7 +93,7 @@ export default function SaleProductsPanel({ query, onProduct }: { query: string;
                 <YAxis tick={tick} tickLine={false} axisLine={false} width={40} tickFormatter={(v) => `${v}%`} />
                 <Tooltip formatter={(v) => `${v}%`} />
                 <Legend />
-                <Bar dataKey="당기" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={24} />
+                <Bar dataKey="당기" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={24} />
                 <Bar dataKey="비교" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={24} />
               </BarChart>
             </ResponsiveContainer>

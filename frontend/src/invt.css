@@ -42,7 +42,7 @@
 .plan-dt { font-weight: 700; color: var(--primary); }
 .undecided { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--surface-3); color: var(--muted); }
 .elapsed-warn { color: var(--danger); font-weight: 700; }
-.yn-on { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--primary); color: #fff; }
+.yn-on { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--accent-a); color: #fff; }
 .up { color: #dc2626; font-weight: 700; }
 .down { color: #2563eb; font-weight: 700; }
 :root[data-theme='dark'] .up { color: #f87171; }

@@ -38,6 +38,9 @@ ACTIONS = {
     "NOTICE_SAVE": "공지 등록·수정",
     "NOTICE_DELETE": "공지 삭제",
     "MAINTENANCE": "점검 모드",
+    "ROLE_SAVE": "권한 묶음 등록·수정",
+    "ROLE_DELETE": "권한 묶음 삭제",
+    "VIEW_AS": "사용자 화면 미리보기",
 }
 FIELD_LABELS = {
     "on": "점검 모드", "message": "안내 문구", "until": "종료 예정", "title": "제목", "level": "구분", "start": "게시 시작",

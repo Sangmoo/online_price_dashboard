@@ -185,6 +185,63 @@ def _check_maintenance(me: dict, on_block=None) -> None:
         raise AuthError(503, msg, "MAINTENANCE")
 
 
+# ----------------------------------------------------------------------------
+# 사용자 화면 미리보기 (관리자 · 읽기 전용)
+# ----------------------------------------------------------------------------
+VIEW_AS_HEADER = "X-View-As"
+# 미리보기 중에도 관리자 본인으로 처리하는 경로 (세션 · 미리보기 시작/확인)
+VIEW_AS_EXEMPT = ("/api/auth/", "/api/admin/view-as")
+
+
+def can_view_as(admin_me: dict, target: dict) -> str | None:
+    """관리자가 대상 사용자 화면을 미리볼 수 있는지. 볼 수 없으면 이유. 관리자가 가진 것보다 넓은 권한은 볼 수 없다."""
+    if admin_me["role"] != "ADMIN":
+        return "관리자만 사용자 화면을 미리볼 수 있습니다."
+    if target["id"] == admin_me["id"]:
+        return "본인 화면은 미리볼 필요가 없습니다."
+    if admin_me.get("superAdmin"):
+        return None
+    if target.get("superAdmin"):
+        return "최고 관리자 화면은 미리볼 수 없습니다."
+    extra = [p for p in target["pages"] if p != "admin" and p not in admin_me["pages"]]
+    if extra:
+        return f"내가 권한이 없는 메뉴가 있는 사용자입니다: {', '.join(PAGE_LABELS.get(p, p) for p in extra)}"
+    if admin_me.get("brands") is not None and (target.get("brands") is None or set(target["brands"]) - set(admin_me["brands"])):
+        return "내 브랜드 권한보다 넓은 브랜드 권한을 가진 사용자입니다."
+    return None
+
+
+def view_as_user(admin_me: dict, target_id: str) -> dict:
+    u = userdb.get_user(target_id)
+    if not u:
+        raise AuthError(404, "등록되지 않은 사용자입니다.", "NOT_FOUND")
+    target = effective(u)
+    why = can_view_as(admin_me, target)
+    if why:
+        raise AuthError(403, why, "FORBIDDEN")
+    return target
+
+
+def _readonly_path(method: str, path: str) -> bool:
+    """미리보기 중 허용: 조회(GET)만. 엑셀 · 파일 내려받기는 막는다 (본인 권한으로 받도록)."""
+    return method == "GET" and "/export" not in path and not path.endswith("/file")
+
+
+def _apply_view_as(request: Request, me: dict) -> dict:
+    target_id = (getattr(request, "headers", None) or {}).get(VIEW_AS_HEADER)
+    path = request.url.path if getattr(request, "url", None) else ""
+    if not target_id or any(path.startswith(x) for x in VIEW_AS_EXEMPT):
+        return me
+    target = view_as_user(me, target_id)
+    if not _readonly_path(request.method, path):
+        raise AuthError(403, "사용자 화면 미리보기 중에는 조회만 할 수 있습니다 (저장 · 엑셀 · AI 질문 불가).", "VIEW_AS_READONLY")
+    target["viewAs"] = {"by": me["id"], "byName": me["name"]}
+    target["ip"] = me.get("ip")
+    target["sessionExpiresAt"] = me["sessionExpiresAt"]
+    request.state.usr_id = f"{me['id']}>{target['id']}"
+    return target
+
+
 def current_user(request: Request) -> dict:
     token = request.cookies.get(SESSION_COOKIE)
     now = time.time()
@@ -215,7 +272,7 @@ def current_user(request: Request) -> dict:
     request.state.session_expires = int(expires)
     me["ip"] = request.client.host if getattr(request, "client", None) else None  # 관리자 변경 이력용
     me["sessionExpiresAt"] = int(expires)
-    return me
+    return _apply_view_as(request, me)
 
 
 def require_page(page: str) -> Callable[[Request], dict]:

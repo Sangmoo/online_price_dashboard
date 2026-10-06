@@ -140,7 +140,8 @@ export class MockApi {
     this.on('POST', '/api/auth/touch', () => ({ json: { sessionExpiresAt: Math.floor(Date.now() / 1000) + 3600 } }))
     this.on('POST', '/api/usage/menu', () => ({ json: { ok: true } }))
     this.on('GET', '/api/dates', () => ({ json: { dates: [] } }))
-    this.on('GET', '/api/notices', () => ({ json: { notices: [] } }))
+    this.on('GET', '/api/notices', () => ({ json: { notices: [], maintenance: null } }))
+    this.on('POST', '/api/notices/read', () => ({ json: { marked: 0 } }))
     // 관리자 화면은 '홈' 탭부터 열린다 (카드는 모두 '불러오지 못함' 으로)
     this.on('GET', '/api/admin/home', () => ({ json: { generatedAt: '2026-10-06 09:00:00', ...Object.fromEntries(
       ['feedback', 'users', 'server', 'data', 'ai', 'jobs', 'downloads', 'notices'].map((k) => [k, { error: '테스트' }])) } }))

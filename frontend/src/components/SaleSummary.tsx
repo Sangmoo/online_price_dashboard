@@ -191,7 +191,7 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
                   <YAxis tick={tick} tickLine={false} axisLine={false} width={60} tickFormatter={(v) => fmtNum(v)} />
                   <Tooltip formatter={(v) => `${fmtNum(Number(v))}백만원`} />
                   <Legend />
-                  <Bar dataKey="당해" fill="#6366f1" radius={[5, 5, 0, 0]} maxBarSize={28} />
+                  <Bar dataKey="당해" fill="var(--primary-2)" radius={[5, 5, 0, 0]} maxBarSize={28} />
                   <Line dataKey="전년" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
                 </ComposedChart>
               ) : (
@@ -201,7 +201,7 @@ export default function SaleSummary({ cond, dims }: { cond: SummaryCond; dims: D
                   <YAxis type="category" dataKey="name" tick={tick} tickLine={false} axisLine={false} width={120} />
                   <Tooltip formatter={(v) => `${fmtNum(Number(v))}백만원`} />
                   <Legend />
-                  <Bar dataKey="당해" fill="#6366f1" radius={[0, 4, 4, 0]} maxBarSize={12} />
+                  <Bar dataKey="당해" fill="var(--primary-2)" radius={[0, 4, 4, 0]} maxBarSize={12} />
                   <Bar dataKey="전년" fill="#f59e0b" radius={[0, 4, 4, 0]} maxBarSize={12} />
                 </BarChart>
               )}

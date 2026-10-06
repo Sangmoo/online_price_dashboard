@@ -18,7 +18,7 @@ import { HelpTip } from '../help/HelpTip'
 import { addDays, compact, daysBetween, dtLabel, dtShort, dtToIso, fmtNum, fmtPct, fmtWon, isoToDt } from '../format'
 
 const MAX_DAYS = 31
-const C = { primary: '#6366f1', teal: '#14b8a6', amber: '#f59e0b', rose: '#f43f5e', grid: 'rgba(148,163,184,.18)', tick: '#8b93a7' }
+const C = { primary: 'var(--primary-2)', teal: '#14b8a6', amber: '#f59e0b', rose: '#f43f5e', grid: 'rgba(148,163,184,.18)', tick: '#8b93a7' }
 
 type Props = {
   dates: DateInfo[]
@@ -137,7 +137,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
               <XAxis dataKey="label" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} />
               <YAxis yAxisId="l" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={compact} width={48} />
               <YAxis yAxisId="r" orientation="right" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} width={44} domain={['auto', 'auto']} />
-              <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(99,102,241,.08)' }} />
+              <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(var(--accent-rgb), .08)' }} />
               <Bar yAxisId="l" dataKey="ROW_CNT" name="수집 건수" fill={C.primary} radius={[6, 6, 0, 0]} maxBarSize={34} cursor={canOpenDetail ? 'pointer' : undefined} onClick={(d) => onOpenDetail((d as unknown as { DT: string }).DT)} />
               <Line yAxisId="r" dataKey="AVG_DC_RATE" name="평균 할인율(%)" stroke={C.amber} strokeWidth={2.5} dot={{ r: 3 }} type="monotone" />
             </ComposedChart>
@@ -167,7 +167,7 @@ export default function DashboardView({ dates, range, onRangeChange, onOpenDetai
               <CartesianGrid stroke={C.grid} horizontal={false} />
               <XAxis type="number" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={compact} />
               <YAxis type="category" dataKey="MALL_NM" tick={{ fill: C.tick, fontSize: 12 }} tickLine={false} axisLine={false} width={120} />
-              <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(99,102,241,.08)' }} />
+              <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(var(--accent-rgb), .08)' }} />
               <Bar dataKey="ROW_CNT" name="수집 건수" fill={C.primary} radius={[0, 6, 6, 0]} barSize={16} />
             </BarChart>
           </ResponsiveContainer>

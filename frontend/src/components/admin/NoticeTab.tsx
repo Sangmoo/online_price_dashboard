@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Check, ImagePlus, Loader2, Megaphone, MessageSquare, Paperclip, Pencil, Plus, RefreshCw, Trash2, Wrench, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, CalendarClock, Check, Eye, ImagePlus, Loader2, Megaphone, MessageSquare, Paperclip, Pencil, Pin, Plus, RefreshCw, Trash2, Wrench, X } from 'lucide-react'
+import { api, type AdminUser, type PageMeta } from '../../api'
 import {
   fileSize,
   noticeFileUrl,
@@ -11,6 +12,8 @@ import {
   type NoticeInput,
   type NoticeLevel,
   type NoticeLimits,
+  type NoticeReads,
+  type NoticeTarget,
 } from '../../opsApi'
 import NoticePopup from '../NoticePopup'
 
@@ -29,6 +32,7 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<Notice | 'new' | null>(null)
   const [preview, setPreview] = useState<Notice[] | null>(null)
+  const [reads, setReads] = useState<Notice | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -71,6 +75,12 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
           <button className="icon-btn bordered" onClick={load} title="새로고침"><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
           <button className="btn primary" disabled={!data.table.ready} onClick={() => setEditing('new')}><Plus size={15} /> 새 공지</button>
         </div>
+        {data.table.ready && !data.ext.ready && (
+          <div className="notice-box info">
+            <AlertTriangle size={15} />
+            <div>공지 대상 지정 · 상단 고정 · 필독 · 읽음 확인은 <b>{data.ext.ddl}</b> 실행 후 쓸 수 있습니다 (지금은 모든 사용자 대상으로 동작). 없는 항목: {data.ext.missing.join(', ')}</div>
+          </div>
+        )}
         {!data.table.ready && (
           <div className="notice-box warn">
             <AlertTriangle size={15} />
@@ -82,14 +92,15 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
         )}
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>상태</th><th>구분</th><th>제목</th><th>게시 기간</th><th>수정</th><th /></tr></thead>
+            <thead><tr><th>상태</th><th>구분</th><th>제목</th><th>대상</th><th>게시 기간</th><th className="num">읽음</th><th>수정</th><th /></tr></thead>
             <tbody>
               {data.notices.map((n) => (
                 <tr key={n.id} className={n.status === 'ended' || n.status === 'off' ? 'inactive' : ''}>
                   <td><span className={`notice-status ${n.status}`}>{STATUS_LABEL[n.status]}</span></td>
                   <td><span className={`notice-level level-${n.level}`}>{n.levelLabel}</span></td>
                   <td>
-                    <div className="strong">{n.title}</div>
+                    <div className="strong">{n.pin && <Pin size={12} className="muted" aria-label="상단 고정" />} {n.title}
+                      {n.mustAck && <span className="notice-must"><BadgeCheck size={11} /> 필독</span>}</div>
                     {n.body && <div className="muted small ellipsis-inline" title={n.body}>{n.body}</div>}
                     <div className="muted small notice-counts">
                       {n.files.length > 0 && <span><Paperclip size={11} /> 첨부 {n.files.length}</span>}
@@ -97,7 +108,15 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
                       {n.commentCount > 0 && <span><MessageSquare size={11} /> 댓글 {n.commentCount}</span>}
                     </div>
                   </td>
+                  <td className="small">{n.target.label}</td>
                   <td className="nowrap">{n.start} ~ {n.end}</td>
+                  <td className="num nowrap">
+                    {data.ext.ready ? (
+                      <button className="btn-link" onClick={() => setReads(n)} title="대상자별 읽음 · 확인 현황">
+                        {n.readCount ?? 0}명{n.mustAck && <span className="muted small"> · 확인 {n.ackCount ?? 0}</span>} <Eye size={11} />
+                      </button>
+                    ) : <span className="muted">-</span>}
+                  </td>
                   <td className="muted small nowrap">{n.updatedBy} {n.updatedAt}</td>
                   <td className="nowrap">
                     <button className="btn ghost sm" onClick={() => setEditing(n)}><Pencil size={12} /> 수정</button>{' '}
@@ -105,7 +124,7 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
                   </td>
                 </tr>
               ))}
-              {!data.notices.length && <tr><td colSpan={6} className="empty">등록된 공지가 없습니다. [새 공지] 로 추가하세요.</td></tr>}
+              {!data.notices.length && <tr><td colSpan={8} className="empty">등록된 공지가 없습니다. [새 공지] 로 추가하세요.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -118,62 +137,175 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
           titleMax={data.titleMax}
           bodyMax={data.bodyMax}
           limits={data.limits}
+          ext={data.ext.ready}
+          targetTypes={data.targetTypes}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); notify('공지를 저장했습니다.'); load(); onChange?.() }}
         />
       )}
+      {reads && <ReadsModal notice={reads} onClose={() => setReads(null)} />}
       {preview && <NoticePopup userId="__preview__" notices={preview} auto={false} onClose={() => setPreview(null)} />}
     </div>
   )
 }
 
+const toLocal = (v: string | null | undefined) => (v ? v.replace(' ', 'T') : '')
+const fromLocal = (v: string) => (v ? v.replace('T', ' ') : undefined)
+
+/** 점검 모드: 지금 직접 켜기/끄기 또는 시작 · 종료 시각 예약 (그 시간에 자동으로 켜지고 꺼짐, 시작 1시간 전부터 모든 사용자에게 예고 배너) */
 function MaintenancePanel({ value, notify, onSaved }: { value: Maintenance; notify: Notify; onSaved: (m: Maintenance) => void }) {
   const [msg, setMsg] = useState(value.message)
-  const [until, setUntil] = useState(value.until ? value.until.replace(' ', 'T') : '')
+  const [start, setStart] = useState(toLocal(value.start))
+  const [until, setUntil] = useState(toLocal(value.until))
   const [saving, setSaving] = useState(false)
 
-  const save = async (on: boolean) => {
-    if (on && !value.on && !confirm('점검 모드를 켜면 관리자 외 사용자는 바로 로그인·사용이 막히고 점검 안내 화면을 봅니다.\n켤까요?')) return
+  const call = async (body: { on: boolean; start?: string; until?: string }, done: string, ask?: string) => {
+    if (ask && !confirm(ask)) return
     setSaving(true)
     try {
-      const m = await opsApi.setMaintenance({ on, message: msg.trim() || undefined, until: until ? until.replace('T', ' ') : undefined })
+      const m = await opsApi.setMaintenance({ ...body, message: msg.trim() || undefined })
       onSaved(m)
-      notify(on ? (value.on ? '안내 문구를 저장했습니다.' : '점검 모드를 켰습니다.') : '점검 모드를 껐습니다.')
+      setStart(toLocal(m.start))
+      setUntil(toLocal(m.until))
+      notify(done)
     } catch (e) {
       notify((e as Error).message, true)
     } finally {
       setSaving(false)
     }
   }
+  const status = value.manual ? '켜짐 (직접) · 관리자 외 접속 차단 중'
+    : value.scheduledNow ? `예약 점검 중 · ${value.until?.slice(5)} 까지 차단`
+      : value.scheduled ? `예약됨 · ${value.start?.slice(5)} ~ ${value.until?.slice(11)}` : '꺼짐'
 
   return (
     <section className={`card panel maint-panel ${value.on ? 'on' : ''}`}>
       <div className="panel-head row">
         <h3><Wrench size={16} /> 점검 모드</h3>
-        <span className={`notice-status ${value.on ? 'maint-on' : 'off'}`}>{value.on ? '켜짐 · 관리자 외 접속 차단 중' : '꺼짐'}</span>
-        <span className="panel-hint">켜면 관리자 외 사용자는 로그인·사용이 막히고 아래 안내 문구를 봅니다 (이미 접속한 사용자도 다음 요청부터). 관리자는 그대로 쓸 수 있습니다.</span>
+        <span className={`notice-status ${value.on ? 'maint-on' : value.scheduled ? 'scheduled' : 'off'}`}>{status}</span>
+        <span className="panel-hint">켜지면 관리자 외 사용자는 로그인·사용이 막히고 안내 문구를 봅니다. 예약하면 그 시간에 자동으로 켜지고 꺼지며, 시작 1시간 전부터 모든 사용자에게 예고 배너가 뜹니다.</span>
       </div>
       <div className="maint-form">
-        <label className="field wide">
+        <label className="field">
           <span className="field-label">안내 문구</span>
           <input className="input" value={msg} maxLength={300} onChange={(e) => setMsg(e.target.value)} placeholder="시스템 점검 중입니다. 잠시 후 다시 접속해 주세요." />
         </label>
         <label className="field">
-          <span className="field-label">종료 예정 (선택)</span>
+          <span className="field-label">예약 시작</span>
+          <input className="input" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field-label">종료 (예정)</span>
           <input className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
         </label>
         <div className="maint-actions">
-          {value.on ? (
+          {value.manual ? (
             <>
-              <button className="btn ghost" disabled={saving} onClick={() => save(true)}><Check size={15} /> 문구 저장</button>
-              <button className="btn success" disabled={saving} onClick={() => save(false)}>{saving ? <Loader2 size={15} className="spin" /> : <X size={15} />} 점검 모드 끄기</button>
+              <button className="btn ghost" disabled={saving} onClick={() => call({ on: true, until: fromLocal(until) }, '안내 문구를 저장했습니다.')}><Check size={15} /> 문구 저장</button>
+              <button className="btn success" disabled={saving} onClick={() => call({ on: false }, '점검 모드를 껐습니다.')}>{saving ? <Loader2 size={15} className="spin" /> : <X size={15} />} 끄기</button>
             </>
           ) : (
-            <button className="btn danger-fill" disabled={saving} onClick={() => save(true)}>{saving ? <Loader2 size={15} className="spin" /> : <Wrench size={15} />} 점검 모드 켜기</button>
+            <>
+              <button className="btn ghost" disabled={saving || !start || !until} onClick={() => call({ on: false, start: fromLocal(start), until: fromLocal(until) },
+                '점검을 예약했습니다.', `${start.replace('T', ' ')} ~ ${until.replace('T', ' ')} 에 점검 모드가 자동으로 켜지고 꺼집니다. 예약할까요?`)}>
+                <CalendarClock size={15} /> 예약 저장
+              </button>
+              {value.scheduled && (
+                <button className="btn ghost" disabled={saving} onClick={() => call({ on: false }, value.scheduledNow ? '예약 점검을 끝냈습니다.' : '예약을 취소했습니다.')}>
+                  <X size={15} /> {value.scheduledNow ? '지금 끝내기' : '예약 취소'}
+                </button>
+              )}
+              {!value.scheduledNow && (
+                <button className="btn danger-fill" disabled={saving} onClick={() => call({ on: true, until: fromLocal(until) }, '점검 모드를 켰습니다.',
+                  '지금 점검 모드를 켜면 관리자 외 사용자는 바로 로그인·사용이 막히고 점검 안내 화면을 봅니다.\n켤까요?')}>
+                  {saving ? <Loader2 size={15} className="spin" /> : <Wrench size={15} />} 지금 켜기
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
     </section>
+  )
+}
+
+/** 공지 대상자별 읽음 · 필독 확인 현황 */
+function ReadsModal({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+  const [data, setData] = useState<NoticeReads | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [only, setOnly] = useState<'all' | 'unread'>('all')
+  useEffect(() => {
+    opsApi.noticeReads(notice.id).then(setData).catch((e) => setErr(e.message))
+  }, [notice.id])
+  const rows = (data?.users ?? []).filter((u) => only === 'all' || (u.target && !u.readAt))
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal card reads-modal">
+        <div className="modal-head"><h3><Eye size={16} /> 읽음 현황 · {notice.title}</h3><button className="icon-btn" onClick={onClose}><X size={18} /></button></div>
+        {err && <div className="alert error">{err}</div>}
+        {!data && !err && <div className="trend-loading"><Loader2 size={18} className="spin" /> 불러오는 중…</div>}
+        {data?.counts && (
+          <div className="reads-summary">
+            <span>대상 <b>{data.target?.label}</b> {data.counts.target}명</span>
+            <span>읽음 <b>{data.counts.read}</b>명 ({data.counts.target ? Math.round((data.counts.read * 100) / data.counts.target) : 0}%)</span>
+            {data.mustAck && <span>필독 확인 <b>{data.counts.ack}</b>명</span>}
+            <div className="grow" />
+            <div className="seg"><button className={only === 'all' ? 'on' : ''} onClick={() => setOnly('all')}>전체</button>
+              <button className={only === 'unread' ? 'on' : ''} onClick={() => setOnly('unread')}>안 읽은 대상자</button></div>
+          </div>
+        )}
+        <div className="table-wrap reads-table">
+          <table className="table">
+            <thead><tr><th>사용자</th><th>처음 읽음</th>{data?.mustAck && <th>필독 확인</th>}<th>최근 로그인</th></tr></thead>
+            <tbody>
+              {rows.map((u) => (
+                <tr key={u.id} className={!u.target ? 'inactive' : ''}>
+                  <td><b>{u.name}</b> <span className="muted mono small">{u.id}</span>{!u.target && <span className="muted small"> (대상 아님)</span>}</td>
+                  <td className="nowrap">{u.readAt ?? <span className="warn-text">안 읽음</span>}</td>
+                  {data?.mustAck && <td className="nowrap">{u.ackAt ?? <span className="muted">-</span>}</td>}
+                  <td className="muted small nowrap">{u.lastLoginAt ?? '-'}</td>
+                </tr>
+              ))}
+              {data && !rows.length && <tr><td colSpan={4} className="empty">해당 사용자가 없습니다.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 공지 대상 고르기: 전체 / 메뉴 권한자 / 브랜드 담당자 / 특정 사용자 */
+function TargetPicker({ value, types, onChange, disabled }: { value: NoticeTarget; types: Record<string, string>; onChange: (t: NoticeTarget) => void; disabled: boolean }) {
+  const [meta, setMeta] = useState<{ pages: PageMeta[]; brands: string[]; users: AdminUser[] } | null>(null)
+  const [q, setQ] = useState('')
+  useEffect(() => {
+    if (value.type === 'all' || meta) return
+    api.admin.users().then((r) => setMeta({ pages: r.pages, brands: r.brandOptions, users: r.users.filter((u) => u.active) })).catch(() => undefined)
+  }, [value.type, meta])
+  const flip = (v: string) => onChange({ ...value, values: value.values.includes(v) ? value.values.filter((x) => x !== v) : [...value.values, v] })
+  const opts: { key: string; label: string }[] = !meta ? [] : value.type === 'pages' ? meta.pages.map((p) => ({ key: p.key, label: p.label }))
+    : value.type === 'brands' ? meta.brands.map((b) => ({ key: b, label: b }))
+      : meta.users.filter((u) => !q || u.name.includes(q) || u.id.includes(q)).map((u) => ({ key: u.id, label: `${u.name} (${u.id})` }))
+  return (
+    <div className="target-picker">
+      <div className="seg">
+        {Object.entries(types).map(([k, label]) => (
+          <button key={k} type="button" disabled={disabled && k !== 'all'} className={value.type === k ? 'on' : ''}
+            onClick={() => onChange({ type: k as NoticeTarget['type'], values: [] })}>{label}</button>
+        ))}
+      </div>
+      {value.type !== 'all' && (
+        <>
+          {value.type === 'users' && <input className="input small" placeholder="이름 · ID 검색" value={q} onChange={(e) => setQ(e.target.value)} />}
+          <div className="chip-row target-opts">
+            {!meta && <Loader2 size={14} className="spin" />}
+            {opts.map((o) => <button key={o.key} type="button" className={`chip ${value.values.includes(o.key) ? 'active' : ''}`} onClick={() => flip(o.key)}>{o.label}</button>)}
+          </div>
+          <span className="muted small">{value.values.length}개 선택 · {value.type === 'brands' ? '모든 브랜드 권한 사용자도 포함' : value.type === 'pages' ? '고른 메뉴 중 하나라도 권한이 있는 사용자' : ''}</span>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -187,14 +319,15 @@ const readAsDataUrl = (f: File) =>
     r.readAsDataURL(f)
   })
 
-function NoticeEditor({ notice, levels, titleMax, bodyMax, limits, onClose, onSaved }: {
+function NoticeEditor({ notice, levels, titleMax, bodyMax, limits, ext, targetTypes, onClose, onSaved }: {
   notice: Notice | null; levels: Record<NoticeLevel, string>; titleMax: number; bodyMax: number; limits: NoticeLimits
-  onClose: () => void; onSaved: () => void
+  ext: boolean; targetTypes: Record<string, string>; onClose: () => void; onSaved: () => void
 }) {
   const t = todayIso()
   const [form, setForm] = useState<NoticeInput>(notice
-    ? { title: notice.title, body: notice.body, level: notice.level, start: notice.start, end: notice.end, use: notice.use }
-    : { title: '', body: '', level: 'info', start: t, end: addDays(t, 6), use: true })
+    ? { title: notice.title, body: notice.body, level: notice.level, start: notice.start, end: notice.end, use: notice.use,
+        target: { type: notice.target.type, values: notice.target.values }, pin: notice.pin, mustAck: notice.mustAck }
+    : { title: '', body: '', level: 'info', start: t, end: addDays(t, 6), use: true, target: { type: 'all', values: [] }, pin: false, mustAck: false })
   const [kept, setKept] = useState<NoticeFile[]>(notice ? [...notice.images, ...notice.files] : [])
   const [added, setAdded] = useState<Pending[]>([])
   const [saving, setSaving] = useState(false)
@@ -299,6 +432,18 @@ function NoticeEditor({ notice, levels, titleMax, bodyMax, limits, onClose, onSa
           <label className="check-label notice-use" title="끄면 게시 기간 중에도 보이지 않습니다">
             <input type="checkbox" checked={form.use} onChange={(e) => set('use', e.target.checked)} /> 사용
           </label>
+          <div className="field full">
+            <span className="field-label">공지 대상 {!ext && <span className="field-hint">2차 DDL 실행 후 사용</span>}</span>
+            <TargetPicker value={form.target ?? { type: 'all', values: [] }} types={targetTypes} disabled={!ext} onChange={(v) => set('target', v)} />
+          </div>
+          <div className="field full notice-flags">
+            <label className="check-label" title={ext ? '' : '2차 DDL 실행 후 사용'}>
+              <input type="checkbox" disabled={!ext} checked={!!form.pin} onChange={(e) => set('pin', e.target.checked)} /> <Pin size={13} /> 게시판 상단 고정
+            </label>
+            <label className="check-label" title={ext ? '' : '2차 DDL 실행 후 사용'}>
+              <input type="checkbox" disabled={!ext} checked={!!form.mustAck} onChange={(e) => set('mustAck', e.target.checked)} /> <BadgeCheck size={13} /> 필독 ([확인] 을 눌러야 다시 안 뜸 · 확인한 사람 기록)
+            </label>
+          </div>
           <label className="field full">
             <span className="field-label">내용 <span className="field-hint">{form.body.length} / {bodyMax}</span></span>
             <textarea className="input textarea notice-body-input" rows={14} value={form.body} maxLength={bodyMax} onChange={(e) => set('body', e.target.value)}

@@ -99,15 +99,18 @@ export default function HomeTab({ notify, go }: { notify: Notify; go: (tab: Tab)
           </Card>
 
           <Card icon={<Download size={18} />} title="다운로드 · 민감 정보" error={dl.error} onClick={() => go('downloads')}
-            tone={dl.ready === false ? 'warn' : 'ok'} value={dl.error ? null : dl.ready === false ? '테이블 없음' : `오늘 ${fmtNum(dl.today)}건`}>
+            tone={dl.alerts ? 'bad' : dl.ready === false ? 'warn' : 'ok'}
+            value={dl.error ? null : dl.ready === false ? '테이블 없음' : dl.alerts ? `대량 다운로드 ${dl.alerts}건` : `오늘 ${fmtNum(dl.today)}건`}>
             최근 7일 {fmtNum(dl.week)}건 · 매니저 연락처 조회 등 {fmtNum(dl.sensitiveWeek)}건
             {dl.topUser && <div className="home-sub">7일 최다: {dl.topUser.name} {fmtNum(dl.topUser.count)}건</div>}
+            {!!dl.alertMessages?.length && <ul className="home-errors">{dl.alertMessages.map((m) => <li key={m} title={m}>{m}</li>)}</ul>}
             {dl.ready === false && <div className="home-sub warn">DDL 실행 필요: db/create_erp_web_admin_ops.sql</div>}
           </Card>
 
           <Card icon={<Megaphone size={18} />} title="공지 · 점검" error={nt.error} onClick={() => go('notices')}
             tone={nt.maintenance?.on ? 'bad' : nt.table && !nt.table.ready ? 'warn' : 'ok'}
-            value={nt.error ? null : nt.maintenance?.on ? '점검 모드 켜짐' : `게시 중 ${fmtNum(nt.active)}건`}>
+            value={nt.error ? null : nt.maintenance?.on ? '점검 모드 켜짐' : nt.maintenance?.scheduled ? '점검 예약됨' : `게시 중 ${fmtNum(nt.active)}건`}>
+            {nt.maintenance?.scheduled && !nt.maintenance?.on && <div className="home-sub warn">점검 예약 {nt.maintenance.start?.slice(5)} ~ {nt.maintenance.until?.slice(11)}</div>}
             {nt.maintenance?.on ? '관리자 외 사용자 접속 차단 중' : nt.titles?.length ? nt.titles.join(' · ') : '게시 중인 공지가 없습니다.'}
             {!!nt.endingSoon && <div className="home-sub">3일 안에 끝나는 공지 {nt.endingSoon}건</div>}
             {nt.table && !nt.table.ready && <div className="home-sub warn">공지 테이블 없음 · DDL 실행 필요</div>}

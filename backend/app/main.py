@@ -165,7 +165,8 @@ def touch(user: dict = Depends(current_user)):
 # ----------------------------------------------------------------------------
 # 개인 환경설정
 # ----------------------------------------------------------------------------
-PREF_KEYS = {"detail.columns"}
+PREF_KEYS = {"detail.columns", "ui.accent"}
+ACCENTS = ("indigo", "teal", "graphite", "ocean", "forest", "wine")   # 마이페이지 강조 색상 (frontend/src/palette.ts 와 같게)
 
 
 @app.get("/api/prefs/{key}")
@@ -179,6 +180,8 @@ def get_pref(key: str, user: dict = Depends(current_user)):
 def put_pref(key: str, body: dict, user: dict = Depends(current_user)):
     if key not in PREF_KEYS:
         raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
+    if key == "ui.accent" and body.get("value") not in ACCENTS:
+        raise HTTPException(400, {"message": f"색상은 {', '.join(ACCENTS)} 중 하나입니다.", "code": "BAD_REQUEST"})
     try:
         appdb.pref_set(user["id"], key, body.get("value"))
     except ValueError as ex:
@@ -627,6 +630,95 @@ def admin_jobs(days: int = 14, fresh: bool = False, _: dict = Depends(require_ad
     return jobs.overview(days)
 
 
+@app.put("/api/admin/downloads/alert-settings")
+def admin_download_alert_settings(body: dict, me: dict = Depends(require_admin)):
+    """대량 다운로드 알림 기준 {count, phone, rows}"""
+    return downloads.save_alert_settings(me, body)
+
+
+# ---- 권한 묶음 · 계정 정리 · 사용자 화면 미리보기 ----
+@app.get("/api/admin/roles")
+def admin_roles(_: dict = Depends(require_admin)):
+    from . import roles
+
+    return roles.list_roles()
+
+
+@app.post("/api/admin/roles")
+def admin_role_create(body: dict, me: dict = Depends(require_admin)):
+    from . import roles
+
+    return roles.save(me, body)
+
+
+@app.put("/api/admin/roles/{role_id}")
+def admin_role_update(role_id: str, body: dict, me: dict = Depends(require_admin)):
+    from . import roles
+
+    return roles.save(me, body, role_id)
+
+
+@app.delete("/api/admin/roles/{role_id}")
+def admin_role_delete(role_id: str, me: dict = Depends(require_admin)):
+    from . import roles
+
+    return roles.delete(me, role_id)
+
+
+@app.post("/api/admin/roles/{role_id}/apply")
+def admin_role_apply(role_id: str, body: dict, me: dict = Depends(require_admin)):
+    from . import roles
+
+    return roles.apply(me, role_id, body.get("userIds") or [])
+
+
+@app.get("/api/admin/cleanup")
+def admin_cleanup(days: int = 90, me: dict = Depends(require_admin)):
+    from . import cleanup
+
+    return cleanup.report(me, days)
+
+
+@app.post("/api/admin/cleanup/apply")
+def admin_cleanup_apply(body: dict, me: dict = Depends(require_admin)):
+    from . import cleanup
+
+    return cleanup.apply(me, body)
+
+
+@app.get("/api/admin/view-as/{usr_id}")
+def admin_view_as(usr_id: str, resume: bool = False, me: dict = Depends(require_admin)):
+    """사용자 화면 미리보기 시작: 대상 사용자 권한(읽기 전용)으로 화면을 그릴 정보. 이후 요청은 X-View-As 헤더로"""
+    from . import audit
+
+    target = auth.view_as_user(me, usr_id)
+    target["viewAs"] = {"by": me["id"], "byName": me["name"]}
+    target["sessionExpiresAt"] = me["sessionExpiresAt"]
+    if not resume:   # 미리보기를 연 뒤 새로고침으로 다시 불러올 때는 이력을 또 남기지 않는다
+        audit.record(me, "VIEW_AS", f"{target['name']}({usr_id})", summary=f"{target['name']}({usr_id}) 화면 미리보기 (읽기 전용)")
+    return {"user": target, "usage": usage.usage_summary(target), "sessionTtl": auth.SESSION_TTL}
+
+
+# ---- 마이페이지 ----
+@app.get("/api/me/overview")
+def my_overview(me: dict = Depends(current_user)):
+    """마이페이지: 내 권한 · 오늘 AI 사용 · 마지막 로그인 · 적용된 권한 묶음 · 최근 30일 내 다운로드"""
+    from . import roles
+
+    u = userdb.get_user(me["id"]) or {}
+    try:
+        role = roles.role_of(me["id"])
+    except Exception:  # noqa: BLE001 - 권한 묶음 테이블 문제로 마이페이지가 막히지 않게
+        role = None
+    dl = downloads.report(30, usr=me["id"], limit=20) if downloads.tables.ready() else None
+    return {
+        "user": me, "usage": usage.usage_summary(me), "lastLoginAt": u.get("last_login_at"), "createdAt": u.get("created_at"),
+        "pages": [{"key": p, "label": auth.PAGE_LABELS.get(p, "관리자" if p == "admin" else p)} for p in me["pages"]],
+        "role": role, "accents": list(ACCENTS),
+        "downloads": {"total": dl["total"], "rows": dl["rows"]} if dl else None,
+    }
+
+
 @app.get("/api/admin/downloads")
 def admin_downloads(days: int = 30, usr: str | None = None, kind: str | None = None, _: dict = Depends(require_admin)):
     names = {u["id"]: u["name"] for u in admin.list_users()}
@@ -638,6 +730,14 @@ def admin_notices(_: dict = Depends(require_admin)):
     from . import notices
 
     return {**notices.list_all(), "maintenance": notices.maintenance()}
+
+
+@app.get("/api/admin/notices/{notice_id}/reads")
+def admin_notice_reads(notice_id: str, _: dict = Depends(require_admin)):
+    """공지 대상자별 읽음 · 필독 확인 현황"""
+    from . import notices
+
+    return notices.read_status(notice_id)
 
 
 @app.post("/api/admin/notices")
@@ -670,11 +770,27 @@ def admin_maintenance(body: dict, me: dict = Depends(require_admin)):
 
 
 @app.get("/api/notices")
-def notices_active(_: dict = Depends(current_user)):
-    """오늘 게시 중인 공지 (로그인 후 팝업)"""
+def notices_active(me: dict = Depends(current_user)):
+    """오늘 게시 중이고 내가 대상인 공지 (로그인 후 팝업) + 곧 시작하는 예약 점검 예고"""
     from . import notices
 
-    return {"notices": notices.active()}
+    return {"notices": notices.active_for(me), "maintenance": notices.upcoming_maintenance()}
+
+
+@app.post("/api/notices/read")
+def notices_read(body: dict, me: dict = Depends(current_user)):
+    """팝업으로 본 공지 읽음 기록"""
+    from . import notices
+
+    return {"marked": notices.mark_read(me, [str(x) for x in (body.get("ids") or [])][:50])}
+
+
+@app.post("/api/notices/{notice_id}/ack")
+def notice_ack(notice_id: str, me: dict = Depends(current_user)):
+    """필독 공지 [확인]"""
+    from . import notices
+
+    return notices.acknowledge(me, notice_id)
 
 
 @app.get("/api/notices/board")

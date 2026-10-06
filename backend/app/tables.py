@@ -16,8 +16,11 @@ DDL_FILE = "db/create_erp_web_admin_ops.sql"
 
 
 class Tables:
-    def __init__(self, *tables: str):
+    def __init__(self, *tables: str, columns: dict[str, str] | None = None, ddl: str | None = None):
+        """tables: 앱이 쓰는 테이블 이름. columns: {표시 이름: 확인용 SELECT} (나중에 추가한 컬럼 확인)."""
         self.tables = tables
+        self.checks = [(t, f"SELECT 1 FROM {t} WHERE 1 = 0") for t in tables] + list((columns or {}).items())
+        self.ddl = ddl or DDL_FILE
         self._state: tuple[float, list[str]] | None = None
         self._lock = threading.Lock()
 
@@ -33,14 +36,14 @@ class Tables:
         miss: list[str] = []
         try:
             with db.get_pool().acquire() as conn, conn.cursor() as cur:
-                for t in self.tables:
+                for name, sql in self.checks:
                     try:
-                        cur.execute(f"SELECT 1 FROM {t} WHERE 1 = 0")
+                        cur.execute(sql)
                         cur.fetchall()
-                    except Exception:  # noqa: BLE001 - ORA-00942 (테이블 · 동의어 · 권한 없음)
-                        miss.append(t)
+                    except Exception:  # noqa: BLE001 - ORA-00942 (테이블 · 동의어 · 권한 없음) / ORA-00904 (컬럼 없음)
+                        miss.append(name)
         except Exception:  # noqa: BLE001 - DB 연결 실패 등: 없는 것으로 보고 1분 뒤 다시 확인
-            miss = list(self.tables)
+            miss = [n for n, _ in self.checks]
         with self._lock:
             self._state = (now + 60, miss)
         return miss
@@ -50,9 +53,10 @@ class Tables:
 
     def message(self) -> str:
         miss = self.missing()
-        return (f"테이블을 쓸 수 없습니다 ({', '.join(miss)}). {DDL_FILE} 를 SS10 스키마에서 실행하세요 "
-                f"(테이블이 이미 있으면 SS10DEV 동의어 · 권한만: "
-                + " ".join(f"CREATE SYNONYM SS10DEV.{t} FOR SS10.{t};" for t in miss) + ")")
+        tabs = [t for t in miss if t in self.tables]
+        return (f"테이블을 쓸 수 없습니다 ({', '.join(miss)}). {self.ddl} 를 SS10 스키마에서 실행하세요"
+                + (" (테이블이 이미 있으면 SS10DEV 동의어 · 권한만: " + " ".join(f"CREATE SYNONYM SS10DEV.{t} FOR SS10.{t};" for t in tabs) + ")"
+                   if tabs else "") + ".")
 
     def require(self) -> None:
         if not self.ready():
@@ -60,7 +64,7 @@ class Tables:
 
     def status(self) -> dict:
         miss = self.missing()
-        return {"ready": not miss, "missing": miss, "ddl": DDL_FILE}
+        return {"ready": not miss, "missing": miss, "ddl": self.ddl}
 
     def reset(self) -> None:
         with self._lock:

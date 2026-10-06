@@ -309,7 +309,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
               <YAxis yAxisId="r" orientation="right" tick={tick} tickLine={false} axisLine={false} width={40} tickFormatter={(v) => `${v}%`} domain={['auto', 'auto']} />
               <Tooltip formatter={(v, n) => (n === '원가율' ? `${v}%` : `${fmtNum(Number(v))}백만원`)} />
               <Legend />
-              <Bar yAxisId="l" dataKey="당해" fill="#6366f1" radius={[5, 5, 0, 0]} maxBarSize={30} />
+              <Bar yAxisId="l" dataKey="당해" fill="var(--primary-2)" radius={[5, 5, 0, 0]} maxBarSize={30} />
               <Line yAxisId="l" dataKey="전년" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
               <Line yAxisId="r" dataKey="원가율" stroke="#10b981" strokeWidth={2} strokeDasharray="4 3" dot={false} />
               <Line yAxisId="r" dataKey="할인율" stroke="#ef4444" strokeWidth={2} strokeDasharray="2 3" dot={false} />
@@ -326,7 +326,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
               <YAxis tick={tick} tickLine={false} axisLine={false} width={56} tickFormatter={(v) => fmtNum(v)} />
               <Tooltip formatter={(v) => `${fmtNum(Number(v))}백만원`} />
               <Legend />
-              <Bar dataKey="당기" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="당기" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={22} />
               <Bar dataKey={baseName} fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={22} />
               {data.hasGoals && <Bar dataKey="목표" fill="#94a3b8" radius={[4, 4, 0, 0]} maxBarSize={22} />}
             </BarChart>

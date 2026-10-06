@@ -101,7 +101,7 @@ export default function ProductInsightModal({ prdtCd: initialCd, onClose }: { pr
                         <Tooltip formatter={(v, n) => (n === '평균할인율' ? `${v}%` : `${fmtNum(Number(v))}원`)} />
                         <Legend />
                         <Line yAxisId="l" dataKey="평균할인율" stroke="#ef4444" strokeWidth={2} dot={false} />
-                        <Line yAxisId="r" dataKey="최저가" stroke="#6366f1" strokeWidth={2} dot={false} />
+                        <Line yAxisId="r" dataKey="최저가" stroke="var(--primary-2)" strokeWidth={2} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                     <div className="table-wrap trend-table">
@@ -129,7 +129,7 @@ export default function ProductInsightModal({ prdtCd: initialCd, onClose }: { pr
                     <YAxis yAxisId="r" orientation="right" tick={tick} tickLine={false} axisLine={false} width={36} tickFormatter={(v) => `${v}%`} />
                     <Tooltip formatter={(v, n) => (n === '할인율' ? `${v}%` : `${fmtNum(Number(v))}개`)} />
                     <Legend />
-                    <Bar yAxisId="l" dataKey="수량" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={22} />
+                    <Bar yAxisId="l" dataKey="수량" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={22} />
                     <Line yAxisId="r" dataKey="할인율" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2 }} />
                   </ComposedChart>
                 </ResponsiveContainer>

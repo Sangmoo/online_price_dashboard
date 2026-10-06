@@ -1,3 +1,4 @@
+import { viewAsId } from './viewAs'
 export type Column = { key: string; label: string }
 export type Row = Record<string, string | number | null>
 
@@ -24,6 +25,8 @@ export type User = {
   ai: AiLimits
   brands?: string[] | null // 판매 데이터 브랜드 권한 (null = 모든 브랜드)
   sessionExpiresAt?: number
+  /** 관리자가 이 사용자 화면을 미리보는 중 (읽기 전용) */
+  viewAs?: { by: string; byName: string }
 }
 
 export type Usage = {
@@ -129,6 +132,9 @@ export const MAINTENANCE_EVENT = 'opd:maintenance'
 export const BACKGROUND_HEADERS = { 'X-Background': '1' }
 
 export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  // 관리자가 사용자 화면을 미리보는 중이면 그 사용자 권한(읽기 전용)으로 조회한다
+  const viewAs = viewAsId()
+  if (viewAs) init = { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers).entries()), 'X-View-As': viewAs } }
   const res = await fetch(url, { credentials: 'same-origin', ...init })
   const exp = res.headers.get('X-Session-Expires')
   const background = new Headers(init?.headers).get('X-Background') === '1'

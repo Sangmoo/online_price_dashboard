@@ -75,7 +75,7 @@ export default function MenuUsageTab({ notify }: { notify: Notify }) {
               <XAxis dataKey="name" tick={tick} tickLine={false} axisLine={false} />
               <YAxis tick={tick} tickLine={false} axisLine={false} width={40} />
               <Tooltip />
-              <Bar dataKey="열람" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="열람" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={22} />
             </BarChart>
           </ResponsiveContainer>
         </section>

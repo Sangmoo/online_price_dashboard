@@ -29,7 +29,11 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "feedback_img_keep_months": ("FEEDBACK_IMG_KEEP_MONTHS", "int"),
     "maintenance_on": ("MAINTENANCE_ON", "yn"),          # 점검 모드: 관리자 외 접속 차단 (notices.py)
     "maintenance_msg": ("MAINTENANCE_MSG", "str"),
-    "maintenance_until": ("MAINTENANCE_UNTIL", "str"),    # 종료 예정 'YYYY-MM-DD HH:MI' (안내용)
+    "maintenance_until": ("MAINTENANCE_UNTIL", "str"),    # 종료 (예정) 'YYYY-MM-DD HH:MI' — 예약이면 이 시각에 자동으로 꺼짐
+    "maintenance_start": ("MAINTENANCE_START", "str"),    # 예약 시작 'YYYY-MM-DD HH:MI' — 이 시각에 자동으로 켜짐
+    "dl_alert_count": ("DL_ALERT_COUNT", "int"),          # 대량 다운로드 알림: 1시간에 엑셀 n건 이상
+    "dl_alert_phone": ("DL_ALERT_PHONE", "int"),          #   매니저 연락처 조회 1시간 n건 이상
+    "dl_alert_rows": ("DL_ALERT_ROWS", "int"),            #   한 번에 n행 이상 엑셀
 }
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
@@ -44,6 +48,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "maintenance_on": False,
     "maintenance_msg": None,
     "maintenance_until": None,
+    "maintenance_start": None,
+    "dl_alert_count": 10,
+    "dl_alert_phone": 20,
+    "dl_alert_rows": 100000,
 }
 
 _lock = threading.Lock()

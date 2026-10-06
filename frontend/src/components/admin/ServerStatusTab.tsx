@@ -110,7 +110,7 @@ export default function ServerStatusTab({ notify }: { notify: Notify }) {
               <YAxis yAxisId="r" orientation="right" tick={tick} tickLine={false} axisLine={false} width={36} />
               <Tooltip />
               <Legend />
-              <Bar yAxisId="l" dataKey="요청" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={26} />
+              <Bar yAxisId="l" dataKey="요청" fill="var(--primary-2)" radius={[4, 4, 0, 0]} maxBarSize={26} />
               <Bar yAxisId="r" dataKey="느린 SQL" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={14} />
               <Bar yAxisId="r" dataKey="오류" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={14} />
             </ComposedChart>

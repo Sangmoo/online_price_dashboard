@@ -138,7 +138,7 @@ export default function ShopTrendModal({ url, shopId, ctx, title, onClose }: {
                 <YAxis tick={tick} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => fmtNum(v)} />
                 <Tooltip formatter={(v) => `${fmtNum(Number(v))}백만원`} />
                 <Legend />
-                <Bar dataKey="당해" fill="#6366f1" radius={[5, 5, 0, 0]} maxBarSize={26} />
+                <Bar dataKey="당해" fill="var(--primary-2)" radius={[5, 5, 0, 0]} maxBarSize={26} />
                 <Line dataKey="전년" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
                 {hasGoals && <Line dataKey="목표" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 4" dot={false} connectNulls />}
               </ComposedChart>
