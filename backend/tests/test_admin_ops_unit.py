@@ -26,13 +26,45 @@ def _day(n: int) -> str:
 
 # ---------------------------------------------------------------------------- 테이블이 없을 때
 def test_tables_missing_message(monkeypatch):
+    """앱이 쓰는 이름으로 직접 조회해 본다: SS10 에 테이블이 있어도 SS10DEV 동의어가 없으면 '쓸 수 없음'"""
+    logged = []
+
+    class Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, p=None):
+            if "T_B" in sql:
+                raise RuntimeError("ORA-00942: table or view does not exist")
+
+        def fetchall(self):
+            return []
+
+    class Pool:
+        def acquire(self):
+            class C:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def cursor(self):
+                    return Cur()
+            return C()
+
+    monkeypatch.setattr(tables.db, "get_pool", lambda: Pool())
+    monkeypatch.setattr(tables.db, "timed", lambda *a, **k: logged.append(a))   # 오류 로그를 남기는 경로는 쓰지 않는다
     t = tables.Tables("T_A", "T_B")
-    monkeypatch.setattr(tables.db, "query", lambda sql, p=None: (["TABLE_NAME"], [("T_A",)]))
-    assert t.missing() == ["T_B"] and not t.ready()
+    assert t.missing() == ["T_B"] and not t.ready() and logged == []
     with pytest.raises(HTTPException) as ex:
         t.require()
     assert ex.value.status_code == 503 and ex.value.detail["code"] == "TABLE_MISSING"
-    assert "T_B" in ex.value.detail["message"] and "db/create_erp_web_admin_ops.sql" in ex.value.detail["message"]
+    msg = ex.value.detail["message"]
+    assert "db/create_erp_web_admin_ops.sql" in msg and "CREATE SYNONYM SS10DEV.T_B FOR SS10.T_B;" in msg
 
 
 def test_without_tables_nothing_saved_locally(real_records, monkeypatch):

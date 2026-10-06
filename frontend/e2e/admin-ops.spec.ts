@@ -147,7 +147,7 @@ test('관리자 홈 · 스케줄 · 다운로드 이력: 카드 요약, 테이�
   await shot(page, 'admin-home')
   await page.locator('.home-card', { hasText: '스케줄 · 배치' }).click()
   await expect(page.getByText('ORA-00001')).toBeVisible()
-  await expect(page.getByText(/실행 기록 테이블이 없어/)).toBeVisible()
+  await expect(page.getByText(/실행 기록 테이블을 쓸 수 없어/)).toBeVisible()
   await page.getByRole('button', { name: '다운로드 이력' }).click()
   await expect(page.locator('.dl-kind.sensitive')).toContainText('매장 매니저 연락처 조회')
 })

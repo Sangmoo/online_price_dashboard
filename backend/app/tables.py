@@ -22,17 +22,24 @@ class Tables:
         self._lock = threading.Lock()
 
     def missing(self) -> list[str]:
-        """없는 테이블 이름 (1분 캐시). 데이터 사전으로 확인해 SQL 오류 로그를 남기지 않는다."""
+        """앱 계정이 쓸 수 없는 테이블 이름 (1분 캐시).
+
+        앱이 쓰는 이름 그대로 조회해 본다 (SS10 에 테이블이 있어도 SS10DEV 동의어 · 권한이 없으면 쓸 수 없으므로).
+        확인용 조회라 실패해도 SQL 오류 로그를 남기지 않는다."""
         now = time.time()
         with self._lock:
             if self._state and self._state[0] > now:
                 return self._state[1]
+        miss: list[str] = []
         try:
-            binds = {f"t{i}": t for i, t in enumerate(self.tables)}
-            found = {r[0] for r in db.query(
-                f"SELECT DISTINCT TABLE_NAME FROM ALL_TABLES WHERE TABLE_NAME IN ({', '.join(':' + k for k in binds)})", binds)[1]}
-            miss = [t for t in self.tables if t not in found]
-        except Exception:  # noqa: BLE001 - DB 연결 실패 등: 없는 것으로 보고 짧게 다시 확인
+            with db.get_pool().acquire() as conn, conn.cursor() as cur:
+                for t in self.tables:
+                    try:
+                        cur.execute(f"SELECT 1 FROM {t} WHERE 1 = 0")
+                        cur.fetchall()
+                    except Exception:  # noqa: BLE001 - ORA-00942 (테이블 · 동의어 · 권한 없음)
+                        miss.append(t)
+        except Exception:  # noqa: BLE001 - DB 연결 실패 등: 없는 것으로 보고 1분 뒤 다시 확인
             miss = list(self.tables)
         with self._lock:
             self._state = (now + 60, miss)
@@ -42,7 +49,10 @@ class Tables:
         return not self.missing()
 
     def message(self) -> str:
-        return f"테이블이 없습니다 ({', '.join(self.missing())}). {DDL_FILE} 를 SS10 스키마에서 실행하세요."
+        miss = self.missing()
+        return (f"테이블을 쓸 수 없습니다 ({', '.join(miss)}). {DDL_FILE} 를 SS10 스키마에서 실행하세요 "
+                f"(테이블이 이미 있으면 SS10DEV 동의어 · 권한만: "
+                + " ".join(f"CREATE SYNONYM SS10DEV.{t} FOR SS10.{t};" for t in miss) + ")")
 
     def require(self) -> None:
         if not self.ready():

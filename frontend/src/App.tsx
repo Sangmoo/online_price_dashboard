@@ -278,6 +278,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   // 지표 정의 · 도움말: 상단 [도움말] 또는 화면의 (?) 아이콘(openHelp 이벤트)으로 연다
   const [help, setHelp] = useState<{ focus?: string } | null>(null)
+  const closeHelp = useCallback(() => setHelp(null), [])
   useEffect(() => {
     const open = (e: Event) => setHelp({ focus: (e as CustomEvent<string | undefined>).detail })
     window.addEventListener(OPEN_HELP_EVENT, open)
@@ -468,6 +469,8 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   return (
     <div className={`app ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
+        {/* 서비스명 · 메뉴 · 화면 설정은 스크롤 (메뉴가 늘어나도 잘리지 않게), 로그인 정보는 아래에 고정 */}
+        <div className="sidebar-scroll">
         <div className="sidebar-brand">
           <div className="brand-mark">
             <TrendingDown size={18} strokeWidth={2.6} />
@@ -520,6 +523,8 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               <span className="side-label">메뉴 접기</span>
             </span>
           </button>
+        </div>
+        </div>
 
           <div className="user-card" title={collapsed ? `${user.name} (${user.id}) · 세션 ${fmtRemain(remain)}` : undefined}>
             <div className={`avatar ${user.role === 'ADMIN' ? 'admin' : ''}`}>{user.name.slice(0, 1)}</div>
@@ -535,7 +540,6 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               <LogOut size={16} />
             </button>
           </div>
-        </div>
       </aside>
 
       <div className="main-area">
@@ -565,7 +569,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
         {noticePopup && <NoticePopup userId={user.id} notices={noticePopup.list} auto={noticePopup.auto} onClose={closeNotices} onOpen={(id) => { closeNotices(); openNotice(id) }} />}
         {help && (
           <Suspense fallback={null}>
-            <HelpModal focus={help.focus} onClose={() => setHelp(null)} />
+            <HelpModal focus={help.focus} onClose={closeHelp} />
           </Suspense>
         )}
         {feedbackOpen && (

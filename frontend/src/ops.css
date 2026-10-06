@@ -82,7 +82,10 @@
 .notice-btn .count-badge { margin-left: 2px; background: var(--primary); color: #fff; }
 
 /* 공지 편집 */
-.notice-editor { max-width: 760px; max-height: calc(100vh - 40px); overflow: hidden; }
+.notice-editor { width: min(1080px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); overflow: hidden; padding: 22px 24px; }
+.notice-editor .notice-body-input { min-height: 320px; font-size: 14px; line-height: 1.65; }
+.notice-editor .attach-zone { min-height: 96px; }
+.notice-editor .attach-thumb { width: 132px; height: 96px; }
 .notice-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 14px; overflow-y: auto; min-height: 0; padding-right: 2px; }
 .notice-form .field.wide { grid-column: span 4; }
 .notice-form .field.full { grid-column: 1 / -1; }

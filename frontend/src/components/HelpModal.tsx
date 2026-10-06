@@ -7,11 +7,16 @@ export default function HelpModal({ focus, onClose }: { focus?: string; onClose:
   const [q, setQ] = useState('')
   const bodyRef = useRef<HTMLDivElement>(null)
 
+  // Esc 로 닫기: 화면이 1초마다 다시 그려져도(세션 타이머) 감시를 다시 걸지 않도록 한 번만 등록하고 최신 onClose 를 부른다
+  const closeRef = useRef(onClose)
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    closeRef.current = onClose
+  }, [onClose])
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current()
     document.addEventListener('keydown', esc)
     return () => document.removeEventListener('keydown', esc)
-  }, [onClose])
+  }, [])
 
   useEffect(() => {
     if (!focus) return
@@ -27,7 +32,8 @@ export default function HelpModal({ focus, onClose }: { focus?: string; onClose:
 
   return (
     <div className="modal-backdrop top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal card help-modal" role="dialog" aria-label="지표 정의 · 도움말">
+      <div className="modal card help-modal" role="dialog" aria-label="지표 정의 · 도움말"
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }}>
         <div className="modal-head">
           <h3><BookOpen size={17} /> 지표 정의 · 도움말</h3>
           <button className="icon-btn" onClick={onClose} title="닫기"><X size={18} /></button>

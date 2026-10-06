@@ -65,7 +65,10 @@ export default function JobsTab({ notify }: { notify: Notify }) {
         {!data.appTable.ready && (
           <div className="notice-box warn">
             <AlertTriangle size={15} />
-            <div>실행 기록 테이블이 없어 기록하지 않고 있습니다 ({data.appTable.missing.join(', ')}). <b>{data.appTable.ddl}</b> 를 SS10 스키마에서 실행하세요.</div>
+            <div>
+              실행 기록 테이블을 쓸 수 없어 기록하지 않고 있습니다 ({data.appTable.missing.join(', ')}). <b>{data.appTable.ddl}</b> 를 SS10 스키마에서 실행하세요.
+              테이블이 이미 있으면 동의어만 만들면 됩니다: <code>{data.appTable.missing.map((t) => `CREATE SYNONYM SS10DEV.${t} FOR SS10.${t};`).join(' ')}</code>
+            </div>
           </div>
         )}
         <JobTable jobs={data.app} open={open} onToggle={toggle} />

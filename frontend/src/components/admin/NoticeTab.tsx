@@ -74,7 +74,10 @@ export default function NoticeTab({ notify, onChange }: { notify: Notify; onChan
         {!data.table.ready && (
           <div className="notice-box warn">
             <AlertTriangle size={15} />
-            <div>공지사항 테이블이 없습니다 ({data.table.missing.join(', ')}). <b>{data.table.ddl}</b> 를 SS10 스키마에서 실행하세요. 실행 후 1분 안에 등록할 수 있습니다.</div>
+            <div>
+              공지사항 테이블을 쓸 수 없습니다 ({data.table.missing.join(', ')}). <b>{data.table.ddl}</b> 를 SS10 스키마에서 실행하세요 (실행 후 1분 안에 등록 가능).
+              테이블이 이미 있으면 동의어만 만들면 됩니다: <code>{data.table.missing.map((t) => `CREATE SYNONYM SS10DEV.${t} FOR SS10.${t};`).join(' ')}</code>
+            </div>
           </div>
         )}
         <div className="table-wrap">
@@ -298,7 +301,7 @@ function NoticeEditor({ notice, levels, titleMax, bodyMax, limits, onClose, onSa
           </label>
           <label className="field full">
             <span className="field-label">내용 <span className="field-hint">{form.body.length} / {bodyMax}</span></span>
-            <textarea className="input textarea" rows={6} value={form.body} maxLength={bodyMax} onChange={(e) => set('body', e.target.value)}
+            <textarea className="input textarea notice-body-input" rows={14} value={form.body} maxLength={bodyMax} onChange={(e) => set('body', e.target.value)}
               placeholder="줄바꿈은 그대로 보입니다. 캡처한 이미지는 Ctrl+V 로 붙여넣으면 아래 본문 이미지로 들어갑니다." />
           </label>
 

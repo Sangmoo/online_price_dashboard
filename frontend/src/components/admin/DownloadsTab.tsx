@@ -63,7 +63,10 @@ export default function DownloadsTab({ notify }: { notify: Notify }) {
         {!data.table.ready && (
           <div className="notice-box warn">
             <AlertTriangle size={15} />
-            <div>다운로드 이력 테이블이 없어 기록하지 않고 있습니다 ({data.table.missing.join(', ')}). <b>{data.table.ddl}</b> 를 SS10 스키마에서 실행하세요.</div>
+            <div>
+              다운로드 이력 테이블을 쓸 수 없어 기록하지 않고 있습니다 ({data.table.missing.join(', ')}). <b>{data.table.ddl}</b> 를 SS10 스키마에서 실행하세요.
+              테이블이 이미 있으면 동의어만 만들면 됩니다: <code>{data.table.missing.map((t) => `CREATE SYNONYM SS10DEV.${t} FOR SS10.${t};`).join(' ')}</code>
+            </div>
           </div>
         )}
         <div className="status-grid">

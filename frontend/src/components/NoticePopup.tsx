@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ChevronRight, Info, Megaphone, MessageSquare, X } from 'lucide-react'
 import type { Notice } from '../opsApi'
 import { hideForToday } from '../noticeHide'
@@ -16,11 +16,15 @@ export default function NoticePopup({ userId, notices, auto, onClose, onOpen }: 
     if (hideToday) hideForToday(userId, notices.map((n) => n.id))
     onClose()
   }
+  const closeRef = useRef(onClose)   // Esc 감시는 한 번만 등록 (화면이 다시 그려져도 유지)
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    closeRef.current = onClose
+  }, [onClose])
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current()
     document.addEventListener('keydown', esc)
     return () => document.removeEventListener('keydown', esc)
-  }, [onClose])
+  }, [])
 
   return (
     <div className="modal-backdrop top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
