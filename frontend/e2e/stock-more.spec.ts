@@ -156,3 +156,69 @@ test('장기 미판매 재고: 구간 · 매장별 · 매장 누르면 스타일
   await page.getByRole('button', { name: /조회 \*/ }).click()
   await expect.poll(() => api.find('GET', '/api/stock-rt/aging').map((r) => r.query.get('minDays'))).toEqual(['90', '180'])
 })
+
+test('재고 회전: 재고일수 · 구간 · 매장 누르면 과다 · 품절 위험 목록', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['stock_rt']))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  const g = (o: Record<string, unknown>) => ({ stock: 100, amt: 1e7, sales: 28, daily: 1, cover: 100, sellThru: 21.9, short: 1, over: 2, overStock: 60, ...o })
+  const row = (shopId: string, prdtCd: string, cls: string, cover: number | null) => ({ shopId, shopNm: shopId === 'S11003' ? '롯데잠실' : '천호점', team: '쉬즈1팀', prdtCd,
+    styleNm: null, planYy: '2026', sesnNm: '겨울', stock: cls === 'out' ? 0 : 5, amt: 1, sales: 20, daily: 0.71, cover, sellThru: 80, cls })
+  api.on('GET', '/api/stock-rt/turnover', (_, url) => ({ json: { brand: 'S', brandNm: '쉬즈미스', days: Number(url.searchParams.get('days')), stockAsOf: '2026-10-08 07:02', asOf: 'x',
+    virtualRows: 120, summary: { stock: 626874, amt: 4.5e10, sales: 102218, daily: 3650.6, cover: 171.7, sellThru: 14, shops: 2, styles: 1, shortRows: 2, overRows: 1, overStock: 40 },
+    classes: [{ key: 'out', name: '품절 (재고 0)', rows: 1, stock: 0, sales: 5 }, { key: 'c7', name: '7일 미만', rows: 1, stock: 5, sales: 20 },
+      { key: 'c30', name: '7~30일', rows: 3, stock: 30, sales: 40 }, { key: 'c90', name: '30~90일', rows: 2, stock: 50, sales: 20 },
+      { key: 'c180', name: '90~180일', rows: 0, stock: 0, sales: 0 }, { key: 'c999', name: '180일 넘음', rows: 0, stock: 0, sales: 0 }, { key: 'nosale', name: '판매 없음', rows: 1, stock: 40, sales: 0 }],
+    shops: [{ ...g({ cover: null, sellThru: 0, sales: 0, daily: 0 }), shopId: 'S34080', shopNm: '(T)이마트천안', team: '쉬즈3팀', styles: 60 },
+      { ...g({}), shopId: 'S11003', shopNm: '롯데잠실', team: '쉬즈1팀', styles: 20 }],
+    teams: [{ ...g({}), team: '쉬즈1팀', shops: 10 }], styles: [{ ...g({ short: 3 }), prdtCd: 'SWWJKQ42010', styleNm: null, planYy: '2026', sesnNm: '겨울', shops: 20 }],
+    stylesTotal: 1, detail: [row('S11003', 'SWWJKQ42010', 'out', 0), row('S21018', 'SWWJKQ42010', 'c7', 3.2), row('S11003', 'SWWCTP41010', 'nosale', null)], detailTotal: 3 } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('tab', { name: /재고 회전/ }).click()
+  await expect(page.locator('.summary-pills').last()).toContainText('172일')
+  await expect(page.locator('.stock-aging-buckets').last()).toContainText('7일 미만')
+  const shops = page.getByRole('table', { name: '재고 회전 매장별' })
+  await expect(shops.getByRole('row').nth(1)).toHaveClass(/row-short/)                     // 판매 없음 → 과다
+  await shot(page, 'stock-turnover')
+  await page.getByRole('button', { name: /품절 위험 \(2\)/ }).click()
+  await expect(page.getByRole('table', { name: '재고 회전 품절 위험' }).getByRole('row')).toHaveCount(3)
+  await page.getByRole('button', { name: /매장별 \(2\)/ }).click()
+  await shops.getByRole('row').nth(2).click()                                                  // 롯데잠실 → 과다 목록
+  const over = page.getByRole('table', { name: '재고 회전 과다' })
+  await expect(over.getByRole('row')).toHaveCount(2)
+  await expect(over).toContainText('판매 없음')
+  await page.getByRole('button', { name: '최근 56일 판매' }).click()
+  await page.getByRole('button', { name: /조회 \*/ }).click()
+  await expect.poll(() => api.find('GET', '/api/stock-rt/turnover').map((r) => r.query.get('days'))).toEqual(['28', '56'])
+})
+
+test('초도 배분 적중률: 적중률 · 판매율 · 상품 누르면 매장별 배분 · 판매 비중', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['stock_rt']))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  const prod = (prdtCd: string, overlap: number | null) => ({ prdtCd, colorCd: 'BK', styleNm: null, planYy: '2026', sesnNm: '겨울', start: '2026-09-02', shops: 55,
+    overlap, alloc: 120, sold: overlap == null ? 2 : 30, sellThru: 25, rows: 55, zero: 40, soldOut: 3 })
+  api.on('GET', '/api/stock-rt/initial', (_, url) => ({ json: { brand: 'S', brandNm: '쉬즈미스', from: '2026-08-26', to: '2026-09-24', window: Number(url.searchParams.get('window')),
+    asOf: 'x', maturedOnly: true, immature: 0, virtualRows: 30, includeVirtual: false,
+    summary: { alloc: 32055, sold: 3122, sellThru: 9.7, rows: 13512, zero: 11423, soldOut: 547, products: 2, shops: 60, overlap: 27.7, lowOverlap: 1, judged: 1, minSold: 10, zeroProducts: 0 },
+    products: [prod('SWWJKQ31020', 16.7), prod('SSKPOQ42060', null)],
+    shops: [{ shopId: 'S11003', shopNm: '롯데잠실', team: '쉬즈1팀', shopType: '백화점', products: 100, alloc: 500, sold: 40, sellThru: 8, rows: 100, zero: 80, soldOut: 5 }],
+    types: [{ shopType: '백화점', alloc: 12316, sold: 1200, sellThru: 9.7, rows: 5497, zero: 4695, soldOut: 223 }] } }))
+  api.on('GET', '/api/stock-rt/initial/shops', () => ({ json: { rows: [
+    { shopId: 'S41022', shopNm: '아이파크고척', team: '쉬즈4팀', shopType: '직영점', alloc: 1, sold: 6, sellThru: 600, allocShare: 0.8, soldShare: 20, start: '2026-09-02', matured: true },
+    { shopId: 'S32039', shopNm: '현대아울렛김포', team: '쉬즈3팀', shopType: '아울렛', alloc: 7, sold: 0, sellThru: 0, allocShare: 5.8, soldShare: 0, start: '2026-09-02', matured: true }] } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('tab', { name: /초도 배분 적중률/ }).click()
+  await expect(page.locator('.summary-pills').last()).toContainText('27.7%')
+  const t = page.getByRole('table', { name: '초도 배분 상품별' })
+  await expect(t.getByRole('row').nth(1)).toHaveClass(/row-short/)                          // 적중률 30% 미만
+  await expect(t.getByRole('row').nth(2)).toContainText('판매 적음')
+  await expect(page.getByLabel('초도 배분 시작')).toHaveValue('2026-08-26')
+  await shot(page, 'stock-initial')
+  await t.getByRole('row').nth(1).click()
+  const dlg = page.getByRole('dialog', { name: '초도 배분 매장별' })
+  await expect(dlg.getByRole('row').nth(1)).toHaveClass(/row-short/)                        // 판매 비중 ≫ 배분 비중 = 더 받았어야
+  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/initial/shops')[0].query)).toMatchObject({ prdtCd: 'SWWJKQ31020', colorCd: 'BK', window: '14' })
+  await dlg.getByTitle('닫기').click()
+  await page.getByRole('button', { name: '28일 판매' }).click()
+  await page.getByRole('button', { name: /조회 \*/ }).click()
+  await expect.poll(() => api.find('GET', '/api/stock-rt/initial').map((r) => r.query.get('window'))).toEqual(['14', '28'])
+})

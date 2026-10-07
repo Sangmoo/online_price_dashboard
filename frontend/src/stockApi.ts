@@ -325,6 +325,34 @@ export type AgingReport = {
 }
 export type AgingCond = { brand: string; minDays: number; planYy: string[]; seasons: string[]; teams: string[]; prdt: string; includeVirtual: boolean }
 export type AgingSku = { colorCd: string; sizeCd: string; qty: number; amt: number; lastSale: string | null; lastDelv: string | null; firstDelv: string | null; days: number | null }
+export type TurnGroup = { stock: number; amt: number; sales: number; daily: number; cover: number | null; sellThru: number | null; short: number; over: number
+  overStock: number }
+export type TurnShop = TurnGroup & { shopId: string; shopNm: string | null; team: string | null; styles: number }
+export type TurnStyle = TurnGroup & { prdtCd: string; styleNm: string | null; planYy: string | null; sesnNm: string | null; shops: number }
+export type TurnTeam = TurnGroup & { team: string; shops: number }
+export type TurnRow = { shopId: string; shopNm: string | null; team: string | null; prdtCd: string; styleNm: string | null; planYy: string | null
+  sesnNm: string | null; stock: number; amt: number; sales: number; daily: number; cover: number | null; sellThru: number | null; cls: string }
+export type TurnCond = { brand: string; days: number; planYy: string[]; seasons: string[]; teams: string[]; prdt: string; includeVirtual: boolean }
+export type TurnReport = {
+  brand: string; brandNm: string; days: number; stockAsOf: string; asOf: string; virtualRows: number
+  summary: { stock: number; amt: number; sales: number; daily: number; cover: number | null; sellThru: number | null; shops: number; styles: number
+    shortRows: number; overRows: number; overStock: number }
+  classes: { key: string; name: string; rows: number; stock: number; sales: number }[]
+  shops: TurnShop[]; teams: TurnTeam[]; styles: TurnStyle[]; stylesTotal: number; detail: TurnRow[]; detailTotal: number
+}
+export type InitAgg = { alloc: number; sold: number; sellThru: number | null; rows: number; zero: number; soldOut: number }
+export type InitProduct = InitAgg & { prdtCd: string; colorCd: string; styleNm: string | null; planYy: string | null; sesnNm: string | null; start: string | null
+  shops: number; overlap: number | null }
+export type InitShop = InitAgg & { shopId: string; shopNm: string | null; team: string | null; shopType: string | null; products: number }
+export type InitCond = { brand: string; dateFrom: string; dateTo: string; window: number; planYy: string[]; seasons: string[]; includeVirtual: boolean; maturedOnly: boolean }
+export type InitReport = {
+  brand: string; brandNm: string; from: string; to: string; window: number; asOf: string; maturedOnly: boolean; immature: number; virtualRows: number
+  includeVirtual: boolean
+  summary: InitAgg & { products: number; shops: number; overlap: number | null; lowOverlap: number; judged: number; minSold: number; zeroProducts: number }
+  products: InitProduct[]; shops: InitShop[]; types: (InitAgg & { shopType: string })[]
+}
+export type InitProductShop = { shopId: string; shopNm: string | null; team: string | null; shopType: string | null; alloc: number; sold: number
+  sellThru: number | null; allocShare: number; soldShare: number; start: string | null; matured: boolean }
 export type AskSeqns = { brand: string; askDt: string; next: number; used: { seqn: number; brand: string; brandNm: string; clsby: string; rows: number; confirmed: boolean; web: boolean }[] }
 
 const list = (v: string[]) => v.join(',')
@@ -335,6 +363,12 @@ export const allocQuery = (c: AllocCond) =>
   qs({ brand: c.brand, wh: c.wh, dateFrom: c.dateFrom, dateTo: c.dateTo, base: c.base, grdGrp: c.grdGrp, planYy: list(c.planYy),
     seasons: list(c.seasons), prdtGrps: list(c.prdtGrps), items: list(c.items), prdt: c.prdt.trim(), teams: list(c.teams), rate: c.rate })
 
+export const turnQuery = (c: TurnCond) =>
+  qs({ brand: c.brand, days: c.days, planYy: list(c.planYy), seasons: list(c.seasons), teams: list(c.teams), prdt: c.prdt.trim() || undefined,
+    includeVirtual: c.includeVirtual ? 'true' : undefined })
+export const initQuery = (c: InitCond) =>
+  qs({ brand: c.brand, dateFrom: c.dateFrom || undefined, dateTo: c.dateTo || undefined, window: c.window, planYy: list(c.planYy), seasons: list(c.seasons),
+    includeVirtual: c.includeVirtual ? 'true' : undefined, maturedOnly: c.maturedOnly ? 'true' : 'false' })
 export const agingQuery = (c: AgingCond) =>
   qs({ brand: c.brand, minDays: c.minDays, planYy: list(c.planYy), seasons: list(c.seasons), teams: list(c.teams), prdt: c.prdt.trim() || undefined,
     includeVirtual: c.includeVirtual ? 'true' : undefined })
@@ -386,6 +420,14 @@ export const stockApi = {
   aging: (c: AgingCond, refresh = false, signal?: AbortSignal) => json<AgingReport>(`/api/stock-rt/aging?${agingQuery(c)}${refresh ? '&refresh=true' : ''}`, signal),
   agingExport: (c: AgingCond) => downloadFile(`/api/stock-rt/aging/export?${agingQuery(c)}`, undefined, '장기미판매재고.xlsx'),
   agingSkus: (brand: string, shopId: string, prdtCd: string) => json<{ rows: AgingSku[] }>(`/api/stock-rt/aging/skus?${qs({ brand, shopId, prdtCd })}`),
+
+  // ---- 재고 회전 · 초도 배분 적중률
+  turnover: (c: TurnCond, refresh = false, signal?: AbortSignal) => json<TurnReport>(`/api/stock-rt/turnover?${turnQuery(c)}${refresh ? '&refresh=true' : ''}`, signal),
+  turnoverExport: (c: TurnCond) => downloadFile(`/api/stock-rt/turnover/export?${turnQuery(c)}`, undefined, '재고회전.xlsx'),
+  initial: (c: InitCond, refresh = false, signal?: AbortSignal) => json<InitReport>(`/api/stock-rt/initial?${initQuery(c)}${refresh ? '&refresh=true' : ''}`, signal),
+  initialShops: (c: InitCond, prdtCd: string, colorCd: string) =>
+    json<{ rows: InitProductShop[] }>(`/api/stock-rt/initial/shops?${initQuery(c)}&${qs({ prdtCd, colorCd })}`),
+  initialExport: (c: InitCond) => downloadFile(`/api/stock-rt/initial/export?${initQuery(c)}`, undefined, '초도배분적중률.xlsx'),
 
   // ---- 자동 RT 설정 점검 · 창고 부족 → 매장 간 RT
   settingCheck: (c: RtCond) => json<SettingCheck>(`/api/stock-rt/rt/setting-check?${rtQuery(c)}`),

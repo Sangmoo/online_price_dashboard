@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Bot, CheckCircle2, Clock, Hourglass, Undo2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Bot, CheckCircle2, Clock, Gauge, Hourglass, PackageCheck, Undo2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
@@ -12,8 +12,9 @@ import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWri
 import { consumeStockOpen, useStockOpen, type StockOpenRequest } from '../stockNav'
 import { Pager, SelectAllFiltered, usePaged } from './stockUi'
 import { AgingTab, PendingTab, ReturnTab } from './StockMoreTabs'
+import { InitialTab, TurnoverTab } from './StockAnalysisTabs'
 
-type Tab = 'rt' | 'alloc' | 'return' | 'pending' | 'aging'
+type Tab = 'rt' | 'alloc' | 'return' | 'pending' | 'aging' | 'turnover' | 'initial'
 const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
 const addDaysIso = (isoDate: string, n: number) => {
   const d = new Date(`${isoDate}T00:00:00`)
@@ -104,12 +105,24 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
     <div className="stack">
       <section className="card stock-head">
         <div className="toolbar-title"><ArrowRightLeft size={18} /> 재고 재배치 추천</div>
-        <div className="seg big" role="tablist" aria-label="추천 종류">
-          <button role="tab" aria-selected={tab === 'rt'} className={tab === 'rt' ? 'on' : ''} onClick={() => setTab('rt')}><Store size={14} /> 매장 간 RT</button>
-          <button role="tab" aria-selected={tab === 'alloc'} className={tab === 'alloc' ? 'on' : ''} onClick={() => setTab('alloc')}><Warehouse size={14} /> 창고 → 매장 배분</button>
-          <button role="tab" aria-selected={tab === 'return'} className={tab === 'return' ? 'on' : ''} onClick={() => setTab('return')}><Undo2 size={14} /> 창고 회수</button>
-          <button role="tab" aria-selected={tab === 'pending'} className={tab === 'pending' ? 'on' : ''} onClick={() => setTab('pending')}><Clock size={14} /> 미처리 RT 현황</button>
-          <button role="tab" aria-selected={tab === 'aging'} className={tab === 'aging' ? 'on' : ''} onClick={() => setTab('aging')}><Hourglass size={14} /> 장기 미판매 재고</button>
+        <div className="stock-tab-groups">
+          <div className="stock-tab-group">
+            <span className="stock-tab-label">재배치</span>
+            <div className="seg big" role="tablist" aria-label="재배치">
+              <button role="tab" aria-selected={tab === 'rt'} className={tab === 'rt' ? 'on' : ''} onClick={() => setTab('rt')}><Store size={14} /> 매장 간 RT</button>
+              <button role="tab" aria-selected={tab === 'alloc'} className={tab === 'alloc' ? 'on' : ''} onClick={() => setTab('alloc')}><Warehouse size={14} /> 창고 → 매장 배분</button>
+              <button role="tab" aria-selected={tab === 'return'} className={tab === 'return' ? 'on' : ''} onClick={() => setTab('return')}><Undo2 size={14} /> 창고 회수</button>
+              <button role="tab" aria-selected={tab === 'pending'} className={tab === 'pending' ? 'on' : ''} onClick={() => setTab('pending')}><Clock size={14} /> 미처리 RT 현황</button>
+            </div>
+          </div>
+          <div className="stock-tab-group">
+            <span className="stock-tab-label">재고 분석</span>
+            <div className="seg big" role="tablist" aria-label="재고 분석">
+              <button role="tab" aria-selected={tab === 'turnover'} className={tab === 'turnover' ? 'on' : ''} onClick={() => setTab('turnover')}><Gauge size={14} /> 재고 회전</button>
+              <button role="tab" aria-selected={tab === 'aging'} className={tab === 'aging' ? 'on' : ''} onClick={() => setTab('aging')}><Hourglass size={14} /> 장기 미판매 재고</button>
+              <button role="tab" aria-selected={tab === 'initial'} className={tab === 'initial' ? 'on' : ''} onClick={() => setTab('initial')}><PackageCheck size={14} /> 초도 배분 적중률</button>
+            </div>
+          </div>
         </div>
         <div className="chips" role="group" aria-label="브랜드">
           {(opts?.brands ?? []).map((b) => (
@@ -129,6 +142,8 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
           {(seen.has('return') || returnSeed) && <div hidden={tab !== 'return'}><ReturnTab key={`ret-${brand}`} opts={opts} seed={returnSeed?.cond.brand === opts.brand ? returnSeed : null} /></div>}
           {seen.has('pending') && <div hidden={tab !== 'pending'}><PendingTab key={`pd-${brand}`} opts={opts} /></div>}
           {seen.has('aging') && <div hidden={tab !== 'aging'}><AgingTab key={`ag-${brand}`} opts={opts} /></div>}
+          {seen.has('turnover') && <div hidden={tab !== 'turnover'}><TurnoverTab key={`tv-${brand}`} opts={opts} /></div>}
+          {seen.has('initial') && <div hidden={tab !== 'initial'}><InitialTab key={`in-${brand}`} opts={opts} /></div>}
         </>
       )}
     </div>

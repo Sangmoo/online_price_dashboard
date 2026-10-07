@@ -103,6 +103,8 @@ CATALOG: dict[str, list[tuple[str, str, list]]] = {
         ("미처리 RT 현황", "매장 미처리(C2954) 본사지시 · 자동 RT · 매장간 요청", ["stock_pending._compute"]),
         ("창고 회수 추천", "창고 부족 상품의 최근 판매 없는 매장 재고", ["stock_return._sales"]),
         ("장기 미판매 재고", "매장 재고 × 매장 상품 기준 (매장 × 스타일)", ["stock_aging._base", "stock_aging.skus"]),
+        ("재고 회전", "최근 N일 매장 × 스타일 판매 (재고는 장기 미판매 기준 재사용)", ["stock_turnover._sales"]),
+        ("초도 배분 적중률", "확정 초도 배분 · 출고예정일부터 N일 판매", ["stock_initial._load"]),
         ("관리자 · 배분의뢰 등록 · 차수 · 내역 · 삭제", "T_DELV_ASK 판매분의뢰(자동) 미확정",
          ["stock_write.alloc_register", "stock_write.alloc_seqns", "stock_write.alloc_list", "stock_write.alloc_delete"]),
     ],

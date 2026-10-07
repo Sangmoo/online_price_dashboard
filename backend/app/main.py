@@ -1449,6 +1449,63 @@ def stock_aging_export(args: dict = Depends(_aging_args), me: dict = Depends(sto
     return _xlsx_response(content, f"장기미판매재고_{d['brandNm']}_{d['minDays']}일.xlsx")
 
 
+# ---- 재고 회전 · 초도 배분 적중률
+def _turn_args(brand: str | None = None, days: int = 28, planYy: str | None = None, seasons: str | None = None,  # noqa: N803
+               teams: str | None = None, prdt: str | None = None, includeVirtual: bool = False) -> dict:  # noqa: N803
+    return {"brand": brand, "days": days, "plan_yy": planYy, "seasons": seasons, "teams": teams, "prdt": prdt, "include_virtual": includeVirtual}
+
+
+@app.get("/api/stock-rt/turnover")
+def stock_turnover_report(request: Request, args: dict = Depends(_turn_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """재고 회전: 매장 × 스타일 재고 ÷ 최근 N일 일평균 판매 (재고일수 · 판매율 · 품절 위험 · 과다)"""
+    from . import stock_turnover
+
+    return _json_gz(request, stock_turnover.report(**args, allowed=brand_scope.brands_of(me), refresh=refresh))
+
+
+@app.get("/api/stock-rt/turnover/export")
+def stock_turnover_export(args: dict = Depends(_turn_args), me: dict = Depends(stock_page)):
+    from . import stock_turnover
+
+    d = stock_turnover.report(**args, allowed=brand_scope.brands_of(me))
+    content = stock_turnover.export_xlsx(d)
+    downloads.record(me, "stock_rt", "재고회전", {"brand": d["brand"], "days": d["days"]}, rows=len(d["shops"]), size=len(content))
+    return _xlsx_response(content, f"재고회전_{d['brandNm']}_{d['days']}일.xlsx")
+
+
+def _init_args(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, window: int = 14,  # noqa: N803
+               planYy: str | None = None, seasons: str | None = None, includeVirtual: bool = False, maturedOnly: bool = True) -> dict:  # noqa: N803
+    return {"brand": brand, "frm": dateFrom, "to": dateTo, "window": window, "plan_yy": planYy, "seasons": seasons,
+            "include_virtual": includeVirtual, "matured_only": maturedOnly}
+
+
+@app.get("/api/stock-rt/initial")
+def stock_initial_report(request: Request, args: dict = Depends(_init_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """초도 배분 적중률: 초도 배분(확정) 대비 출고예정일부터 N일 판매 (판매율 · 무판매 · 소진 · 배분/판매 비중 겹침)"""
+    from . import stock_initial
+
+    return _json_gz(request, stock_initial.analyze(**args, allowed=brand_scope.brands_of(me), refresh=refresh))
+
+
+@app.get("/api/stock-rt/initial/shops")
+def stock_initial_shops(prdtCd: str, colorCd: str, args: dict = Depends(_init_args), me: dict = Depends(stock_page)):  # noqa: N803
+    from . import stock_initial
+
+    return {"rows": stock_initial.product_shops(args["brand"], args["frm"], args["to"], args["window"], prdtCd, colorCd,
+                                                args["include_virtual"], brand_scope.brands_of(me))}
+
+
+@app.get("/api/stock-rt/initial/export")
+def stock_initial_export(args: dict = Depends(_init_args), me: dict = Depends(stock_page)):
+    from . import stock_initial
+
+    d = stock_initial.analyze(**args, allowed=brand_scope.brands_of(me))
+    content = stock_initial.export_xlsx(d)
+    downloads.record(me, "stock_rt", "초도배분적중률", {"brand": d["brand"], "from": d["from"], "to": d["to"], "window": d["window"]},
+                     rows=len(d["products"]), size=len(content))
+    return _xlsx_response(content, f"초도배분적중률_{d['brandNm']}_{d['to']}.xlsx")
+
+
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")
 
 

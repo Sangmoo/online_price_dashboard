@@ -9,6 +9,8 @@
 - get_pending_rt: 매장이 아직 처리하지 않은 RT 요청 (처리할 매장별 · 경과 시간 · 본사지시 자동거부 임박)
 - recommend_wh_return: 창고 회수 추천 (창고 부족 상품을 판매 없는 매장 재고에서 회수)
 - get_aging_stock: 장기 미판매 재고 (매장 × 스타일, 미판매 일수 구간 · 매장별 · 스타일별)
+- get_stock_turnover: 재고 회전 (재고일수 · 판매율 · 품절 위험 · 과다, 매장 · 팀 · 스타일별)
+- get_initial_alloc_accuracy: 초도 배분 적중률 (초도 배분 대비 N일 판매 · 무판매 · 소진 · 적중률)
 - open_stock_rt_screen: 대화로 화면 열기 — 조건을 정리해 대화창에 [화면에서 열기] 카드를 띄운다 (누르면 그 조건으로 화면을 열고 계산)
 결과는 화면과 같은 캐시를 써서, 화면에서 본 조건이면 바로 돌려준다. 브랜드 데이터 권한(allowed)을 그대로 적용한다.
 """
@@ -276,10 +278,53 @@ TOOLS += [
         "eager_input_streaming": True,
     },
 ]
+TOOLS += [
+    {
+        "name": "get_stock_turnover",
+        "description": (
+            "재고 회전: 매장 × 스타일 재고를 최근 N일(기본 28) 판매 속도와 비교 — 재고일수 = 재고 ÷ 일평균 판매, 판매율 = 판매 ÷ (판매 + 재고). "
+            "구간: 품절(재고 0 · 판매 있음) · 7일 미만(품절 위험) · 7~30 · 30~90 · 90~180 · 180일 넘음 · 판매 없음. "
+            "'재고 많이 쌓인 매장', '품절 위험 상품', '재고일수 긴 팀', '회전 느린 스타일' 같은 질문에 씁니다. 행사 · 가상 매장 제외. "
+            "view=summary · shops · teams · styles · short(품절 위험 매장 × 스타일) · over(과다)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "days": {"type": "integer", "enum": [7, 14, 28, 56, 91]},
+                "plan_yy": {"type": "array", "items": {"type": "string"}}, "seasons": _SEASONS, "teams": _TEAMS, "prdt_cd": {"type": "string"},
+                "shop_id": {"type": "string"}, "view": {"type": "string", "enum": ["summary", "shops", "teams", "styles", "short", "over"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
+        "name": "get_initial_alloc_accuracy",
+        "description": (
+            "초도 배분 적중률: 신상품 초도 배분(ERP 초도배분 · 확정)이 매장 판매와 얼마나 맞았는지 — 상품(품번 · 칼라) × 매장의 배분 대비 출고예정일부터 N일(기본 14) 판매. "
+            "판매율 = 판매 ÷ 배분, 무판매 매장, 소진 매장(판매 ≥ 배분), 적중률 = Σ 매장 min(배분 비중, 판매 비중)×100 (판매 10장 미만 상품은 판단 보류). "
+            "기본 기간은 N일이 다 지난 최근 30일 초도 배분. '초도 배분 잘 됐어?', '초도 적중률 낮은 상품', '초도 받고 안 팔린 매장' 같은 질문에 씁니다. "
+            "view=summary · products · shops · types(유통형태별)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "date_from": {"type": "string", "description": "초도 배분 의뢰일 시작 YYYYMMDD"},
+                "date_to": {"type": "string", "description": "초도 배분 의뢰일 끝 YYYYMMDD"}, "window": {"type": "integer", "enum": [7, 14, 28]},
+                "plan_yy": {"type": "array", "items": {"type": "string"}}, "seasons": _SEASONS,
+                "view": {"type": "string", "enum": ["summary", "products", "shops", "types"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+]
 TOOL_LABELS = {"recommend_store_rt": "매장 간 RT 추천", "recommend_wh_allocation": "창고 → 매장 배분 추천", "get_auto_rt_stats": "자동 RT 현황",
                "check_auto_rt_settings": "자동 RT 설정 점검", "open_stock_rt_screen": "재고 재배치 화면 열기",
                "pick_store_rt_rows": "RT 추천 골라 선택", "get_rt_performance": "RT 성과", "get_pending_rt": "미처리 RT 현황",
-               "recommend_wh_return": "창고 회수 추천", "get_aging_stock": "장기 미판매 재고"}
+               "recommend_wh_return": "창고 회수 추천", "get_aging_stock": "장기 미판매 재고", "get_stock_turnover": "재고 회전",
+               "get_initial_alloc_accuracy": "초도 배분 적중률"}
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
@@ -380,6 +425,10 @@ def run(name: str, inp: dict, *, allowed: list[str] | None) -> dict:
             return _return(inp, allowed)
         if name == "get_aging_stock":
             return _aging(inp, allowed)
+        if name == "get_stock_turnover":
+            return _turnover(inp, allowed)
+        if name == "get_initial_alloc_accuracy":
+            return _initial(inp, allowed)
     except HTTPException as ex:
         raise _http(ex)
     raise StockToolError(f"알 수 없는 도구: {name}")
@@ -733,3 +782,54 @@ def _aging(inp: dict, allowed: list[str] | None) -> dict:
         return {"result": {**result, "rows": d["styles"][:20]}, "table": _table(stock_aging.AGING_STYLE_COLS, d["styles"][:limit])}
     return {"result": {**result, "rows": d["shops"][:10 if view == "summary" else 20]},
             "table": _table(stock_aging.AGING_SHOP_COLS, d["shops"][:limit if view == "shops" else 30])}
+
+
+def _turnover(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_turnover as tv
+
+    view = _str(inp, "view") or "summary"
+    if view not in ("summary", "shops", "teams", "styles", "short", "over"):
+        raise StockToolError("view 는 summary, shops, teams, styles, short, over 중 하나입니다.")
+    limit = _int(inp, "limit", 30, 1, 200)
+    days = inp.get("days") or 28
+    d = tv.report(_str(inp, "brand"), days, _list(inp, "plan_yy"), _seasons(_list(inp, "seasons")), _teams(_list(inp, "teams")),
+                  _str(inp, "prdt_cd"), False, allowed)
+    shop = (_str(inp, "shop_id") or "").upper() or None
+    names = dict(tv.CLASSES)
+    result: dict[str, Any] = {"brand": d["brandNm"], "salesDays": d["days"], "stockAsOf": d["stockAsOf"], **d["summary"],
+                              "classes": [{"name": c["name"], "rows": c["rows"], "stock": c["stock"], "sales": c["sales"]} for c in d["classes"]],
+                              "note": "재고일수 = 재고 ÷ (기간 판매 ÷ 기간 일수). 매장 × 스타일 기준, 행사 · 가상 매장 제외"}
+    if view in ("short", "over") or shop:
+        want = tv.SHORT if view == "short" else tv.OVER if view == "over" else tv.SHORT | tv.OVER
+        rows = [{**x, "clsNm": names[x["cls"]]} for x in d["detail"] if x["cls"] in want and (not shop or x["shopId"] == shop)][:limit]
+        return {"result": {**result, "rows": rows[:20]}, "table": _table(tv.TURN_DETAIL_COLS, rows)}
+    if view == "styles":
+        return {"result": {**result, "rows": d["styles"][:20]}, "table": _table(tv.TURN_STYLE_COLS, d["styles"][:limit])}
+    if view == "teams":
+        cols = [("team", "팀"), ("shops", "매장 수"), ("stock", "재고"), ("sales", "기간 판매"), ("cover", "재고일수"), ("sellThru", "판매율(%)"),
+                ("short", "품절 위험"), ("over", "과다")]
+        return {"result": {**result, "rows": d["teams"]}, "table": _table(cols, d["teams"])}
+    return {"result": {**result, "rows": d["shops"][:10 if view == "summary" else 20]},
+            "table": _table(tv.TURN_COLS, d["shops"][:limit if view == "shops" else 30])}
+
+
+def _initial(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_initial as si
+
+    view = _str(inp, "view") or "summary"
+    if view not in ("summary", "products", "shops", "types"):
+        raise StockToolError("view 는 summary, products, shops, types 중 하나입니다.")
+    limit = _int(inp, "limit", 30, 1, 200)
+    d = si.analyze(_str(inp, "brand"), _str(inp, "date_from"), _str(inp, "date_to"), inp.get("window") or 14, _list(inp, "plan_yy"),
+                   _seasons(_list(inp, "seasons")), False, True, allowed)
+    result: dict[str, Any] = {"brand": d["brandNm"], "allocPeriod": f"{d['from']} ~ {d['to']}", "salesWindowDays": d["window"], **d["summary"],
+                              "types": d["types"], "immatureExcluded": d["immature"],
+                              "note": "적중률 = Σ 매장 min(배분 비중, 판매 비중)×100 (100 이면 판매 비중대로 배분). 판매 10장 미만 상품은 적중률 없음. "
+                                      "출고예정일부터 판매를 셈. 행사 · 가상 매장 제외"}
+    if view == "shops":
+        return {"result": {**result, "rows": d["shops"][:20]}, "table": _table(si.INIT_SHOP_COLS, d["shops"][:limit])}
+    if view == "types":
+        cols = [("shopType", "유통형태"), ("alloc", "초도 배분"), ("sold", "기간 판매"), ("sellThru", "판매율(%)"), ("zero", "무판매"), ("soldOut", "소진")]
+        return {"result": result, "table": _table(cols, d["types"])}
+    rows = d["products"][:limit if view == "products" else 30]
+    return {"result": {**result, "rows": rows[:10 if view == "summary" else 20]}, "table": _table(si.INIT_PROD_COLS, rows)}

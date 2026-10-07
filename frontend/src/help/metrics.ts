@@ -355,6 +355,37 @@ export const HELP: HelpEntry[] = [
     where: ['재고 재배치 추천 > 장기 미판매 재고'],
     code: 'stock_aging.report',
   },
+  {
+    id: 'stock.turnover',
+    group: 'stock',
+    name: '재고 회전',
+    formula: [
+      '재고 = 장기 미판매 재고와 같은 매장 × 스타일 재고 (이번 달, 아침 미리 계산 · 12시간)',
+      '판매 = 최근 N일(7 · 14 · 28 · 56 · 91, 기본 28) 순판매 — 어제까지',
+      '재고일수 = 재고 ÷ (판매 ÷ N), 판매율 = 판매 ÷ (판매 + 재고)',
+      '구간: 품절(재고 0 · 판매 있음) · 7일 미만(품절 위험) · 7~30 · 30~90 · 90~180 · 180일 넘음 · 판매 없음 — 90일 넘음과 판매 없음을 과다로 셉니다',
+    ],
+    source: 'T_SHOP_STOCK · T_SHOP_PRDT_BASE · T_SHOP_RNDS_BASE(판매) · T_STYLE_PLAN',
+    notes: ['매장을 누르면 그 매장의 과다 재고, [품절 위험]은 많이 팔리는 순입니다. 행사 · 가상 매장은 기본 제외.'],
+    where: ['재고 재배치 추천 > 재고 회전'],
+    code: 'stock_turnover.report',
+  },
+  {
+    id: 'stock.initial',
+    group: 'stock',
+    name: '초도 배분 적중률',
+    formula: [
+      '배분 = 확정된 초도 배분(T_DELV_ASK 초도배분 C0631) 상품(품번 · 칼라) × 매장 수량',
+      '판매 = 출고예정일부터 N일(7 · 14 · 28) 순판매, 판매율 = 판매 ÷ 배분',
+      '적중률 = Σ 매장 min(배분 비중, 판매 비중) × 100 — 판매가 난 매장에 그만큼 배분했으면 100%',
+      '무판매 = 판매 0 인 상품 × 매장, 소진 = 판매 ≥ 배분 (더 받았어야)',
+    ],
+    source: 'T_DELV_ASK · T_SHOP_RNDS_BASE(판매) · T_STYLE_PLAN',
+    notes: ['기본 기간은 판매 확인 기간이 다 지난 최근 30일 초도 배분입니다. 판매 10장 미만 상품은 적중률을 매기지 않습니다(판매 모양을 알 수 없음).',
+      '출고예정일과 실제 첫 입고일은 대부분 같거나 1~2일 차이입니다. 시즌 초 상품은 판매율이 낮게 나오니 적중률과 함께 보세요.'],
+    where: ['재고 재배치 추천 > 초도 배분 적중률'],
+    code: 'stock_initial.analyze',
+  },
 ]
 
 export const helpById = (id: string) => HELP.find((h) => h.id === id)

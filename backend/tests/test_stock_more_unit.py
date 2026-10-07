@@ -13,6 +13,9 @@ def test_virtual_reason_rules():
     assert sc.virtual_reason(None, "C00204", "C3874", "C3774", "N") == "실매장 아님"
     assert sc.virtual_reason(None, "C00202", "C3871", "C3771", "Y") is None                      # 일반 백화점
     assert sc.virtual_reason(None, "C00205", "C3872", "C3772", None) is None                     # 대리점 (실매장 값 없음)
+    assert sc.virtual_reason(None, "C00204", "C3874", "C3774", None, "(행)스타필드하남") == "행사(매장명)"   # 코드는 정상, 이름에만 표시
+    assert sc.virtual_reason(None, "C00202", "C3871", "C3771", "Y", "(폐)롯데강남") == "폐점(매장명)"
+    assert sc.virtual_reason(None, "C00202", "C3871", "C3771", "Y", "롯데(행사)") is None
 
 
 def _shops():
@@ -128,3 +131,63 @@ def test_rt_excludes_virtual_shops(monkeypatch):
     d = rt._compute("S", "20261001", "20261007", [], [], [], None, 1, False, "slow")
     assert [(r["fromShopId"], r["toShopId"]) for r in d["rows"]] == [("S2", "R1")]
     assert d["summary"]["skipped"]["virtual"] == 1 and d["summary"]["senderExcluded"]["virtual"] == 1
+
+
+def test_turnover_classes_and_aggregates(monkeypatch):
+    from app import stock_aging, stock_turnover as tv
+
+    base = {"rows": [("S1", "P1", 10, 100000, None, None, None, 1),    # 판매 28 → 일 1 → 10일
+                     ("S1", "P2", 40, 400000, None, None, None, 1),    # 판매 0 → 판매 없음
+                     ("S2", "P1", 1, 10000, None, None, None, 1),      # 판매 14 → 일 0.5 → 2일 (품절 위험)
+                     ("V1", "P1", 9, 90000, None, None, None, 1)],     # 가상 매장
+            "styles": {"P1": ("자켓", "2026", "C0074"), "P2": ("코트", "2025", "C0074"), "P3": ("니트", "2026", "C0073")},
+            "asOf": "x", "sec": 1, "ym": "202610"}
+    monkeypatch.setattr(stock_aging, "base", lambda b, refresh=False: base)
+    monkeypatch.setattr(sc, "cached", lambda key, ttl, fn, force=False: fn())
+    monkeypatch.setattr(tv, "_sales", lambda b, d: {("S1", "P1"): 28, ("S2", "P1"): 14, ("S2", "P3"): 5, ("V1", "P1"): 3})
+    monkeypatch.setattr(sc, "shops", _shops)
+    monkeypatch.setattr(sc, "team_names", lambda: {"C62010": "쉬즈1팀", "C62020": "쉬즈2팀"})
+    monkeypatch.setattr(sc, "code_names", lambda p: {"C0074": "겨울", "C0073": "가을"})
+    d = tv.report("S", 28)
+    cls = {c["key"]: c["rows"] for c in d["classes"]}
+    assert cls["c30"] == 1 and cls["nosale"] == 1 and cls["c7"] == 1 and cls["out"] == 1 and d["virtualRows"] == 1   # S2·P3 = 재고 0 · 판매 5 → 품절
+    s = d["summary"]
+    assert s["stock"] == 51 and s["sales"] == 47 and s["shortRows"] == 2 and s["overRows"] == 1 and s["overStock"] == 40
+    by = {g["shopId"]: g for g in d["shops"]}
+    assert by["S1"]["cover"] == round(50 / (28 / 28), 1) and by["S2"]["short"] == 2
+    assert d["detail"][0]["cls"] in ("out", "c7") and d["detail"][-1]["cls"] == "nosale"
+    assert tv.report("S", 28, seasons="C0073")["summary"]["sales"] == 5
+    assert tv.export_xlsx(d)[:2] == b"PK"
+
+
+def test_initial_overlap_and_maturity(monkeypatch):
+    from app import stock_initial as si
+
+    today = date.today()
+    old = (today - timedelta(days=40)).strftime("%Y%m%d")
+    new = (today - timedelta(days=3)).strftime("%Y%m%d")
+    items = [{"shopId": "S1", "prdtCd": "P1", "colorCd": "BK", "alloc": 10, "sold": 12, "start": old, "matured": True},
+             {"shopId": "S2", "prdtCd": "P1", "colorCd": "BK", "alloc": 10, "sold": 0, "start": old, "matured": True},
+             {"shopId": "V1", "prdtCd": "P1", "colorCd": "BK", "alloc": 5, "sold": 5, "start": old, "matured": True},
+             {"shopId": "S1", "prdtCd": "P2", "colorCd": "IV", "alloc": 4, "sold": 1, "start": new, "matured": False}]
+    base = {"brand": "S", "from": old, "to": new, "window": 14, "items": items, "asOf": "x", "sec": 1,
+            "styles": {"P1": {"planYy": "2026", "sesn": "C0074"}, "P2": {"planYy": "2026", "sesn": "C0074"}}}
+    monkeypatch.setattr(si, "_load", lambda b, f, t, w: base)
+    monkeypatch.setattr(sc, "cached", lambda key, ttl, fn, force=False: fn())
+    monkeypatch.setattr(sc, "shops", _shops)
+    monkeypatch.setattr(sc, "team_names", lambda: {})
+    monkeypatch.setattr(sc, "code_names", lambda p: {"C0074": "겨울"})
+    d = si.analyze("S", old, new, 14)
+    s = d["summary"]
+    # P1: 배분 비중 50/50, 판매 비중 100/0 → 적중률 50
+    assert d["products"][0]["overlap"] == 50.0 and s["overlap"] == 50.0 and d["immature"] == 1 and d["virtualRows"] == 1
+    assert s["alloc"] == 20 and s["sold"] == 12 and s["zero"] == 1 and s["soldOut"] == 1
+    d = si.analyze("S", old, new, 14, matured_only=False)
+    p2 = next(p for p in d["products"] if p["prdtCd"] == "P2")
+    assert p2["overlap"] is None                                   # 판매 10장 미만은 판단 보류
+    try:
+        si.analyze("S", "20260101", "20260601", 14)
+        raise AssertionError("기간 제한")
+    except Exception as ex:                                        # noqa: BLE001
+        assert "최대" in str(getattr(ex, "detail", ex))
+    assert si.export_xlsx(d)[:2] == b"PK"

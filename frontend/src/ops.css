@@ -474,6 +474,9 @@
 .stock-pager > .btn { margin-left: auto; }
 .stock-aging-buckets { padding: 14px 16px; }
 .stock-head .seg.big { flex-wrap: wrap; }
+.stock-tab-groups { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.stock-tab-group { display: flex; align-items: center; gap: 6px; }
+.stock-tab-label { font-size: 11.5px; font-weight: 700; color: var(--muted); }
 .stock-ai-pick .check-label { margin-left: auto; }
 .stock-perf > .seg { align-self: flex-start; }
 .stock-short-note .btn { margin-left: auto; }
