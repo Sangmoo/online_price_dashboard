@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowDownRight, ArrowUpRight, ChartLine, Download, Loader2, RefreshCw, Search } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, ChartLine, Download, FileText, Loader2, RefreshCw, Search } from 'lucide-react'
 import { apiFetch, downloadFile } from '../api'
 import { fmtNum } from '../format'
 import ShopTrendModal, { fmtGrowth, growthClass } from './ShopTrendModal'
@@ -10,8 +10,9 @@ import OnlineAlertPanel from './OnlineAlertPanel'
 import SaleHeavyShopsPanel from './SaleHeavyShopsPanel'
 import ProductInsightModal from './ProductInsightModal'
 import { HelpTip } from '../help/HelpTip'
+import SaleReportModal from './SaleReportModal'
 
-type Kpi = {
+export type Kpi = {
   amt: number
   baseAmt: number
   change: number | null
@@ -44,12 +45,12 @@ type Kpi = {
   noGoalShops: number
   noGoalAmt: number
 }
-type Trend = { ym: string; amt: number; prevAmt: number; yoy: number | null; costRate: number | null; dsctRate: number | null; shops: number }
-type Brand = { brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; dsctRate: number | null; shops: number; share: number | null; teams: number; goalAmt: number; achieve: number | null }
-type Shop = { shopId: string; shopNm: string | null; brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; goalAmt: number; achieve: number | null }
-type Period = { from: string; to: string; months: string[]; label: string }
-type CmpKind = 'yoy' | 'prev' | 'custom'
-type Dash = {
+export type Trend = { ym: string; amt: number; prevAmt: number; yoy: number | null; costRate: number | null; dsctRate: number | null; shops: number }
+export type Brand = { brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; dsctRate: number | null; shops: number; share: number | null; teams: number; goalAmt: number; achieve: number | null }
+export type Shop = { shopId: string; shopNm: string | null; brand: string; amt: number; baseAmt: number; change: number | null; costRate: number | null; goalAmt: number; achieve: number | null }
+export type Period = { from: string; to: string; months: string[]; label: string }
+export type CmpKind = 'yoy' | 'prev' | 'custom'
+export type Dash = {
   ym: string
   from: string
   months: string[]
@@ -110,6 +111,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
   const [error, setError] = useState<string | null>(null)
   const [trendShop, setTrendShop] = useState<{ id: string; name: string } | null>(null)
   const [productCd, setProductCd] = useState<string | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
 
   const load = (c: Cond | null) => {
     setLoading(true)
@@ -235,6 +237,10 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
             </button>
             <button className="btn success" onClick={exportXlsx} disabled={exporting || loading} title="지금 조회한 조건으로 보고용 엑셀(요약·추이·브랜드·팀·매장 순위·전체 매장)을 내려받습니다.">
               {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} 보고용 엑셀
+            </button>
+            <button className="btn ghost" onClick={() => setReportOpen(true)} disabled={loading || dirty}
+              title={dirty ? '바꾼 조건을 먼저 [조회]하세요' : '지금 조회한 조건으로 핵심 카드 · 추이 · 브랜드 · 매장 순위를 A4 한 장(PDF · 이미지)으로'}>
+              <FileText size={15} /> 한 장 보고서
             </button>
             <button className="icon-btn bordered" title="새로고침" onClick={() => load(applied)} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
           </div>
@@ -371,6 +377,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
       {applied && canOnline && <OnlineAlertPanel query={condQuery(applied)} onProduct={setProductCd} />}
       {applied && <SaleHeavyShopsPanel query={condQuery(applied)} onShop={(id, name) => setTrendShop({ id, name })} />}
 
+      {reportOpen && <SaleReportModal data={data} onClose={() => setReportOpen(false)} />}
       {productCd && <ProductInsightModal prdtCd={productCd} onClose={() => setProductCd(null)} />}
       {trendShop && (
         <ShopTrendModal url={`/api/sale-dashboard/shops/${encodeURIComponent(trendShop.id)}/trend`} shopId={trendShop.id} title={trendShop.name} onClose={() => setTrendShop(null)} />

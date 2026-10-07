@@ -168,7 +168,7 @@ def touch(user: dict = Depends(current_user)):
 # ----------------------------------------------------------------------------
 # 개인 환경설정
 # ----------------------------------------------------------------------------
-PREF_KEYS = {"detail.columns", "ui.accent", "ui.theme"}
+PREF_KEYS = {"detail.columns", "ui.accent", "ui.theme", "invt.view"}
 ACCENTS = ("indigo", "teal", "graphite", "ocean", "forest", "wine")   # 마이페이지 강조 색상 (frontend/src/palette.ts 와 같게)
 
 
@@ -185,6 +185,8 @@ def put_pref(key: str, body: dict, user: dict = Depends(current_user)):
         raise HTTPException(404, {"message": "알 수 없는 설정", "code": "NOT_FOUND"})
     if key == "ui.accent" and body.get("value") not in ACCENTS:
         raise HTTPException(400, {"message": f"색상은 {', '.join(ACCENTS)} 중 하나입니다.", "code": "BAD_REQUEST"})
+    if key == "invt.view" and body.get("value") not in ("list", "calendar"):
+        raise HTTPException(400, {"message": "보기 방식은 list, calendar 중 하나입니다.", "code": "BAD_REQUEST"})
     if key == "ui.theme" and body.get("value") not in ("light", "dark"):
         raise HTTPException(400, {"message": "화면 모드는 light, dark 중 하나입니다.", "code": "BAD_REQUEST"})
     try:

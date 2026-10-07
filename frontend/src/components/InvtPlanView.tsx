@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Download,
   Upload,
+  List,
   Loader2,
   Pencil,
   Plus,
@@ -21,6 +22,8 @@ import { fmtNum } from '../format'
 import ShopTrendModal from './ShopTrendModal'
 import InvtPlanEditor from './InvtPlanEditor'
 import UploadModal, { type UploadCol } from './UploadModal'
+import InvtCalendar from './InvtCalendar'
+import { api } from '../api'
 
 type Col = {
   key: keyof InvtPlan
@@ -104,6 +107,15 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
   const [trend, setTrend] = useState<InvtPlan | null>(null)
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
+  // 목록 / 달력 (사용자별 서버 설정 invt.view 로 기억)
+  const [view, setView] = useState<'list' | 'calendar'>('list')
+  useEffect(() => {
+    api.getPref<string>('invt.view').then(({ value }) => (value === 'list' || value === 'calendar') && setView(value)).catch(() => undefined)
+  }, [])
+  const changeView = (v: 'list' | 'calendar') => {
+    setView(v)
+    api.setPref('invt.view', v).catch(() => undefined)
+  }
   const [exporting, setExporting] = useState(false)
 
   const notify = useCallback((text: string, isError = false) => {
@@ -312,7 +324,11 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
           {loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 조회{dirty ? ' *' : ''}
         </button>
         <div className="toolbar-actions">
-          <button className="btn ghost danger" disabled={!selected.size} onClick={removeSelected}>
+          <div className="seg big view-seg" role="group" aria-label="보기">
+            <button className={view === 'list' ? 'on' : ''} onClick={() => changeView('list')}><List size={14} /> 목록</button>
+            <button className={view === 'calendar' ? 'on' : ''} onClick={() => changeView('calendar')}><CalendarDays size={14} /> 달력</button>
+          </div>
+          <button className="btn ghost danger" disabled={!selected.size || view === 'calendar'} onClick={removeSelected}>
             <Trash2 size={15} /> 삭제{selected.size ? ` (${selected.size})` : ''}
           </button>
           <button className="btn success" onClick={exportXlsx} disabled={exporting || rows.length === 0}>
@@ -334,12 +350,14 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
         <div className="pill"><span>연2회 매장</span><b>{fmtNum(summary.twice)}</b></div>
         <div className="pill"><span>업체 예상 비용 합계</span><b>{fmtNum(summary.cost)}원</b></div>
         {dirty && <div className="pill hint-pill warn-pill">조건을 바꿨습니다 · [조회]를 누르면 적용됩니다</div>}
-        <div className="pill hint-pill">실사예정일 셀 더블클릭 → 날짜 지정 · 그 외 행 더블클릭 → 수정</div>
+        <div className="pill hint-pill">{view === 'calendar' ? '매장을 누르면 수정 · 다른 날짜나 미정으로 끌어 놓으면 실사예정일 변경' : '실사예정일 셀 더블클릭 → 날짜 지정 · 그 외 행 더블클릭 → 수정'}</div>
       </section>
 
       {error && <div className="alert error">{error}</div>}
 
-      <section className="card grid-card">
+      {view === 'calendar' && <InvtCalendar rows={rows} onOpen={(p) => setEditor({ plan: p })} onMove={saveDate} />}
+
+      <section className="card grid-card" hidden={view === 'calendar'}>
         <div className="table-wrap tall invt-wrap">
           <table className="table invt-table">
             <colgroup>
