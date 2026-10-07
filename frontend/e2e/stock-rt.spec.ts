@@ -1,4 +1,4 @@
-// 재고 재배치 추천: 매장 간 RT · 창고 → 매장 배분 (조회 · 추천만)
+// 재고 재배치 추천: 매장 간 RT · 창고 → 매장 배분 (추천 조회 · 관리자 ERP 지시 · 의뢰 등록 · 삭제)
 import { expect, makeUser, test } from './mock'
 import type { Page } from '@playwright/test'
 
@@ -10,7 +10,8 @@ const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSt
 const ymd = (d: Date) => isoDay(d).replaceAll('-', '')
 const daysAgo = (n: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - n)
 
-const OPTIONS = (brand: string) => ({
+const OPTIONS = (brand: string, canWrite = false) => ({
+  canWrite,
   brand, brands: [{ code: 'S', name: '쉬즈미스' }, { code: 'T', name: '리스트' }],
   teams: [{ code: 'C62010', name: '쉬즈1팀' }, { code: 'C62020', name: '쉬즈2팀' }],
   seasons: [{ code: 'C0073', name: '가을' }, { code: 'C0074', name: '겨울' }, { code: 'C0078', name: '겨울기획' }],
@@ -36,10 +37,10 @@ const RT = {
   rows: [
     { no: 1, prdtCd: 'SWWSLQ42230', styleNm: '울 슬랙스', colorCd: 'LG', sizeCd: '44', qty: 1, fromShopId: 'S11003', fromShopNm: '롯데잠실', fromTeam: '쉬즈1팀',
       fromStock: 2, fromSendable: 2, fromSales: 0, fromLastSale: '2026-09-15', toShopId: 'S21018', toShopNm: '천호점', toTeam: '쉬즈2팀', toStock: -1, toSales: 2,
-      toFailCnt: 3, why: '자동RT 취소' },
+      toFailCnt: 3, toIncoming: 0, why: '자동RT 취소' },
     { no: 2, prdtCd: 'SWWJKQ42010', styleNm: '자켓', colorCd: 'BK', sizeCd: '55', qty: 2, fromShopId: 'S32017', fromShopNm: 'NC수원터미널', fromTeam: '쉬즈3팀',
       fromStock: 3, fromSendable: 3, fromSales: 0, fromLastSale: null, toShopId: 'S11016', toShopNm: '롯데영등포', toTeam: '쉬즈1팀', toStock: 0, toSales: 4,
-      toFailCnt: 0, why: '판매 후 품절' },
+      toFailCnt: 0, toIncoming: 0, why: '판매 후 품절' },
   ],
   unfilled: [{ shopId: 'S11001', shopNm: '롯데본점', team: '쉬즈1팀', prdtCd: 'SWWOPQ42001', styleNm: '원피스', colorCd: 'NV', sizeCd: '66', stock: 0, sales: 1,
     failCnt: 0, left: 1, reason: 'no_stock', reasonNm: '같은 RT 그룹에 재고 없음' }],
@@ -56,12 +57,15 @@ const STATS = {
 }
 const allocRow = (shopId: string, shopNm: string, rank: number, ask: number, extra: Record<string, unknown> = {}) => ({
   prdtCd: 'SWWBLQ42010', styleNm: '블라우스', colorCd: 'IV', sizeCd: '77', rank, shopId, shopNm, team: '쉬즈1팀', shopType: '백화점', grade: '5등급',
-  gradeRank: rank, srate: 50 - rank, fq: ask ? 1 : 0, sq: 1, stock: 0, askFp: ask ? 1 : 0, askSale: ask ? ask - 1 : 0, ask, ctl: false, ...extra,
+  gradeRank: rank, srate: 50 - rank, fq: ask ? 1 : 0, sq: 1, stock: 0, askFp: ask ? 1 : 0, askSale: ask ? ask - 1 : 0, ask, ctl: false,
+  need: 2, short: Math.max(2 - ask, 0), ...extra,
 })
 const ALLOC = {
   brand: 'S', brandNm: '쉬즈미스', wh: 'IN', from: '2026-10-06', to: '2026-10-06', base: '202609003', grdGrp: '2015011', rate: 1, asOf: '2026-10-07 16:21',
-  summary: { styleSkus: 1810, soldSkus: 708, skus: 2, allocSkus: 1, allocQty: 3, allocFp: 2, shops: 2, demand: 6, short: 3, noStockSkus: 1, ctlRows: 1, candidates: 4 },
+  summary: { styleSkus: 1810, soldSkus: 708, skus: 2, allocSkus: 1, allocQty: 3, allocFp: 2, shops: 2, demand: 6, short: 3, noStockSkus: 1, ctlRows: 1, candidates: 4,
+    shortRows: 2, shortZero: 1, asked: 0 },
   rows: [allocRow('S11001', '롯데본점', 1, 2), allocRow('S11003', '롯데잠실', 2, 1)],
+  shortRows: [allocRow('S11003', '롯데잠실', 2, 1), allocRow('S21018', '천호점', 4, 0)], shortRowsTotal: 2,
   ctlRows: [allocRow('S12001', '현대본점', 3, 0, { ctl: true })],
   skus: [
     { prdtCd: 'SWWBLQ42010', styleNm: '블라우스', colorCd: 'IV', sizeCd: '77', whStock: 6, reserved: 2, minWh: 1, avail: 3, shops: 3, demand: 4, alloc: 3, short: 1, maxStock: 3, minRate: 0 },
@@ -150,7 +154,16 @@ test('창고 → 매장 배분 추천: 최근 자동보충 조건으로 계산�
   const rows = page.getByRole('table', { name: '매장별 배분' })
   await expect(rows.getByRole('row')).toHaveCount(3)
   await expect(page.locator('.summary-pills')).toContainText('3장')
+  // 창고 부족으로 덜 받은 행은 노란 행 · '부족' 표시, 일반 사용자는 등록 버튼 없음
+  await expect(rows.getByRole('row').nth(2)).toHaveClass(/row-short/)
+  await expect(rows.getByRole('row').nth(2)).toContainText('부족 1')
+  await expect(rows.getByRole('row').nth(1)).not.toHaveClass(/row-short/)
+  await expect(page.getByRole('button', { name: /배분의뢰 등록/ })).toHaveCount(0)
   await shot(page, 'stock-alloc')
+
+  await page.getByRole('button', { name: /창고 부족 \(2\)/ }).click()
+  await expect(page.locator('.stock-short-note')).toContainText('전혀 못 받음 1건')
+  await expect(rows.getByRole('row').nth(2)).toContainText('미배분 부족 2')
 
   await page.getByRole('button', { name: /상품별/ }).click()
   await page.getByLabel('부족한 상품만').check()
@@ -161,4 +174,111 @@ test('창고 → 매장 배분 추천: 최근 자동보충 조건으로 계산�
   await expect(modal).toContainText('현대본점 (수불제어 · 건너뜀)')
   expect(Object.fromEntries(api.find('GET', '/api/stock-rt/alloc/candidates')[0].query)).toMatchObject({ prdtCd: 'SWWBLQ42010', colorCd: 'IV', sizeCd: '77' })
   await shot(page, 'stock-alloc-cand')
+})
+
+test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시(미확정) 등록 · 등록 내역에서 삭제', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
+  api.on('POST', '/api/stock-rt/rt/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: RT.asOf, count: 1, qty: 2, senders: 1, receivers: 1,
+    skipped: [{ key: ['SWWSLQ42230', 'LG', '44', 'S11003', 'S21018'], reason: '보내는 매장 재고 부족 (지금 보낼 수 있는 수량 0)' }] } }))
+  api.on('POST', '/api/stock-rt/rt/register', () => ({ json: { ok: true, indcDt: ymd(now), count: 1, qty: 2, firstId: `${ymd(now)}00042`,
+    lastId: `${ymd(now)}00043`, senders: 1, receivers: 1, skipped: [] } }))
+  const reg = { brand: 'S', brandNm: '쉬즈미스', from: '', to: '', total: 2, deletable: 1,
+    byStatus: [{ code: 'N', name: '미확정 (매장 확정 전)', qty: 1 }, { code: 'C2951', name: '수락', qty: 1 }],
+    rows: [
+      { id: `${ymd(now)}00042`, indcDt: isoDay(now), prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', qty: 1, fromShopId: 'S32017', fromShopNm: 'NC수원터미널',
+        toShopId: 'S11016', toShopNm: '롯데영등포', status: 'N', statusNm: '미확정 (매장 확정 전)', insDay: '20261007161000', insUser: 'admin', deletable: true },
+      { id: `${ymd(now)}00043`, indcDt: isoDay(now), prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', qty: 1, fromShopId: 'S32017', fromShopNm: 'NC수원터미널',
+        toShopId: 'S11016', toShopNm: '롯데영등포', status: 'C2951', statusNm: '수락', insDay: '20261007161000', insUser: 'admin', deletable: false },
+    ] }
+  api.on('GET', '/api/stock-rt/rt/registered', () => ({ json: reg }))
+  api.on('POST', '/api/stock-rt/rt/delete', () => ({ json: { ok: true, deleted: 1, requested: 1, notDeleted: 0 } }))
+
+  await page.goto('/?view=stock_rt')
+  await expect(page.getByText('관리자: 고른 추천을 ERP')).toBeVisible()
+  await page.getByRole('button', { name: /추천 계산/ }).click()
+  const table = page.getByRole('table', { name: '매장 간 RT 추천 목록' })
+  await expect(table.getByRole('row')).toHaveCount(3)
+  await expect(page.getByRole('button', { name: /본사지시 RT 지시/ })).toBeDisabled()
+  await table.getByLabel('추천 모두 선택').check()
+  await expect(page.getByRole('button', { name: /본사지시 RT 지시 \(2건 · 3장\)/ })).toBeEnabled()
+  await table.getByLabel('SWWSLQ42230 S11003→S21018 선택').uncheck()
+  await page.getByRole('button', { name: /본사지시 RT 지시 \(1건 · 2장\)/ }).click()
+
+  const dlg = page.getByRole('dialog', { name: '본사지시 RT 지시 등록' })
+  await expect(dlg).toContainText('지시(미확정)')
+  await expect(dlg).toContainText('제외 1건')
+  expect(api.find('POST', '/api/stock-rt/rt/preview')[0].body).toEqual({ keys: [['SWWJKQ42010', 'BK', '55', 'S32017', 'S11016']] })
+  await shot(page, 'stock-rt-register')
+  await dlg.getByRole('button', { name: '2장 지시' }).click()
+  await expect(page.locator('.stock-done')).toContainText(`지시번호 ${ymd(now)}00042 ~ ${ymd(now)}00043`)
+  const body = api.find('POST', '/api/stock-rt/rt/register')[0].body as { keys: string[][]; indcDt: string }
+  expect(body).toEqual({ keys: [['SWWJKQ42010', 'BK', '55', 'S32017', 'S11016']], indcDt: isoDay(now) })
+  expect(Object.fromEntries(api.find('POST', '/api/stock-rt/rt/register')[0].query)).toMatchObject({ brand: 'S', order: 'slow' })
+  // 등록 뒤 지금 재고로 다시 계산
+  await expect.poll(() => api.find('GET', '/api/stock-rt/rt').filter((r) => r.query.get('refresh') === 'true').length).toBe(1)
+
+  await page.getByRole('button', { name: /등록 내역/ }).click()
+  const list = page.getByRole('dialog', { name: /본사지시 RT 지시 등록 내역/ })
+  await expect(list.getByRole('row')).toHaveCount(3)
+  await expect(list.getByLabel(`${ymd(now)}00043 선택`)).toBeDisabled()          // 매장이 수락한 지시는 삭제 불가
+  await list.getByLabel('삭제 가능한 행 모두 선택').check()
+  await list.getByRole('button', { name: /선택 삭제 \(1\)/ }).click()
+  await expect(list).toContainText('되돌릴 수 없습니다')
+  await shot(page, 'stock-rt-registered')
+  await list.getByRole('button', { name: '삭제', exact: true }).click()
+  await expect(list).toContainText('1건을 삭제했습니다')
+  expect(api.find('POST', '/api/stock-rt/rt/delete')[0].body).toEqual({ brand: 'S', ids: [`${ymd(now)}00042`] })
+})
+
+test('관리자: 창고 배분을 골라 배분의뢰(미확정) 등록 — 차수 제안 · 확정 차수는 막음', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
+  api.on('GET', '/api/stock-rt/alloc', () => ({ json: ALLOC }))
+  api.on('POST', '/api/stock-rt/alloc/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: ALLOC.asOf, wh: 'IN', count: 2, qty: 3, shops: 2, skipped: [] } }))
+  api.on('GET', '/api/stock-rt/alloc/seqns', () => ({ json: { brand: 'S', askDt: isoDay(now), next: 19,
+    used: [{ seqn: 17, brand: 'S', brandNm: '쉬즈미스', clsby: 'C0632', rows: 1295, confirmed: true, web: false },
+      { seqn: 18, brand: 'S', brandNm: '쉬즈미스', clsby: 'C0632', rows: 2861, confirmed: true, web: false }] } }))
+  api.on('POST', '/api/stock-rt/alloc/register', () => ({ json: { ok: true, askDt: isoDay(now), askSeqn: 19, count: 2, qty: 3, shops: 2, skipped: [] } }))
+
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('tab', { name: /창고 → 매장 배분/ }).click()
+  await page.getByRole('button', { name: /배분 계산/ }).click()
+  const rows = page.getByRole('table', { name: '매장별 배분' })
+  await expect(rows.getByRole('row')).toHaveCount(3)
+  await rows.getByLabel('배분 모두 선택').check()
+  await page.getByRole('button', { name: /배분의뢰 등록 \(2건 · 3장\)/ }).click()
+  const dlg = page.getByRole('dialog', { name: '배분의뢰 등록' })
+  await expect(dlg.getByLabel('의뢰차수')).toHaveValue('19')
+  await expect(dlg).toContainText('17(쉬즈미스·확정)')
+  await dlg.getByLabel('의뢰차수').fill('18')
+  await expect(dlg).toContainText('이미 확정된 차수')
+  await expect(dlg.getByRole('button', { name: '3장 의뢰' })).toBeDisabled()
+  await dlg.getByLabel('의뢰차수').fill('19')
+  await shot(page, 'stock-alloc-register')
+  await dlg.getByRole('button', { name: '3장 의뢰' }).click()
+  await expect(page.locator('.stock-done')).toContainText('19차에 3장')
+  expect(api.find('POST', '/api/stock-rt/alloc/register')[0].body).toEqual({
+    keys: [['S11001', 'SWWBLQ42010', 'IV', '77'], ['S11003', 'SWWBLQ42010', 'IV', '77']], askDt: isoDay(now), askSeqn: 19, delvPreDt: isoDay(now) })
+})
+
+test('메뉴를 옮겼다 돌아와도 조회 결과가 그대로 · 사이드바 서비스명은 메뉴 스크롤과 따로 고정', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['stock_rt', 'invt_plan']))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
+  api.on('GET', '/api/invt-plans/options', () => ({ json: { areas: [], regions: [], areaRegion: {}, invtTypes: ['정기'], stlmTeams: [], rmkMaxBytes: 200, encoding: 'utf-8' } }))
+  api.on('GET', '/api/invt-plans', () => ({ json: { plans: [] } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByLabel('품번', { exact: true }).fill('SWW')
+  await page.getByRole('button', { name: /추천 계산/ }).click()
+  await expect(page.getByRole('table', { name: '매장 간 RT 추천 목록' }).getByRole('row')).toHaveCount(3)
+  await page.locator('.side-item', { hasText: '매장 재고 실사계획' }).click()
+  await expect(page.getByRole('table', { name: '매장 간 RT 추천 목록' })).toBeHidden()
+  await page.locator('.side-item', { hasText: '재고 재배치 추천' }).click()
+  await expect(page.getByRole('table', { name: '매장 간 RT 추천 목록' }).getByRole('row')).toHaveCount(3)
+  await expect(page.getByLabel('품번', { exact: true })).toHaveValue('SWW')
+  expect(api.find('GET', '/api/stock-rt/rt').length).toBe(1)           // 다시 계산하지 않음
+  expect(await page.locator('.sidebar-scroll .sidebar-brand').count()).toBe(0)
+  await expect(page.locator('.sidebar > .sidebar-brand')).toBeVisible()
 })

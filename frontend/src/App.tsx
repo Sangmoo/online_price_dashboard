@@ -303,6 +303,12 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   const [view, setView] = useState<ViewKey | null>(() =>
     initialUrl.view && allowed.some((m) => m.key === initialUrl.view) ? initialUrl.view : (allowed[0]?.key ?? null),
   )
+  // 한 번 연 메뉴는 다른 메뉴로 옮겨도 화면(조회 조건 · 결과)을 그대로 둔다 — 숨겨 두기만 하고 다시 열면 그대로 보인다
+  const [visited, setVisited] = useState<Set<ViewKey>>(() => new Set(view ? [view] : []))
+  useEffect(() => {
+    if (view) setVisited((v) => (v.has(view) ? v : new Set(v).add(view)))
+  }, [view])
+  const keep = (k: ViewKey) => visited.has(k) || view === k
   const [noticeFocus, setNoticeFocus] = useState<{ id: string; nonce: number } | null>(null)
   const openNotice = useCallback((id: string) => {
     setNoticeFocus({ id, nonce: Date.now() })
@@ -525,8 +531,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   return (
     <div className={`app ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        {/* 서비스명 · 메뉴 · 화면 설정은 스크롤 (메뉴가 늘어나도 잘리지 않게), 로그인 정보는 아래에 고정 */}
-        <div className="sidebar-scroll">
+        {/* 서비스명은 위에 고정, 메뉴 · 화면 설정만 스크롤 (메뉴가 늘어나도 잘리지 않게), 로그인 정보는 아래에 고정 */}
         <div className="sidebar-brand">
           <div className="brand-mark">
             <TrendingDown size={18} strokeWidth={2.6} />
@@ -536,6 +541,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             <div className="brand-sub">영업 데이터 · 분석 서비스</div>
           </div>
         </div>
+        <div className="sidebar-scroll">
 
         <nav className="side-nav">
           {allowed.map(({ key, label, desc, icon: Icon, group }, i) => (
@@ -717,21 +723,31 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
               />
             </div>
           )}
-          {view === 'sale_dashboard' && user.pages.includes('sale_dashboard') && <SaleDashboardView onContextChange={setSaleDashCtx} canOnline={user.pages.includes('dashboard') || user.pages.includes('detail')} />}
+          {keep('sale_dashboard') && user.pages.includes('sale_dashboard') && (
+            <div hidden={view !== 'sale_dashboard'}>
+              <SaleDashboardView onContextChange={setSaleDashCtx} canOnline={user.pages.includes('dashboard') || user.pages.includes('detail')} />
+            </div>
+          )}
           {user.pages.includes('sale_monthly') && (
             <div hidden={view !== 'sale_monthly'}>
               <SaleMonthlyView onContextChange={setSaleCtx} />
             </div>
           )}
-          {view === 'invt_plan' && user.pages.includes('invt_plan') && <InvtPlanView onContextChange={setInvtCtx} />}
-          {view === 'stock_rt' && user.pages.includes('stock_rt') && <StockRtView onContextChange={setStockCtx} />}
-          {view === 'mall_shop' && user.pages.includes('mall_shop') && <MallShopView />}
-          {view === 'mypage' && (
-            <MyPage me={user} theme={theme} onTheme={onTheme} onShowNotices={() => { seenNotices.current.clear(); checkNotices() }} />
+          {keep('invt_plan') && user.pages.includes('invt_plan') && <div hidden={view !== 'invt_plan'}><InvtPlanView onContextChange={setInvtCtx} /></div>}
+          {keep('stock_rt') && user.pages.includes('stock_rt') && <div hidden={view !== 'stock_rt'}><StockRtView onContextChange={setStockCtx} /></div>}
+          {keep('mall_shop') && user.pages.includes('mall_shop') && <div hidden={view !== 'mall_shop'}><MallShopView /></div>}
+          {keep('mypage') && (
+            <div hidden={view !== 'mypage'}>
+              <MyPage me={user} theme={theme} onTheme={onTheme} onShowNotices={() => { seenNotices.current.clear(); checkNotices() }} />
+            </div>
           )}
-          {view === 'notice' && <NoticeBoardView key={noticeFocus?.nonce ?? 0} me={user} focusId={noticeFocus?.id} onChange={checkNotices} />}
-          {view === 'admin' && user.pages.includes('admin') && <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge}
-            onOpsChange={() => { api.admin.dataFreshness().then(setFreshness).catch(() => undefined); checkNotices() }} />}
+          {keep('notice') && <div hidden={view !== 'notice'}><NoticeBoardView key={noticeFocus?.nonce ?? 0} me={user} focusId={noticeFocus?.id} onChange={checkNotices} /></div>}
+          {keep('admin') && user.pages.includes('admin') && (
+            <div hidden={view !== 'admin'}>
+              <AdminView key={adminTab?.nonce ?? 0} me={user} initialTab={adminTab?.tab} feedbackOpen={badge.open ?? 0} onFeedbackChange={checkBadge}
+                onOpsChange={() => { api.admin.dataFreshness().then(setFreshness).catch(() => undefined); checkNotices() }} />
+            </div>
+          )}
           {!range && !datesError && (view === 'dashboard' || view === 'detail') && <div className="skeleton-page" />}
           </Suspense>
         </main>

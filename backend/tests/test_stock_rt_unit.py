@@ -137,13 +137,23 @@ def test_rt_compute_end_to_end(monkeypatch):
     monkeypatch.setattr(rt, "_failed", lambda f, t, w, b: [])
     monkeypatch.setattr(rt, "_stock", lambda pcs, ym: [("S1", "P1", "BK", "55", 2), ("S2", "P1", "BK", "55", 1), ("S3", "P1", "BK", "55", 1),
                                                        ("S4", "P1", "BK", "55", 4)])
-    monkeypatch.setattr(rt, "_reserved", lambda b, td: {"moving": {}, "pending": {}, "asigned": {}, "asignedSku": set(), "shopReq": {}, "requested": {}})
+    res = {"moving": {}, "pending": {}, "asigned": {}, "asignedSku": set(), "shopReq": {}, "requested": {}, "instrOut": {}, "instrIn": {}}
+    monkeypatch.setattr(rt, "_reserved", lambda b, td: res)
     recent = (date.today() - timedelta(days=3)).strftime("%Y%m%d")
     monkeypatch.setattr(rt, "_prdt_base", lambda b, keys: {k: (recent if k[0] == "S4" else "20250101", None, "20260901", 5, 0, 0, 2, 0) for k in keys})
     d = rt._compute("S", "20261001", "20261007", [], [], [], None, 1, False, "slow")
     assert [(r["fromShopId"], r["toShopId"], r["qty"]) for r in d["rows"]] == [("S2", "R1", 1)]
+    assert d["rows"][0]["toIncoming"] == 0
     s = d["summary"]
     assert s["receivers"] == 1 and s["skipped"]["noGroup"] == 1 and s["senderExcluded"]["moving"] == 1
+    # 미처리 본사지시가 S2 에서 나가 있으면 S2 는 보낼 게 없고 다음 후보(S3)로
+    res["instrOut"] = {("S2", "P1", "BK", "55"): 1}
+    d = rt._compute("S", "20261001", "20261007", [], [], [], None, 1, False, "slow")
+    assert [r["fromShopId"] for r in d["rows"]] != ["S2"]
+    # 받는 매장에 이미 지시가 들어와 있으면 받는 매장에서 뺀다
+    res["instrIn"] = {("R1", "P1", "BK", "55"): 1}
+    d = rt._compute("S", "20261001", "20261007", [], [], [], None, 1, False, "slow")
+    assert d["rows"] == [] and d["summary"]["skipped"]["incoming"] == 1
     xl = rt.export_xlsx({**d, "cond": {"planYy": [], "seasons": [], "teams": [], "prdt": None}})
     assert xl[:2] == b"PK"
 
@@ -183,12 +193,25 @@ def test_alloc_compute_end_to_end(monkeypatch):
     monkeypatch.setattr(wa, "_stock", lambda pcs, ym: {("C", "P1", "BK", "55"): (3, 0)})           # C 는 상한 도달
     monkeypatch.setattr(wa, "_moves", lambda pcs, ms, f: {})
     monkeypatch.setattr(wa, "_first_sale", lambda b, k: {})
-    monkeypatch.setattr(wa, "_wh_avail", lambda b, wh, p, td: {("P1", "BK", "55"): {"wh": 5, "indc": 1, "ask": 1}})
+    wh = {"wh": 5, "indc": 1, "ask": 1}
+    monkeypatch.setattr(wa, "_wh_avail", lambda b, w, p, td: {("P1", "BK", "55"): dict(wh)})
+    asked: dict = {}
+    monkeypatch.setattr(wa, "web_asked", lambda b, td: asked)
     d = wa._compute("S", "IN", "20261006", "20261006", "BASE", "GG", [], [], [], [], None, [], 1.0)
     # 창고 5 − 지시 1 − 의뢰 1 − 하한 1 = 2 → 완불 B 1장, 판매 A 1장 (C 는 상한)
     assert [(r["shopId"], r["askFp"], r["askSale"]) for r in d["rows"]] == [("A", 0, 1), ("B", 1, 0)]
     assert d["skus"][0]["avail"] == 2 and d["summary"]["allocQty"] == 2
     assert {r["shopId"]: r["ask"] for r in d["allRows"]} == {"A": 1, "B": 1, "C": 0}     # 현재고 = 상한이면 후보지만 0장
+    assert d["shortRows"] == [] and {r["shopId"]: r["need"] for r in d["allRows"]} == {"A": 1, "B": 1, "C": 0}
+    # 창고 가용 1장 → B(완불)만 받고 A 는 창고 부족 (전혀 못 받음)
+    wh["wh"] = 4
+    d = wa._compute("S", "IN", "20261006", "20261006", "BASE", "GG", [], [], [], [], None, [], 1.0)
+    assert [(r["shopId"], r["ask"], r["short"]) for r in d["shortRows"]] == [("A", 0, 1)]
+    assert d["summary"]["shortRows"] == 1 and d["summary"]["shortZero"] == 1
+    # 이 화면에서 이미 의뢰한 매장 × 상품은 다시 배분하지 않는다
+    asked[("B", "P1", "BK", "55")] = 1
+    d = wa._compute("S", "IN", "20261006", "20261006", "BASE", "GG", [], [], [], [], None, [], 1.0)
+    assert "B" not in {r["shopId"] for r in d["allRows"]} and d["summary"]["asked"] == 1
 
 
 # ---------------------------------------------------------------- AI 도구

@@ -1123,7 +1123,7 @@ def invt_shop_detail(shop_id: str, _: dict = Depends(invt_page)):
 
 
 # ----------------------------------------------------------------------------
-# 데이터 관리 > 재고 재배치 추천 (매장 간 RT · 창고 → 매장 배분, 조회 · 추천만)
+# 데이터 관리 > 재고 재배치 추천 (매장 간 RT · 창고 → 매장 배분 추천, 관리자는 ERP 지시 · 의뢰 등록 · 삭제)
 # ----------------------------------------------------------------------------
 stock_page = require_page("stock_rt")
 
@@ -1150,7 +1150,7 @@ def stock_rt_options(brand: str | None = None, me: dict = Depends(stock_page)):
 
     out = wh_alloc.options(brand, brand_scope.brands_of(me))
     return {**out, "defaultSeasons": stock_ctl.default_seasons(), "defaultPlanYy": stock_ctl.default_plan_years(),
-            "today": stock_ctl.today(), "maxDays": stock_ctl.MAX_DAYS}
+            "today": stock_ctl.today(), "maxDays": stock_ctl.MAX_DAYS, "canWrite": me["role"] == "ADMIN"}
 
 
 @app.get("/api/stock-rt/rt")
@@ -1190,8 +1190,8 @@ def stock_alloc_recommend(args: dict = Depends(_alloc_args), refresh: bool = Fal
 
     d = wh_alloc.recommend(**args, allowed=brand_scope.brands_of(me), refresh=refresh)
     out = {k: v for k, v in d.items() if k != "allRows"}
-    return {**out, "rows": d["rows"][:wh_alloc.MAX_ROWS], "skus": d["skus"][:wh_alloc.MAX_ROWS],
-            "rowsTotal": len(d["rows"]), "skusTotal": len(d["skus"])}
+    return {**out, "rows": d["rows"][:wh_alloc.MAX_ROWS], "skus": d["skus"][:wh_alloc.MAX_ROWS], "shortRows": d["shortRows"][:wh_alloc.MAX_ROWS],
+            "rowsTotal": len(d["rows"]), "skusTotal": len(d["skus"]), "shortRowsTotal": len(d["shortRows"])}
 
 
 @app.get("/api/stock-rt/alloc/candidates")
@@ -1214,6 +1214,85 @@ def stock_alloc_export(args: dict = Depends(_alloc_args), me: dict = Depends(sto
     downloads.record(me, "stock_rt", "창고배분추천", {k: v for k, v in args.items() if v not in (None, "", 0, False)},
                      rows=len(d["rows"]), size=len(content))
     return _xlsx_response(content, f"창고배분추천_{d['brandNm']}_{d['to']}.xlsx")
+
+
+# ---- ERP 등록 · 삭제 (본사지시 RT 지시 · 배분의뢰). 지금은 관리자만 — 나중에 일반 사용자에게 열 때는 stock_writer 만 바꾸면 된다
+def stock_writer(request: Request) -> dict:
+    me = stock_page(request)
+    if me["role"] != "ADMIN":
+        raise auth.AuthError(403, "ERP 등록 · 삭제는 관리자만 할 수 있습니다.", "FORBIDDEN")
+    return me
+
+
+@app.post("/api/stock-rt/rt/preview")
+def stock_rt_write_preview(body: dict, args: dict = Depends(_rt_args), me: dict = Depends(stock_writer)):
+    """고른 RT 추천 행을 지금 재고로 다시 확인 (등록하지 않음)"""
+    from . import stock_write
+
+    p = stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me))
+    return {k: v for k, v in p.items() if k != "rows"}
+
+
+@app.post("/api/stock-rt/rt/register")
+def stock_rt_write_register(body: dict, args: dict = Depends(_rt_args), me: dict = Depends(stock_writer)):
+    """본사지시 RT 지시 등록 (T_INDC_RT, 미확정) — 확정은 ERP 에서 매장이 한다"""
+    from . import stock_write
+
+    return stock_write.rt_register(me, args, body.get("keys"), body.get("indcDt"), brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/rt/registered")
+def stock_rt_registered(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None,  # noqa: N803
+                        me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    return stock_write.rt_list(brand, dateFrom, dateTo, brand_scope.brands_of(me))
+
+
+@app.post("/api/stock-rt/rt/delete")
+def stock_rt_write_delete(body: dict, me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    return stock_write.rt_delete(me, body.get("brand"), body.get("ids"), brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/alloc/seqns")
+def stock_alloc_seqns(brand: str | None = None, askDt: str | None = None, me: dict = Depends(stock_writer)):  # noqa: N803
+    from . import stock_write
+
+    return stock_write.alloc_seqns(brand, askDt, brand_scope.brands_of(me))
+
+
+@app.post("/api/stock-rt/alloc/preview")
+def stock_alloc_write_preview(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    p = stock_write.alloc_preview(args, body.get("keys"), brand_scope.brands_of(me))
+    return {k: v for k, v in p.items() if k != "rows"}
+
+
+@app.post("/api/stock-rt/alloc/register")
+def stock_alloc_write_register(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+    """출고의뢰 등록 (T_DELV_ASK, 판매분의뢰(자동) · 미확정) — 확정 · 출고지시는 ERP 에서"""
+    from . import stock_write
+
+    return stock_write.alloc_register(me, args, body.get("keys"), body.get("askDt"), body.get("askSeqn"), body.get("delvPreDt"),
+                                      brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/alloc/registered")
+def stock_alloc_registered(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None,  # noqa: N803
+                           me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    return stock_write.alloc_list(brand, dateFrom, dateTo, brand_scope.brands_of(me))
+
+
+@app.post("/api/stock-rt/alloc/delete")
+def stock_alloc_write_delete(body: dict, me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    return stock_write.alloc_delete(me, body.get("brand"), body.get("keys"), brand_scope.brands_of(me))
 
 
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")

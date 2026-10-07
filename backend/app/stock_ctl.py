@@ -20,6 +20,7 @@ from . import db
 from .shop_info import BRAND_CODES
 
 COMPY_CD = "A01C01"
+WEB_MARK = "webStockRt"   # 이 화면에서 ERP 에 등록한 행 표시 (T_INDC_RT.ATTR1 · T_DELV_ASK.ATTR1) — 이 표시가 있는 미확정 행만 삭제할 수 있다
 MAX_DAYS = 31                       # 조회 기간 최대 (한 달)
 CACHE_TTL = 10 * 60
 CTL_TTL = 5 * 60
@@ -69,6 +70,13 @@ def clear_cache() -> None:
     with _lock:
         _cache.clear()
         _key_locks.clear()
+
+
+def drop_cache(*tags: str) -> None:
+    """키 첫 값이 tags 인 캐시만 비운다 (ERP 에 지시 · 의뢰를 등록 · 삭제한 뒤 추천을 다시 계산하게)"""
+    with _lock:
+        for k in [k for k in _cache if k and k[0] in tags]:
+            _cache.pop(k, None)
 
 
 def xlsx(sheets: list[tuple[str, list[str], list[tuple], list[list]]]) -> bytes:

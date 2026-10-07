@@ -1,6 +1,6 @@
 """재고 재배치 추천 > 매장 간 RT: 판매 후 품절된 매장(받는 매장)에 같은 RT 그룹의 재고 매장(보내는 매장)을 짝지어 추천.
 
-조회 · 추천만 한다 (T_AUTO_RT · T_SHOP_REQ 등 ERP 테이블에 쓰지 않음). 규칙은 ERP 자동 RT(SP_AUTO_RT_SEARCH · SAVE)와 같다.
+추천 계산은 읽기만 한다. 본사지시 RT(T_INDC_RT) 등록 · 삭제는 stock_write (관리자). 규칙은 ERP 자동 RT(SP_AUTO_RT_SEARCH · SAVE)와 같다.
 - 받는 매장: 기간(최대 31일) 판매가 있는데 지금 재고가 0 이하인 매장 × 상품(품번 · 칼라 · 사이즈),
   그리고 기간 중 자동 RT 가 '지시가능매장없음'으로 취소된 요청. 필요 수량 = 1(선택 1~3) + 마이너스 재고(완불 대기).
   RT 그룹이 없거나 정상 매장이 아니면 빼고, 자동 RT 반입 수불제어(F_GET_RNDS_CNTR …'36')가 걸린 매장도 뺀다.
@@ -39,7 +39,7 @@ FIRST_DELV_AFTER = "20230101"      # SP_AUTO_RT_SEARCH: E.F_RNDS_DT > '20230101'
 FAIL_RMK = "지시가능매장없음"
 REASONS = {"no_stock": "같은 RT 그룹에 재고 없음", "rules": "재고는 있으나 자동 RT 조건에 막힘", "limit": "보낼 매장의 지정가능수 · 최대 수량 소진",
            "recv_limit": "받는 매장 하루 요청가능수 초과"}
-RULES = {"moving": "이동중 · 요청중 · 최소보유로 남는 재고 없음", "days": "최초/최종 출고 경과일 미달", "control": "자동 RT 반출 제어 · 제외 스타일",
+RULES = {"moving": "이동중 · 요청중 · 지시 · 최소보유로 남는 재고 없음", "days": "최초/최종 출고 경과일 미달", "control": "자동 RT 반출 제어 · 제외 스타일",
          "grade": "매장등급 없음", "abnormal": "정상 매장 아님", "today": "오늘 같은 상품 지정받음", "asign0": "자동 RT 지정가능수 0",
          "nobase": "매장 상품 기준 없음(2023년 이후 출고 없음)"}
 
@@ -170,8 +170,34 @@ def _reserved(brand: str, td: str) -> dict:
     requested = dict(db.query("""SELECT STOR_REQ_SHOP_ID, COUNT(*) FROM T_AUTO_RT
                                   WHERE REQ_DAY LIKE :td || '%' AND RSLT_CD != 'C6869' AND DEL_DAY IS NULL
                                   GROUP BY STOR_REQ_SHOP_ID""", {"td": td})[1])
+    out_q, in_q = open_instructions(brand, td)
     return {"moving": moving, "pending": pending, "asigned": asigned, "asignedSku": asigned_sku,
-            "shopReq": {k: int(v or 0) for k, v in shop_req.items()}, "requested": {k: int(v or 0) for k, v in requested.items()}}
+            "shopReq": {k: int(v or 0) for k, v in shop_req.items()}, "requested": {k: int(v or 0) for k, v in requested.items()},
+            "instrOut": out_q, "instrIn": in_q}
+
+
+def open_instructions(brand: str, td: str) -> tuple[dict[tuple, int], dict[tuple, int]]:
+    """아직 매장이 처리하지 않은 본사지시 · 매장간 RT (최근 10일) — (보내는 매장, 상품) · (받는 매장, 상품) → 수량.
+    본사지시 미확정(T_INDC_RT CNFM_YN = N) + 요청 미처리(T_SHOP_REQ C2954, 본사지시 C6811 · 매장간 C6813). 자동 RT 요청중은 pending 에서 뺀다"""
+    out_q: dict[tuple, int] = {}
+    in_q: dict[tuple, int] = {}
+
+    def add(d, k, q):
+        d[k] = d.get(k, 0) + int(q or 0)
+    # 힌트 없으면 730만 행 전체를 읽어 약 3초 → 지시일 인덱스로 0.1초
+    for dl, st, p, c, s, q in db.query("""SELECT /*+ INDEX(I T_INDC_RT_IDX01) */ DELV_MOVE_SHOP_ID, STOR_MOVE_SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD,
+                                                  NVL(INDC_QTY, 0) FROM T_INDC_RT I
+                                           WHERE INDC_DT BETWEEN TO_CHAR(SYSDATE - 10, 'YYYYMMDD') AND :td AND BRD_CD = :b
+                                             AND NVL(CNFM_YN, 'N') = 'N' AND DEL_DAY IS NULL""", {"td": td, "b": brand})[1]:
+        add(out_q, (dl, p, c, s), q)
+        add(in_q, (st, p, c, s), q)
+    for dl, st, p, c, s, q in db.query("""SELECT DELV_REQ_SHOP_ID, STOR_REQ_SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD, NVL(REQ_QTY, 0) FROM T_SHOP_REQ
+                                           WHERE MAKE_DT BETWEEN TO_CHAR(SYSDATE - 10, 'YYYYMMDD') AND :td AND BRD_CD = :b
+                                             AND PRCS_CLSBY = 'C2954' AND MOVE_TYPE IN ('C6811', 'C6813') AND DEL_DAY IS NULL""",
+                                        {"td": td, "b": brand})[1]:
+        add(out_q, (dl, p, c, s), q)
+        add(in_q, (st, p, c, s), q)
+    return out_q, in_q
 
 
 # ---------------------------------------------------------------- 짝 맞추기 (DB 없이 테스트 가능)
@@ -297,7 +323,10 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
     stock = {tuple(r[:4]): int(r[4]) for r in _stock(list(pcs), ym)} if pcs else {}
     lap("stock", t0)
 
-    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0}
+    t0 = time.perf_counter()
+    res = _reserved(brand, td)
+    lap("reserved", t0)
+    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
     recv: list[dict] = []
     for k in sorted(sold | set(failed)):
         st = stock.get(k, 0)
@@ -314,15 +343,16 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
         if ctl.controlled_id(sid, p, c, "36"):
             skipped["recvCtl"] += 1
             continue
+        incoming = res["instrIn"].get(k, 0)
+        need = per + max(0, -st) - incoming                        # 이미 지시 · 요청받아 들어올 수량은 뺀다
+        if need <= 0:
+            skipped["incoming"] += 1
+            continue
         fc, fd = failed.get(k, (0, None))
         recv.append({"shopId": sid, "prdtCd": p, "colorCd": c, "sizeCd": s, "sales": max(sales.get(k, 0), 0), "lastSale": last_sale.get(k),
-                     "failCnt": fc, "failLast": fd, "stock": st, "need": per + max(0, -st), "grp": sh["rt"]["grp"],
+                     "failCnt": fc, "failLast": fd, "stock": st, "need": need, "incoming": incoming, "grp": sh["rt"]["grp"],
                      "moOk": _mo_brands(sid, sh["moBrd"])})
     want = {((r["prdtCd"], r["colorCd"], r["sizeCd"]), r["grp"]) for r in recv}
-
-    t0 = time.perf_counter()
-    res = _reserved(brand, td)
-    lap("reserved", t0)
     styles = sc.style_info(sorted({r["prdtCd"] for r in recv}))
 
     # 1단계: 매장 상품 기준 없이 거를 수 있는 조건 (정상 · 등급 · 지정가능수 · 남는 재고 · 오늘 지정 · 수불제어)
@@ -340,7 +370,7 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
         supply_any.add((sku, grp))
         rt = sh["rt"]
         k = (sid, p, c, s)
-        real = q - res["moving"].get(k, 0) - res["pending"].get(k, 0)
+        real = q - res["moving"].get(k, 0) - res["pending"].get(k, 0) - res["instrOut"].get(k, 0)
         if not sh["normal"]:
             excluded["abnormal"] += 1
         elif sid not in graded:
@@ -436,7 +466,7 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
             "fromShopId": c["shopId"], "fromShopNm": names.get(c["shopId"]), "fromTeam": teams.get(shops[c["shopId"]]["team"]),
             "fromStock": c["stock"], "fromSendable": c["sendable"], "fromSales": c["sales"], "fromLastSale": sc.ymd_label(c["lSaleDt"]),
             "toShopId": r["shopId"], "toShopNm": names.get(r["shopId"]), "toTeam": teams.get(shops[r["shopId"]]["team"]),
-            "toStock": r["stock"], "toSales": r["sales"], "toFailCnt": r["failCnt"], "why": why})
+            "toStock": r["stock"], "toSales": r["sales"], "toFailCnt": r["failCnt"], "toIncoming": r["incoming"], "why": why})
     unfilled_rows = [{"shopId": u["shopId"], "shopNm": names.get(u["shopId"]), "team": teams.get(shops[u["shopId"]]["team"]),
                       "prdtCd": u["prdtCd"], "styleNm": styles.get(u["prdtCd"], {}).get("styleNm"), "colorCd": u["colorCd"],
                       "sizeCd": u["sizeCd"], "stock": u["stock"], "sales": u["sales"], "failCnt": u["failCnt"], "left": u["left"],

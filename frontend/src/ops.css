@@ -460,8 +460,30 @@
 .stock-stats { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
 .stock-cand-modal { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 10px; }
 .stock-cand-modal .table-wrap { max-height: calc(100vh - 220px); }
+/* 창고 부족 행 (필요보다 적게 받음) · 선택 행 · 관리자 ERP 등록 */
+.stock-table tr.row-short > td { background: rgba(245, 158, 11, 0.08); }
+.stock-table tr.row-short > td:first-child { box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.85); }
+.stock-table tr.selected > td { background: rgba(var(--accent-rgb), 0.08); }
+.stock-table th.check, .stock-table td.check { width: 34px; text-align: center; padding-left: 8px; padding-right: 4px; }
+.stock-short-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: rgba(245, 158, 11, 0.5); vertical-align: -1px; }
+.stock-short-note, .stock-done { margin: 10px 12px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.stock-write-bar { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.stock-write-modal { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.stock-write-modal.wide { width: min(1100px, calc(100vw - 32px)); }
+.stock-write-modal .table-wrap { max-height: calc(100vh - 340px); }
+.stock-write-fields { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.stock-write-fields .btn.danger { margin-left: auto; }
+.stock-skipped { font-size: 12.5px; color: var(--text-2); }
+.stock-skipped summary { cursor: pointer; display: inline-flex; gap: 5px; align-items: center; color: #b45309; }
+.stock-skipped ul { margin: 6px 0 0; padding-left: 18px; max-height: 160px; overflow: auto; }
+.stock-confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stock-confirm .btn:first-of-type { margin-left: auto; }
+:root[data-theme='dark'] .stock-skipped summary { color: #fbbf24; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .stock-skipped summary { color: #fbbf24; } }
+
 @media (max-width: 720px) {
   .stock-head .hint-pill { margin-left: 0; }
+  .stock-write-bar { margin-left: 0; }
   .stock-two { grid-template-columns: 1fr; padding: 12px; }
   .stock-subbar .search.sm { flex: 1 1 100%; }
 }

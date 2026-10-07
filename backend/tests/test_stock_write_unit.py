@@ -1,0 +1,207 @@
+"""재고 재배치 추천 > ERP 등록 · 삭제 (본사지시 RT 지시 · 배분의뢰) — DB 없이 흐름 · 안전장치 확인."""
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from app import stock_ctl as sc
+from app import stock_write as w
+
+TODAY = sc.today()
+
+
+class FakeCursor:
+    def __init__(self, conn):
+        self.conn = conn
+        self.rowcount = 0
+        self._rows: list = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, binds=None):
+        self.conn.log.append((" ".join(sql.split()), binds))
+        for key, rows in self.conn.answers.items():
+            if key in sql:
+                self._rows = list(rows)
+                break
+        else:
+            self._rows = []
+        self.rowcount = self.conn.rowcount if sql.lstrip().upper().startswith("DELETE") else 0
+
+    def executemany(self, sql, rows):
+        self.conn.many.append((" ".join(sql.split()), rows))
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class FakeConn:
+    def __init__(self, answers=None, rowcount=0):
+        self.answers = answers or {}
+        self.rowcount = rowcount
+        self.log: list = []
+        self.many: list = []
+        self.committed = False
+
+    def cursor(self):
+        return FakeCursor(self)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class FakePool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return self.conn
+
+    def release(self, c):
+        pass
+
+
+ME = {"id": "ADM1", "role": "ADMIN", "ip": "127.0.0.1"}
+
+
+def _rt_rows():
+    base = {"styleNm": "자켓", "fromSendable": 1, "fromStock": 2, "toIncoming": 0}
+    return [{**base, "no": 1, "prdtCd": "P1", "colorCd": "BK", "sizeCd": "55", "qty": 1, "fromShopId": "S1", "toShopId": "R1"},
+            {**base, "no": 2, "prdtCd": "P1", "colorCd": "BK", "sizeCd": "55", "qty": 1, "fromShopId": "S1", "toShopId": "R2"},
+            {**base, "no": 3, "prdtCd": "P2", "colorCd": "WH", "sizeCd": "66", "qty": 2, "fromShopId": "S2", "toShopId": "R3"}]
+
+
+@pytest.fixture
+def rt_env(monkeypatch):
+    from app import stock_rt
+
+    monkeypatch.setattr(stock_rt, "recommend", lambda **k: {"brand": "S", "brandNm": "쉬즈미스", "asOf": "2026-10-07 10:00", "rows": _rt_rows()})
+    live = {("S1", "P1", "BK", "55"): 1, ("S2", "P2", "WH", "66"): 5}
+    incoming: dict = {}
+    monkeypatch.setattr(w, "_sender_live", lambda keys, td, b: (live, incoming))
+    return incoming
+
+
+def test_writer_is_admin_only(monkeypatch):
+    from app import main
+
+    monkeypatch.setattr(main, "stock_page", lambda req: {"id": "U1", "role": "USER"})
+    with pytest.raises(HTTPException) as e:
+        main.stock_writer(None)
+    assert e.value.status_code == 403
+    monkeypatch.setattr(main, "stock_page", lambda req: ME)
+    assert main.stock_writer(None) is ME
+
+
+def test_rt_plan_rechecks_live_stock_and_incoming(rt_env):
+    keys = [["P1", "BK", "55", "S1", "R1"], ["P1", "BK", "55", "S1", "R2"], ["P2", "WH", "66", "S2", "R3"], ["X", "Y", "Z", "S9", "R9"]]
+    p = w.rt_preview({}, keys, None)
+    # S1 은 지금 1장만 보낼 수 있어 두 번째 행은 빠진다 · 추천에 없는 행도 빠진다
+    assert [(r["fromShopId"], r["toShopId"]) for r in p["rows"]] == [("S1", "R1"), ("S2", "R3")]
+    assert p["qty"] == 3 and len(p["skipped"]) == 2
+    assert any("재고 부족" in s["reason"] for s in p["skipped"]) and any("추천 결과에 없음" in s["reason"] for s in p["skipped"])
+    # 추천 뒤 받는 매장에 새 지시가 들어오면 뺀다
+    rt_env[("R3", "P2", "WH", "66")] = 1
+    p = w.rt_preview({}, keys[2:3], None)
+    assert p["count"] == 0 and "새로 들어감" in p["skipped"][0]["reason"]
+    with pytest.raises(HTTPException):
+        w.rt_preview({}, [["P1", "BK"]], None)          # 키 모양이 틀림
+
+
+def test_rt_register_inserts_unconfirmed_instructions_only(rt_env, monkeypatch, audit_capture):
+    from app import db
+
+    conn = FakeConn({"FROM T_INDC_RT WHERE INDC_ID LIKE": [(41, f"{TODAY}00041")]})
+    monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
+    r = w.rt_register(ME, {}, [["P1", "BK", "55", "S1", "R1"], ["P2", "WH", "66", "S2", "R3"]], None, None)
+    assert conn.committed and r["qty"] == 3 and r["firstId"] == f"{TODAY}00042" and r["lastId"] == f"{TODAY}00044"
+    (sql, rows), = conn.many
+    assert "INSERT INTO T_INDC_RT" in sql and "'N', 'C6811'" in sql and ", 1, :dt" in sql      # 미확정 · 본사지시 · 1장에 1행
+    assert not any("T_SHOP_REQ" in s for s, _ in conn.log + conn.many)                         # 이동요청(확정)은 만들지 않음
+    assert [x["st"] for x in rows] == ["R1", "R3", "R3"] and all(x["m"] == sc.WEB_MARK and x["u"] == "ADM1" for x in rows)
+    assert audit_capture[-1]["action"] == "STOCK_RT_INDC"
+    with pytest.raises(HTTPException):
+        w.rt_register(ME, {}, [["P1", "BK", "55", "S1", "R1"]], "2020-01-01", None)          # 지난 날짜
+
+
+def test_rt_delete_only_web_unconfirmed(monkeypatch, audit_capture):
+    from app import db
+
+    conn = FakeConn({"SELECT INDC_ID": [("x",)]}, rowcount=1)
+    monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
+    r = w.rt_delete(ME, "S", [f"{TODAY}00042", f"{TODAY}00043"], None)
+    assert r == {"ok": True, "deleted": 1, "requested": 2, "notDeleted": 1}
+    dele = [s for s, _ in conn.log if s.startswith("DELETE")][0]
+    assert "ATTR1 = :m" in dele and "NVL(CNFM_YN, 'N') = 'N'" in dele and "SHOP_REQ_SEQ IS NULL" in dele
+    with pytest.raises(HTTPException):
+        w.rt_delete(ME, "S", ["abc"], None)
+
+
+@pytest.fixture
+def alloc_env(monkeypatch):
+    from app import wh_alloc
+
+    row = {"prdtCd": "P1", "colorCd": "BK", "sizeCd": "55", "rank": 1, "askFp": 1, "askSale": 1, "ask": 2}
+    rows = [{**row, "shopId": "A"}, {**row, "shopId": "B", "rank": 2}, {**row, "shopId": "C", "rank": 3}]
+    monkeypatch.setattr(wh_alloc, "recommend", lambda **k: {"brand": "S", "brandNm": "쉬즈미스", "wh": "IN", "grdGrp": "GG", "asOf": "x",
+                                                            "rows": rows, "skus": [{"prdtCd": "P1", "colorCd": "BK", "sizeCd": "55", "minWh": 1}]})
+    monkeypatch.setattr(wh_alloc, "_wh_avail", lambda b, wh, p, td: {("P1", "BK", "55"): {"wh": 7, "indc": 1, "ask": 0}})   # 가용 5
+    asked: dict = {}
+    monkeypatch.setattr(wh_alloc, "web_asked", lambda b, td: asked)
+    return asked
+
+
+def test_alloc_plan_caps_by_live_warehouse(alloc_env):
+    keys = [["A", "P1", "BK", "55"], ["B", "P1", "BK", "55"], ["C", "P1", "BK", "55"]]
+    p = w.alloc_preview({}, keys, None)
+    assert [r["shopId"] for r in p["rows"]] == ["A", "B"] and "창고 가용 부족" in p["skipped"][0]["reason"]     # 5장 → 2 + 2, C 는 순위 뒤라 뺌
+    alloc_env[("A", "P1", "BK", "55")] = 2
+    p = w.alloc_preview({}, keys, None)
+    assert [r["shopId"] for r in p["rows"]] == ["B", "C"] and "이미" in p["skipped"][0]["reason"]
+
+
+def test_alloc_register_like_sp_and_rejects_confirmed_seq(alloc_env, monkeypatch, audit_capture):
+    from app import db
+
+    conn = FakeConn({"WHERE ASK_DT = :d AND ASK_SEQN = :n FOR UPDATE": [("T", "N", "Z", "P", "C", "S"), ("S", "N", "A", "P1", "BK", "55")],
+                     "SELECT NVL(MAX(SEQ), 0)": [(7,)]})
+    monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
+    r = w.alloc_register(ME, {}, [["A", "P1", "BK", "55"], ["B", "P1", "BK", "55"]], None, 12, None, None)
+    (sql, rows), = conn.many
+    assert "INSERT INTO T_DELV_ASK" in sql and "'C0633', :q, :pre, 'N'" in sql
+    assert [(x["sh"], x["seq"], x["q"], x["m"]) for x in rows] == [("B", 8, 2, sc.WEB_MARK)]        # A 는 이 차수에 이미 있어 뺌
+    assert r["count"] == 1 and r["askSeqn"] == 12 and audit_capture[-1]["action"] == "STOCK_ALLOC_ASK"
+    conn.answers["WHERE ASK_DT = :d AND ASK_SEQN = :n FOR UPDATE"] = [("S", "Y", "Q", "P", "C", "S")]
+    with pytest.raises(HTTPException) as e:
+        w.alloc_register(ME, {}, [["B", "P1", "BK", "55"]], None, 12, None, None)
+    assert "확정된 차수" in e.value.detail["message"]
+    for bad in (0, "x", 10000):
+        with pytest.raises(HTTPException):
+            w.alloc_register(ME, {}, [["B", "P1", "BK", "55"]], None, bad, None, None)
+
+
+def test_alloc_delete_only_web_unconfirmed(monkeypatch):
+    from app import db
+
+    conn = FakeConn({"SELECT ASK_DT": [("r",)]}, rowcount=2)
+    monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
+    r = w.alloc_delete(ME, "S", [["2026-10-07", 12, 1], ["2026-10-07", 12, 2]], None)
+    assert r["deleted"] == 2
+    dele = [s for s, _ in conn.log if s.startswith("DELETE")][0]
+    assert "ATTR1 = :m" in dele and "NVL(CNFM_YN, 'N') = 'N'" in dele and "DELV_INDC_SEQ IS NULL" in dele

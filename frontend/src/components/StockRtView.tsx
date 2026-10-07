@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Store, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Store, Warehouse, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
   stockApi,
   type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtResult, type RtStats, type StockOptions,
 } from '../stockApi'
+import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWrite'
 
 type Tab = 'rt' | 'alloc'
 const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
@@ -18,6 +19,16 @@ const spanDays = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`)
 const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e))
 const pct = (a: number, b: number) => (b ? `${Math.round((a * 1000) / b) / 10}%` : '-')
+const rtKey = (r: RtResult['rows'][number]) => [r.prdtCd, r.colorCd, r.sizeCd, r.fromShopId, r.toShopId]
+const alKey = (r: AllocRow) => [r.shopId, r.prdtCd, r.colorCd, r.sizeCd]
+
+/** 표에서 고른 행 (키 문자열 집합) */
+function useSelection() {
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const flip = (k: string) => setSel((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
+  const setMany = (keys: string[], on: boolean) => setSel((s) => { const n = new Set(s); keys.forEach((k) => (on ? n.add(k) : n.delete(k))); return n })
+  return { sel, flip, setMany, clear: () => setSel(new Set()) }
+}
 
 /** 계산 중 경과 초 */
 function useElapsed(on: boolean) {
@@ -55,7 +66,8 @@ function Computing({ sec, what }: { sec: number; what: string }) {
 }
 
 /**
- * 재고 재배치 추천: 매장 간 RT(자동 RT 규칙) · 창고 → 매장 배분(판매분 자동보충 규칙). 조회 · 추천만 하고 ERP 에는 등록하지 않는다.
+ * 재고 재배치 추천: 매장 간 RT(자동 RT 규칙) · 창고 → 매장 배분(판매분 자동보충 규칙).
+ * 관리자(canWrite)는 고른 추천을 ERP 에 본사지시 RT 지시 · 배분의뢰(둘 다 미확정)로 넣고, 이 화면에서 넣은 미확정 행을 지울 수 있다.
  */
 export default function StockRtView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
   const [tab, setTab] = useState<Tab>('rt')
@@ -83,7 +95,9 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
             <button key={b.code} className={`chip ${brand === b.code ? 'active' : ''}`} onClick={() => setBrand(b.code)}>{b.name}</button>
           ))}
         </div>
-        <span className="pill hint-pill"><Info size={13} /> 조회 · 추천만 합니다 — ERP 에 RT · 배분의뢰가 등록되지 않습니다</span>
+        <span className="pill hint-pill"><Info size={13} /> {opts?.canWrite
+          ? '관리자: 고른 추천을 ERP 본사지시 RT 지시 · 배분의뢰(미확정)로 등록할 수 있습니다'
+          : '조회 · 추천만 합니다 — ERP 에 RT · 배분의뢰가 등록되지 않습니다'}</span>
       </section>
       {error && <div className="alert error">{error}</div>}
       {opts && opts.brand === brand && (
@@ -111,6 +125,9 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
   const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats'>('rows')
   const [q, setQ] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [writing, setWriting] = useState<'register' | 'list' | null>(null)
+  const [done, setDone] = useState('')
+  const { sel, flip, setMany, clear } = useSelection()
   const abort = useRef<AbortController | null>(null)
   const sec = useElapsed(loading)
   const days = spanDays(cond.dateFrom, cond.dateTo)
@@ -128,6 +145,7 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
     stockApi.rt(c, refresh, ac.signal).then((d) => {
       setData(d)
       setApplied(c)
+      clear()
       onContext({ brand: d.brandNm, period: `${d.from}~${d.to}`, seasons: c.seasons.map((s) => seasonNm[s] ?? s).join(','), prdt: c.prdt })
     }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
   }
@@ -146,6 +164,9 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
     return k ? data.unfilled.filter((r) => [r.prdtCd, r.shopId, r.shopNm].some((v) => v?.toUpperCase().includes(k))) : data.unfilled
   }, [data, q])
   const s = data?.summary
+  const selRows = useMemo(() => (data?.rows ?? []).filter((r) => sel.has(rtKey(r).join('|'))), [data, sel])
+  const selQty = selRows.reduce((a, r) => a + r.qty, 0)
+  const selKeys = useMemo(() => selRows.map(rtKey), [selRows])
 
   const exportXlsx = async () => {
     if (!applied) return
@@ -260,24 +281,53 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
                 </div>
               )}
               {view === 'rows' && data.rowsTotal > data.rows.length && <span className="muted small">화면은 앞쪽 {fmtNum(data.rows.length)}건 · 전체는 엑셀</span>}
+              {opts.canWrite && (
+                <div className="stock-write-bar">
+                  {view === 'rows' && (
+                    <button className="btn primary sm" disabled={!selRows.length || dirty} onClick={() => setWriting('register')}
+                      title={dirty ? '조건을 바꿨습니다 — 다시 계산한 뒤 등록하세요' : '고른 추천을 ERP 본사지시 RT 지시(미확정)로 등록'}>
+                      <Send size={14} /> 본사지시 RT 지시{selRows.length ? ` (${fmtNum(selRows.length)}건 · ${fmtNum(selQty)}장)` : ''}
+                    </button>
+                  )}
+                  <button className="btn ghost sm" onClick={() => setWriting('list')}><ClipboardList size={14} /> 등록 내역</button>
+                </div>
+              )}
             </div>
-            {view === 'rows' && <RtTable rows={rows} />}
+            {done && <div className="alert info stock-done"><CheckCircle2 size={14} /> <span>{done}</span></div>}
+            {view === 'rows' && <RtTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} />}
             {view === 'unfilled' && <UnfilledTable data={data} rows={unfilled} />}
             {view === 'shops' && <ShopTotals data={data} />}
             {view === 'stats' && applied && <RtStatsPanel brand={applied.brand} from={applied.dateFrom} to={applied.dateTo} data={data} />}
           </section>
         </>
       )}
+      {writing === 'register' && applied && (
+        <RtRegisterModal cond={applied} keys={selKeys} today={opts.today} onClose={() => setWriting(null)}
+          onDone={(m) => { setWriting(null); setDone(m); run(true) }} />
+      )}
+      {writing === 'list' && (
+        <RegisteredModal kind="rt" brand={opts.brand} brandNm={opts.brands.find((b) => b.code === opts.brand)?.name ?? opts.brand} today={opts.today}
+          onClose={() => setWriting(null)} onChanged={() => { if (applied) setDone('지시를 삭제했습니다 — [새로 계산]을 누르면 지금 재고로 다시 추천합니다.') }} />
+      )}
     </div>
   )
 }
 
-function RtTable({ rows }: { rows: RtResult['rows'] }) {
+type Select = { sel: Set<string>; flip: (k: string) => void; setMany: (keys: string[], on: boolean) => void }
+
+function SelectAll({ keys, select, label }: { keys: string[]; select: Select; label: string }) {
+  const on = keys.length > 0 && keys.every((k) => select.sel.has(k))
+  return <th className="check"><input type="checkbox" checked={on} disabled={!keys.length} onChange={() => select.setMany(keys, !on)} aria-label={label} title={`화면의 ${keys.length}건 모두`} /></th>
+}
+
+function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) {
+  const keys = useMemo(() => rows.map((r) => rtKey(r).join('|')), [rows])
   return (
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장 간 RT 추천 목록">
         <thead>
           <tr>
+            {select && <SelectAll keys={keys} select={select} label="추천 모두 선택" />}
             <th>품번 · 칼라 · 사이즈</th><th className="num">수량</th>
             <th>보내는 매장</th><th className="num" title="현재고 / 보낼 수 있는 수량">재고</th><th className="num">기간 판매</th><th>최종판매일</th>
             <th aria-label="방향" />
@@ -285,8 +335,9 @@ function RtTable({ rows }: { rows: RtResult['rows'] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.no}>
+          {rows.map((r, i) => (
+            <tr key={r.no} className={select?.sel.has(keys[i]) ? 'selected' : ''}>
+              {select && <td className="check"><input type="checkbox" checked={select.sel.has(keys[i])} onChange={() => select.flip(keys[i])} aria-label={`${r.prdtCd} ${r.fromShopId}→${r.toShopId} 선택`} /></td>}
               <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span>{r.styleNm && r.styleNm !== r.prdtCd && <div className="muted small">{r.styleNm}</div>}</td>
               <td className="num"><b>{r.qty}</b></td>
               <td><span className="mono">{r.fromShopId}</span> {r.fromShopNm}<div className="muted small">{r.fromTeam}</div></td>
@@ -300,7 +351,7 @@ function RtTable({ rows }: { rows: RtResult['rows'] }) {
               <td><span className={`tag ${r.toFailCnt ? 'miss' : r.toStock < 0 ? 'warn' : 'auto'}`}>{r.why}{r.toFailCnt > 1 ? ` ${r.toFailCnt}회` : ''}</span></td>
             </tr>
           ))}
-          {!rows.length && <tr><td colSpan={11} className="empty">추천할 RT 가 없습니다.</td></tr>}
+          {!rows.length && <tr><td colSpan={12} className="empty">추천할 RT 가 없습니다.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -321,8 +372,8 @@ function UnfilledTable({ data, rows }: { data: RtResult; rows: RtResult['unfille
           <b>보내는 후보에서 빠진 이유</b>
           {ex.map(([k, v]) => <span key={k} className="chip small">{data.ruleNames[k]} {fmtNum(v)}</span>)}
         </div>
-        {(s.skipped.noGroup > 0 || s.skipped.recvCtl > 0) && (
-          <div className="muted small">받는 매장에서 뺀 것: RT 그룹 없음 · 정상 매장 아님 {fmtNum(s.skipped.noGroup)}건 · 자동RT 반입 수불제어 {fmtNum(s.skipped.recvCtl)}건</div>
+        {(s.skipped.noGroup > 0 || s.skipped.recvCtl > 0 || !!s.skipped.incoming) && (
+          <div className="muted small">받는 매장에서 뺀 것: RT 그룹 없음 · 정상 매장 아님 {fmtNum(s.skipped.noGroup)}건 · 자동RT 반입 수불제어 {fmtNum(s.skipped.recvCtl)}건{s.skipped.incoming ? ` · 이미 지시 · 요청받아 들어올 예정 ${fmtNum(s.skipped.incoming)}건` : ''}</div>
         )}
       </div>
       <div className="table-wrap tall">
@@ -433,11 +484,14 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
   const [data, setData] = useState<AllocResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [view, setView] = useState<'rows' | 'skus' | 'shops'>('rows')
+  const [view, setView] = useState<'rows' | 'short' | 'skus' | 'shops'>('rows')
   const [q, setQ] = useState('')
   const [onlyShort, setOnlyShort] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [cand, setCand] = useState<AllocSku | null>(null)
+  const [writing, setWriting] = useState<'register' | 'list' | null>(null)
+  const [done, setDone] = useState('')
+  const { sel, flip, setMany, clear } = useSelection()
   const abort = useRef<AbortController | null>(null)
   const sec = useElapsed(loading)
   const run0 = opts.recentRuns.find((r) => r.seq === runSeq)
@@ -461,6 +515,7 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
     stockApi.alloc(c, refresh, ac.signal).then((d) => {
       setData(d)
       setApplied(c)
+      clear()
       onContext({ brand: d.brandNm, period: `${d.from}~${d.to}`, prdt: c.prdt })
     }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
   }
@@ -472,6 +527,10 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
     return !k || vals.some((v) => v?.toUpperCase().includes(k))
   }
   const rows = useMemo(() => (data?.rows ?? []).filter((r) => match([r.prdtCd, r.shopId, r.shopNm, r.styleNm])), [data, q]) // eslint-disable-line react-hooks/exhaustive-deps
+  const shortRows = useMemo(() => (data?.shortRows ?? []).filter((r) => match([r.prdtCd, r.shopId, r.shopNm, r.styleNm])), [data, q]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selRows = useMemo(() => (data?.rows ?? []).filter((r) => sel.has(alKey(r).join('|'))), [data, sel])
+  const selQty = selRows.reduce((a, r) => a + r.ask, 0)
+  const selKeys = useMemo(() => selRows.map(alKey), [selRows])
   const skus = useMemo(() => (data?.skus ?? []).filter((r) => (!onlyShort || r.short > 0) && match([r.prdtCd, r.styleNm])), [data, q, onlyShort]) // eslint-disable-line react-hooks/exhaustive-deps
   const s = data?.summary
   const baseNm = (id: string) => opts.bases.find((b) => b.id === id)?.rmk ?? ''
@@ -583,20 +642,45 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
             <div className="stock-subbar">
               <div className="seg" role="tablist" aria-label="배분 결과 보기">
                 <button className={view === 'rows' ? 'on' : ''} onClick={() => setView('rows')}>매장별 배분 ({fmtNum(data.rowsTotal)})</button>
+                <button className={view === 'short' ? 'on' : ''} onClick={() => setView('short')} title="창고 수량이 모자라 필요만큼 못 받은 매장 (일부만 · 전혀 못 받음)">
+                  <AlertTriangle size={13} /> 창고 부족 ({fmtNum(data.shortRowsTotal)})
+                </button>
                 <button className={view === 'skus' ? 'on' : ''} onClick={() => setView('skus')}>상품별 ({fmtNum(data.skusTotal)})</button>
                 <button className={view === 'shops' ? 'on' : ''} onClick={() => setView('shops')}>많이 받는 매장</button>
               </div>
               {view !== 'shops' && (
                 <div className="search sm">
                   <Search size={14} />
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={view === 'rows' ? '품번 · 매장' : '품번'} aria-label="배분 결과 검색" />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={view === 'skus' ? '품번' : '품번 · 매장'} aria-label="배분 결과 검색" />
                   {q && <button className="clear" onClick={() => setQ('')}><X size={13} /></button>}
                 </div>
               )}
               {view === 'skus' && <label className="check-label"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} /> 부족한 상품만</label>}
               {view === 'skus' && <span className="muted small">상품을 누르면 후보 매장 순서</span>}
+              {view === 'rows' && s.shortRows > 0 && <span className="muted small"><span className="stock-short-swatch" /> 노란 행 = 창고 부족으로 필요보다 적게 받음</span>}
+              {opts.canWrite && (
+                <div className="stock-write-bar">
+                  {view === 'rows' && (
+                    <button className="btn primary sm" disabled={!selRows.length || dirty} onClick={() => setWriting('register')}
+                      title={dirty ? '조건을 바꿨습니다 — 다시 계산한 뒤 등록하세요' : '고른 배분을 ERP 출고의뢰(미확정)로 등록'}>
+                      <Send size={14} /> 배분의뢰 등록{selRows.length ? ` (${fmtNum(selRows.length)}건 · ${fmtNum(selQty)}장)` : ''}
+                    </button>
+                  )}
+                  <button className="btn ghost sm" onClick={() => setWriting('list')}><ClipboardList size={14} /> 등록 내역</button>
+                </div>
+              )}
             </div>
-            {view === 'rows' && <AllocTable rows={rows} />}
+            {done && <div className="alert info stock-done"><CheckCircle2 size={14} /> <span>{done}</span></div>}
+            {view === 'rows' && <AllocTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} />}
+            {view === 'short' && (
+              <>
+                <div className="alert warn stock-short-note">
+                  <AlertTriangle size={14} /> <span>창고 가용(창고 재고 − 출고지시 · 미확정 의뢰 − 창고하한)이 모자라 필요 수량만큼 못 받은 매장입니다 —
+                  일부만 받음 {fmtNum(s.shortRows - s.shortZero)}건 · 전혀 못 받음 {fmtNum(s.shortZero)}건 · 부족 합계 {fmtNum(s.short)}장.</span>
+                </div>
+                <AllocTable rows={shortRows} showShort />
+              </>
+            )}
             {view === 'skus' && (
               <div className="table-wrap tall">
                 <table className="table stock-table" aria-label="상품별 배분">
@@ -627,27 +711,47 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
         </>
       )}
       {cand && applied && <CandidatesModal cond={applied} sku={cand} onClose={() => setCand(null)} />}
+      {writing === 'register' && applied && (
+        <AllocRegisterModal cond={applied} keys={selKeys} today={opts.today} onClose={() => setWriting(null)}
+          onDone={(m) => { setWriting(null); setDone(m); run(true) }} />
+      )}
+      {writing === 'list' && (
+        <RegisteredModal kind="alloc" brand={opts.brand} brandNm={opts.brands.find((b) => b.code === opts.brand)?.name ?? opts.brand} today={opts.today}
+          onClose={() => setWriting(null)} onChanged={() => { if (applied) setDone('의뢰를 삭제했습니다 — [새로 계산]을 누르면 지금 창고 재고로 다시 배분합니다.') }} />
+      )}
     </div>
   )
 }
 
-function AllocTable({ rows }: { rows: AllocRow[] }) {
+function AllocTable({ rows, select, showShort }: { rows: AllocRow[]; select?: Select; showShort?: boolean }) {
+  const keys = useMemo(() => rows.map((r) => alKey(r).join('|')), [rows])
   return (
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장별 배분">
-        <thead><tr><th>품번 · 칼라 · 사이즈</th><th className="num">순위</th><th>매장</th><th>유통 · 등급</th><th className="num">판매율</th><th className="num">완불 · 판매</th><th className="num">현재고</th><th className="num">배분(완불)</th><th className="num">배분(판매)</th><th className="num">합계</th></tr></thead>
+        <thead>
+          <tr>
+            {select && <SelectAll keys={keys} select={select} label="배분 모두 선택" />}
+            <th>품번 · 칼라 · 사이즈</th><th className="num">순위</th><th>매장</th><th>유통 · 등급</th><th className="num">판매율</th><th className="num">완불 · 판매</th><th className="num">현재고</th>
+            <th className="num">배분(완불)</th><th className="num">배분(판매)</th><th className="num">합계</th>
+            <th className="num" title="매장재고상한까지 받을 수 있는 완불 + 판매 수량">필요</th><th className="num" title="창고 수량이 모자라 못 받은 수량">창고 부족</th>
+          </tr>
+        </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.prdtCd}-${r.colorCd}-${r.sizeCd}-${r.shopId}`}>
+          {rows.map((r, i) => (
+            <tr key={`${r.prdtCd}-${r.colorCd}-${r.sizeCd}-${r.shopId}`}
+              className={`${r.short > 0 ? 'row-short' : ''} ${select?.sel.has(keys[i]) ? 'selected' : ''}`}>
+              {select && <td className="check"><input type="checkbox" checked={select.sel.has(keys[i])} disabled={!r.ask} onChange={() => select.flip(keys[i])} aria-label={`${r.shopId} ${r.prdtCd} 선택`} /></td>}
               <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span></td>
               <td className="num">{r.rank}</td>
               <td><span className="mono">{r.shopId}</span> {r.shopNm}<div className="muted small">{r.team}</div></td>
               <td>{r.shopType} <span className="muted">{r.grade}{r.gradeRank != null ? ` · ${r.gradeRank}` : ''}</span></td>
               <td className="num">{r.srate}%</td><td className="num">{r.fq} · {r.sq}</td><td className="num">{r.stock}</td>
               <td className="num">{r.askFp || '-'}</td><td className="num">{r.askSale || '-'}</td><td className="num"><b>{r.ask}</b></td>
+              <td className="num">{r.ctl ? '-' : r.need}</td>
+              <td className="num">{r.short > 0 ? <span className="tag warn">{r.ask ? '' : '미배분 '}부족 {r.short}</span> : '-'}</td>
             </tr>
           ))}
-          {!rows.length && <tr><td colSpan={10} className="empty">배분할 매장이 없습니다.</td></tr>}
+          {!rows.length && <tr><td colSpan={13} className="empty">{showShort ? '창고 부족으로 못 받은 매장이 없습니다.' : '배분할 매장이 없습니다.'}</td></tr>}
         </tbody>
       </table>
     </div>

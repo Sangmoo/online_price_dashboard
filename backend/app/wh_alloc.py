@@ -1,6 +1,6 @@
 """재고 재배치 추천 > 창고 → 매장 배분: 판매분 자동보충(SS10DEV.SP_AUTO_DVID)과 같은 규칙으로 배분 수량을 미리 계산.
 
-조회 · 추천만 한다 (T_DELV_ASK · 이력 테이블에 쓰지 않음).
+추천 계산은 읽기만 한다. 배분의뢰(T_DELV_ASK) 등록 · 삭제는 stock_write (관리자).
 - 스타일: 판매보충기준(T_SALE_SUPLM_BASE · _APLY, '*' 은 전체)에 맞는 품번 × 칼라 × 사이즈, 제외 목록(_XCLD) 빼고,
   최초 출고일(T_PRDT_DEAL)이 오늘 이전, 기간 중 등급 매장에서 (반품 아닌) 판매가 있는 상품.
   같은 상품이 기준 여러 줄에 걸리면 첫 줄(기준순번)만 쓴다 (프로시저는 줄마다 한 번 더 배분해 넘칠 수 있음).
@@ -222,6 +222,16 @@ def _wh_avail(brand: str, wh: str, prdts: list[str], td: str) -> dict[tuple, dic
     return out
 
 
+def web_asked(brand: str, td: str) -> dict[tuple, int]:
+    """이 화면에서 넣은 미확정 배분의뢰 (오늘 이후 의뢰일) — (매장, 상품) → 수량"""
+    out: dict[tuple, int] = {}
+    for sid, p, c, s, q in db.query("""SELECT SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD, SUM(NVL(ASK_QTY, 0)) FROM T_DELV_ASK
+                                        WHERE ASK_DT >= :td AND PARENT_BRD_CD = :b AND ATTR1 = :m AND NVL(CNFM_YN, 'N') = 'N'
+                                        GROUP BY SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD""", {"td": td, "b": brand, "m": sc.WEB_MARK})[1]:
+        out[(sid, p, c, s)] = int(q or 0)
+    return out
+
+
 # ---------------------------------------------------------------- 배분 (DB 없이 테스트 가능)
 def shop_key(c: dict, brand: str) -> tuple:
     """SP_AUTO_DVID 매장 순서: 유통형태 · 판매율 높은 순 · 매장등급 · 등급 내 순위 (리스트는 등급 · 순위 반대) · 최초판매일"""
@@ -324,9 +334,11 @@ def _compute(brand, wh, f, t, base, grd_grp, yy, ss, gp, it, pp, tm, rate) -> di
     lap("stock", t0)
     t0 = time.perf_counter()
     whq = _wh_avail(brand, wh, sorted({k[0] for k in sold_skus}), td) if sold_skus else {}
+    asked = web_asked(brand, td)
     lap("warehouse", t0)
 
     by_sku: dict[tuple, list[dict]] = {}
+    n_asked = 0
     for sid, sku, fq_raw, sq_raw in cand:
         st = styles[sku]
         k = (sid,) + sku
@@ -340,6 +352,9 @@ def _compute(brand, wh, f, t, base, grd_grp, yy, ss, gp, it, pp, tm, rate) -> di
         if stk > st["maxStock"]:
             continue
         if st["minRate"] and st["minRate"] > srate:
+            continue
+        if k in asked:          # 이 화면에서 이미 배분의뢰(미확정)를 넣은 매장 × 상품은 다시 배분하지 않는다
+            n_asked += 1
             continue
         g = vt[sid]
         by_sku.setdefault(sku, []).append({"shopId": sid, "typeRank": SHOP_TYPES[shops[sid]["type"]], "srate": srate, "prty": g["prty"],
@@ -377,12 +392,15 @@ def _compute(brand, wh, f, t, base, grd_grp, yy, ss, gp, it, pp, tm, rate) -> di
         for rank, c in enumerate(lst, 1):
             a = got.get(c["shopId"])
             sh = shops[c["shopId"]]
+            need = 0 if c["ctl"] else max(0, min(c["fq"] + c["sq"], st["maxStock"] - c["stk"]))
+            ask = (a["fp"] + a["sale"]) if a else 0
             rows.append({"prdtCd": sku[0], "styleNm": st["styleNm"], "colorCd": sku[1], "sizeCd": sku[2], "rank": rank,
                          "shopId": c["shopId"], "shopNm": sh["shopNm"], "team": teams.get(sh["team"]),
                          "shopType": sc.SHOP_TYPE_NM.get(sh["type"]), "grade": c["grdNm"], "gradeRank": c["rank"], "srate": c["srate"],
                          "fq": c["fq"], "sq": c["sq"], "stock": c["stk"], "askFp": a["fp"] if a else 0, "askSale": a["sale"] if a else 0,
-                         "ask": (a["fp"] + a["sale"]) if a else 0, "ctl": c["ctl"]})
+                         "ask": ask, "ctl": c["ctl"], "need": need, "short": max(need - ask, 0)})
     alloc_rows = [r for r in rows if r["ask"]]
+    short_rows = [r for r in rows if r["short"] > 0]          # 창고 수량이 모자라 필요만큼 못 받은 매장 (일부 · 전혀)
     by_shop: dict[str, int] = {}
     for r in alloc_rows:
         by_shop[r["shopId"]] = by_shop.get(r["shopId"], 0) + r["ask"]
@@ -397,8 +415,9 @@ def _compute(brand, wh, f, t, base, grd_grp, yy, ss, gp, it, pp, tm, rate) -> di
                     "allocFp": sum(r["askFp"] for r in alloc_rows), "shops": len(by_shop),
                     "demand": sum(s["demand"] for s in sku_rows), "short": sum(s["short"] for s in sku_rows),
                     "noStockSkus": sum(1 for s in sku_rows if s["avail"] <= 0 and s["demand"] > 0),
-                    "ctlRows": sum(1 for r in rows if r["ctl"]), "candidates": sum(len(v) for v in by_sku.values())},
-        "rows": alloc_rows, "ctlRows": [r for r in rows if r["ctl"]], "skus": sku_rows, "allRows": rows,
+                    "ctlRows": sum(1 for r in rows if r["ctl"]), "candidates": sum(len(v) for v in by_sku.values()),
+                    "shortRows": len(short_rows), "shortZero": sum(1 for r in short_rows if not r["ask"]), "asked": n_asked},
+        "rows": alloc_rows, "shortRows": short_rows, "ctlRows": [r for r in rows if r["ctl"]], "skus": sku_rows, "allRows": rows,
         "topShops": [{"shopId": k, "shopNm": names.get(k), "qty": v} for k, v in sorted(by_shop.items(), key=lambda x: (-x[1], x[0]))[:15]],
         "timing": timing,
     }
@@ -428,7 +447,8 @@ def cond_text(d: dict) -> str:
 ALLOC_COLS = [("prdtCd", "품번", 14), ("styleNm", "스타일명", 18), ("colorCd", "칼라", 6), ("sizeCd", "사이즈", 7), ("rank", "매장 순위", 8),
               ("shopId", "매장", 10), ("shopNm", "매장명", 18), ("team", "팀", 10), ("shopType", "유통형태", 9), ("grade", "등급", 8),
               ("gradeRank", "등급 내 순위", 9), ("srate", "판매율(%)", 9), ("fq", "완불 판매", 8), ("sq", "일반 판매", 8), ("stock", "현재고", 8),
-              ("askFp", "배분(완불)", 9), ("askSale", "배분(판매)", 9), ("ask", "배분 합계", 9), ("ctl", "수불제어", 8)]
+              ("askFp", "배분(완불)", 9), ("askSale", "배분(판매)", 9), ("ask", "배분 합계", 9), ("need", "필요", 7),
+              ("short", "창고 부족", 9), ("ctl", "수불제어", 8)]
 SKU_COLS = [("prdtCd", "품번", 14), ("styleNm", "스타일명", 18), ("colorCd", "칼라", 6), ("sizeCd", "사이즈", 7), ("whStock", "창고 재고", 9),
             ("reserved", "출고지시 · 미확정 의뢰", 12), ("minWh", "창고재고하한", 10), ("avail", "배분 가능", 9), ("shops", "후보 매장", 9),
             ("demand", "필요 수량", 9), ("alloc", "배분", 8), ("short", "부족", 8), ("maxStock", "매장재고상한", 10), ("minRate", "최소판매율", 9)]
@@ -436,7 +456,7 @@ SKU_COLS = [("prdtCd", "품번", 14), ("styleNm", "스타일명", 18), ("colorCd
 
 def export_xlsx(d: dict) -> bytes:
     s = d["summary"]
-    notes = [f"창고 → 매장 배분 추천 ({d['asOf']} 기준, 판매분 자동보충 규칙 · 조회 · 추천만 — ERP 에 등록되지 않음)", cond_text(d),
+    notes = [f"창고 → 매장 배분 추천 ({d['asOf']} 기준, 판매분 자동보충 규칙 · 추천 — ERP 등록은 화면의 [배분의뢰 등록])", cond_text(d),
              f"상품 {s['skus']:,}개 · 배분 {s['allocQty']:,}장(완불 {s['allocFp']:,}) · 매장 {s['shops']:,}곳 · 필요 {s['demand']:,}장 중 부족 {s['short']:,}장"]
-    return sc.xlsx([("배분 추천", notes, ALLOC_COLS, d["rows"]), ("상품별", notes, SKU_COLS, d["skus"]),
+    return sc.xlsx([("배분 추천", notes, ALLOC_COLS, d["rows"]), ("창고 부족", notes, ALLOC_COLS, d["shortRows"]), ("상품별", notes, SKU_COLS, d["skus"]),
                     ("후보 매장 전체", notes, ALLOC_COLS, d["allRows"])])
