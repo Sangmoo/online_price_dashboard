@@ -233,3 +233,40 @@
   .my-profile { flex-direction: column; align-items: flex-start; }
   .maint-form { grid-template-columns: 1fr; }
 }
+
+/* 관리자 '사용 쿼리' 팝업: 왼쪽 기능 목록 · 오른쪽 SQL */
+.query-btn { color: var(--primary); }
+.query-modal { max-width: 1180px; width: calc(100vw - 40px); height: calc(100vh - 40px); }
+.q-head-actions { display: flex; align-items: center; gap: 6px; }
+.q-hint { line-height: 1.6; }
+.q-hint code, .q-feature code { font-family: var(--mono, ui-monospace, Consolas, monospace); background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
+.q-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; min-height: 0; flex: 1; }
+.q-nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
+.q-nav-item { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; background: transparent; padding: 7px 9px; border-radius: 7px; color: var(--text); font-size: 13px; cursor: pointer; }
+.q-nav-item:hover { background: var(--primary-soft); color: var(--primary); }
+.q-body { gap: 22px; }
+.q-feature { display: flex; flex-direction: column; gap: 10px; }
+.q-feature-head { display: flex; align-items: flex-start; gap: 10px; position: sticky; top: 0; z-index: 1; background: var(--surface); padding: 6px 0; border-bottom: 1px solid var(--border); }
+.q-feature-head h4 { margin: 0 0 2px; font-size: 14.5px; }
+.q-item { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.q-item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.q-seg button { padding: 4px 10px; font-size: 12px; font-weight: 600; }
+.q-seg button:disabled { opacity: .45; cursor: default; }
+.q-code { display: flex; flex-direction: column; gap: 4px; }
+.q-code-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sql-code { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12.5px; line-height: 1.55; white-space: pre; overflow-x: auto; max-height: 420px; overflow-y: auto; tab-size: 4; }
+.copy-btn.ok { color: var(--ok, #16a34a); border-color: currentColor; }
+.copy-btn.fail { color: var(--bad, #dc2626); }
+.q-binds { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.q-bind { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 900px) {
+  .q-layout { grid-template-columns: 1fr; }
+  .q-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 6px; }
+  .q-nav-item { white-space: nowrap; }
+  .query-modal { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+}
+.query-modal > .search, .query-modal > .q-hint, .query-modal > .modal-head { flex: none; }
+.q-code { position: relative; }
+.q-code-bar.float { position: absolute; top: 6px; right: 8px; z-index: 1; }
+.q-code-bar.float .copy-btn { background: var(--surface); }
+.q-code-bar.float + .sql-code { padding-right: 110px; }

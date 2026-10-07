@@ -146,6 +146,7 @@ export class MockApi {
     this.on('GET', '/api/admin/home', () => ({ json: { generatedAt: '2026-10-06 09:00:00', ...Object.fromEntries(
       ['feedback', 'users', 'server', 'data', 'ai', 'jobs', 'downloads', 'notices'].map((k) => [k, { error: '테스트' }])) } }))
     this.on('GET', /^\/api\/prefs\//, () => ({ json: { value: null } }))
+    this.on('PUT', /^\/api\/prefs\//, () => ({ json: { ok: true } }))
     this.on('GET', '/api/chat/usage', () => ({ json: usage }))
     this.on('GET', '/api/chat/conversations', () => ({ json: { conversations: [] } }))
     this.on('GET', '/api/chat/favorites', () => ({ json: { favorites: [] } }))

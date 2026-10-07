@@ -39,6 +39,7 @@ test('마이페이지: 강조 색을 고르면 바로 바뀌고 서버에 저장
   await page.locator('.my-theme').getByRole('button', { name: '다크' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   expect(await primary()).toBe('#2dd4bf')
+  await expect.poll(() => api.find('PUT', '/api/prefs/ui.theme').map((c) => c.body)).toEqual([{ value: 'dark' }])   // 다크 모드도 사용자별 저장
   // 진한 버튼 · 선택된 탭은 다크 모드에서도 흰 글자가 보이는 진한 색
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent-a').trim())).toBe('#0d9488')
   await shot(page, 'mypage-dark')

@@ -118,7 +118,14 @@ export type MyOverview = {
   downloads: { total: number; rows: DownloadRow[] } | null
 }
 
+/** 관리자 '사용 쿼리': 메뉴의 기능별 SQL (코드 기준 + 최근 실행) */
+export type QueryRun = { sql: string; filled: string; binds: Record<string, unknown>; at: string; ms: number; count: number }
+export type QueryItem = { fn: string | null; title: string | null; file: string | null; line: number | null; sqls: string[]; error?: string | null; recent: QueryRun[] }
+export type QueryFeature = { title: string; desc: string; items: QueryItem[] }
+export type PageQueries = { page: string; label?: string; features: QueryFeature[]; since: string }
+
 export const opsApi = {
+  queries: (page: string) => json<PageQueries>(`/api/admin/queries?${qs({ page })}`),
   home: (fresh = false) => json<AdminHome>(`/api/admin/home?${qs({ fresh: fresh ? 'true' : undefined })}`),
   jobs: (days: number, fresh = false) => json<JobsOverview>(`/api/admin/jobs?${qs({ days, fresh: fresh ? 'true' : undefined })}`),
   downloads: (p: { days: number; usr?: string; kind?: string }) => json<DownloadReport>(`/api/admin/downloads?${qs(p)}`),

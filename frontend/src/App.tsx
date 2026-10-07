@@ -5,6 +5,7 @@ import {
   ChartLine,
   ClipboardList,
   Clock,
+  Database,
   DatabaseZap,
   Home,
   Loader2,
@@ -68,6 +69,7 @@ const SaleDashboardView = lazyView(() => import('./components/SaleDashboardView'
 const FeedbackModal = lazyView(() => import('./components/FeedbackModal'))
 const MallShopView = lazyView(() => import('./components/MallShopView'))
 const HelpModal = lazyView(() => import('./components/HelpModal'))
+const QueryModal = lazyView(() => import('./components/QueryModal'))
 const NoticeBoardView = lazyView(() => import('./components/NoticeBoardView'))
 const MyPage = lazyView(() => import('./components/MyPage'))
 
@@ -172,6 +174,12 @@ export default function App() {
     writeStorage('theme', theme)
   }, [theme])
 
+  // 다크 모드도 강조 색처럼 사용자별 서버 설정(ui.theme)으로: 다른 PC · 브라우저에서도 같게
+  const loadTheme = () =>
+    api.getPref<string>('ui.theme').then(({ value }) => {
+      if (value === 'light' || value === 'dark') setTheme(value)
+    }).catch(() => undefined)
+
   // 최초 로그인 상태 확인
   useEffect(() => {
     api
@@ -190,6 +198,7 @@ export default function App() {
         } else if (target) sessionStorage.removeItem('erp.viewAs')
         setUser(user)
         loadAccent()
+        loadTheme()
       })
       .catch((e) => {
         if (e instanceof ApiError && e.code === 'MAINTENANCE') setMaintenance(e.message)
@@ -260,6 +269,7 @@ export default function App() {
           setLoginNotice(null)
           setUser(u)
           loadAccent()
+          loadTheme()
         }}
       />
     )
@@ -269,7 +279,11 @@ export default function App() {
       key={user.id}
       user={user}
       theme={theme}
-      onTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      onTheme={() => {
+        const next = theme === 'dark' ? 'light' : 'dark'
+        setTheme(next)
+        if (!user.viewAs) api.setPref('ui.theme', next).catch(() => undefined)   // 미리보기 중에는 관리자 본인 설정을 바꾸지 않는다
+      }}
       onLogout={handleLogout}
     />
   )
@@ -303,6 +317,8 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
   // 지표 정의 · 도움말: 상단 [도움말] 또는 화면의 (?) 아이콘(openHelp 이벤트)으로 연다
   const [help, setHelp] = useState<{ focus?: string } | null>(null)
   const closeHelp = useCallback(() => setHelp(null), [])
+  const [queryOpen, setQueryOpen] = useState(false)
+  const closeQuery = useCallback(() => setQueryOpen(false), [])
   useEffect(() => {
     const open = (e: Event) => setHelp({ focus: (e as CustomEvent<string | undefined>).detail })
     window.addEventListener(OPEN_HELP_EVENT, open)
@@ -594,6 +610,11 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
                 <Megaphone size={15} /> <span>공지</span> <span className="count-badge">{notices.length}</span>
               </button>
             )}
+            {user.role === 'ADMIN' && !user.viewAs && view && (
+              <button className="btn ghost query-btn" onClick={() => setQueryOpen(true)} title="이 메뉴가 기능별로 쓰는 SQL 보기 · 복사 (관리자)">
+                <Database size={15} /> <span>사용 쿼리</span>
+              </button>
+            )}
             <button className="btn ghost help-btn" onClick={() => setHelp({})} title="지표 정의 · 계산식 · 원천 테이블">
               <BookOpen size={15} /> <span>도움말</span>
             </button>
@@ -608,6 +629,11 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
         {help && (
           <Suspense fallback={null}>
             <HelpModal focus={help.focus} onClose={closeHelp} />
+          </Suspense>
+        )}
+        {queryOpen && view && (
+          <Suspense fallback={null}>
+            <QueryModal page={view} onClose={closeQuery} />
           </Suspense>
         )}
         {feedbackOpen && (

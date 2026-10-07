@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import oracledb
 
-from . import config, logs
+from . import config, logs, sql_trace
 
 _pool: oracledb.ConnectionPool | None = None
 _lock = threading.Lock()
@@ -41,6 +41,7 @@ def timed(sql: str, params: dict | None = None, what: str = "query"):
                    sorted((params or {}).keys()), logs.sql_text(sql))
         raise
     sec = time.perf_counter() - start
+    sql_trace.record(sql, params, sec)
     if sec >= logs.SLOW_SQL_SEC:
         _log.warning("느린 %s %.2fs | binds=%s | %s", what, sec, sorted((params or {}).keys()), logs.sql_text(sql))
 
