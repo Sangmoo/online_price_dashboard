@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ for k, v in {"DB_HOST": "localhost", "DB_SID": "XE", "DB_USER": "test", "DB_PASS
     os.environ.setdefault(k, v)
 # 테스트가 실제 운영 데이터 이전(SQLite → Oracle)을 일으키지 않게 한다
 os.environ["ERP_NO_AUTO_MIGRATE"] = "1"
+# 테스트 로그는 임시 폴더로 — 테스트가 일부러 내는 오류(권한 부족 등)가 운영 logs/error.log 에 섞이지 않게
+os.environ["ERP_LOG_DIR"] = tempfile.mkdtemp(prefix="erp-test-logs-")
 
 
 @pytest.fixture

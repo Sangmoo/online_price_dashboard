@@ -119,7 +119,7 @@ const MENU: { key: ViewKey; label: string; desc: string; icon: typeof Home; grou
   { key: 'sale_dashboard', label: '판매 현황', desc: '월 실적 · 전년 대비', icon: ChartLine, group: 'sales' },
   { key: 'sale_monthly', label: '월별 매장별 판매 집계', desc: '마감 매출 · 엑셀', icon: BarChart3, group: 'sales' },
   { key: 'invt_plan', label: '매장 재고 실사계획', desc: '실사 일정 · 예상 비용', icon: ClipboardList, group: 'data' },
-  { key: 'stock_rt', label: '재고 재배치 추천', desc: '매장 간 RT · 창고 배분', icon: ArrowRightLeft, group: 'data' },
+  { key: 'stock_rt', label: '재고 재배치 추천', desc: 'RT · 배분 · 회수 · 장기 재고', icon: ArrowRightLeft, group: 'data' },
   { key: 'notice', label: '공지사항', desc: '공지 · 첨부 · 댓글', icon: Megaphone, group: 'common' },
   { key: 'mypage', label: '마이페이지', desc: '내 정보 · 화면 설정', icon: UserRound, group: 'common' },
   { key: 'admin', label: '관리자', desc: '사용자 · 권한 · AI 설정', icon: ShieldCheck, group: 'admin' },
@@ -622,7 +622,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
             </button>
             <div>
               <div className="page-title">{current?.label ?? 'ERP 영업 관리'}</div>
-              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'stock_rt' ? '데이터 관리 · 매장 재고 · 자동 RT · 판매분 자동보충 규칙' : view === 'mall_shop' ? '온라인 가격 · T_SELECT_ONLINE_MALL_SHOP' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : view === 'notice' ? '공통 · T_ERP_WEB_NOTICE' : view === 'mypage' ? '공통' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
+              <div className="brand-sub">{view === 'invt_plan' ? '데이터 관리 · T_SHOP_INVT_PLAN' : view === 'stock_rt' ? '데이터 관리 · 매장 재고 · 자동 RT · 판매분 자동보충 규칙 · 창고 회수 · 미처리 RT · 장기 미판매' : view === 'mall_shop' ? '온라인 가격 · T_SELECT_ONLINE_MALL_SHOP' : view === 'sale_monthly' ? '판매 분석 · T_CLOSE_SALE_BASE' : view === 'sale_dashboard' ? '판매 분석 · 월×매장 사전 집계' : view === 'admin' ? '시스템 관리' : view === 'notice' ? '공통 · T_ERP_WEB_NOTICE' : view === 'mypage' ? '공통' : 'T_SELECT_ONLINE_MNG_R'} · {current?.desc ?? ''}</div>
             </div>
             {notices.length > 0 && (
               <button className="btn ghost notice-btn" onClick={() => {

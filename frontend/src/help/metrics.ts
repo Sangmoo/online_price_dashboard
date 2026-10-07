@@ -298,6 +298,63 @@ export const HELP: HelpEntry[] = [
     where: ['재고 재배치 추천 > 창고 → 매장 배분'],
     code: 'wh_alloc.recommend',
   },
+  {
+    id: 'stock.virtual',
+    group: 'stock',
+    name: '행사 · 가상 매장 제외',
+    formula: [
+      'ERP 매장 마스터에서 가상매장구분(오픈매장 · 사내 · 온라인 · LOSS · B품 등)이 있거나, 유통형태가 해외 · 특판 · 사내 · 기타, 매장MD유형이 홈쇼핑 · 이관 · 기타 · EBIZ · 사내행사, 매장관리구분이 홈쇼핑 · 이관 · 행사 · 업체 · 기타, 실매장 여부가 N 인 매장',
+    ],
+    source: 'T_SHOP (SIMUL_SHOP_CLSBY · SHOP_FORM · SHOP_MD_TYPE · MGN_CLSBY · REAL_SHOP_YN)',
+    notes: ['매장 간 RT(보내는 · 받는 매장) · 창고 부족 채우기 · 자동 RT 설정 점검 · 창고 회수에서 빼고, RT 성과 · 미처리 RT 현황 · 장기 미판매 재고는 기본으로 빼되 [행사 · 가상 매장 포함]으로 볼 수 있습니다.',
+      '창고 → 매장 배분은 ERP 판매분 자동보충과 결과를 맞추려고 그대로 둡니다.'],
+    where: ['재고 재배치 추천'],
+    code: 'stock_ctl.virtual_reason',
+  },
+  {
+    id: 'stock.return',
+    group: 'stock',
+    name: '창고 회수 추천',
+    formula: [
+      '회수할 상품 = 창고 → 매장 배분(같은 조건)의 창고 부족 상품, 필요 = 창고 부족 수량',
+      '회수 후보 = 그 상품 재고가 있고 최근 N일(기본 14) 그 상품 판매가 없는 매장 — 받아야 하는 매장 · 행사 · 가상 매장 제외',
+      '회수 가능 = 현재고 − 이동중 · 자동 RT 요청중 · 미처리 지시 · 요청',
+      '순서 = 폐점 · 비정상 매장 → 판매 이력 없는 매장 → 최종판매일 오래된 순 → 회수 가능 많은 순',
+    ],
+    source: 'wh_alloc 결과 · T_SHOP_STOCK · T_SHOP_RNDS_BASE(판매) · T_SHOP_PRDT_BASE · T_SHOP_MOVE · T_INDC_RT · T_SHOP_REQ',
+    notes: ['추천만 합니다 — ERP 에 반품(지시반품) 지시를 넣지 않습니다.', '[창고 → 매장 배분 > 창고 부족]의 [창고로 회수 추천]을 누르면 같은 조건으로 열립니다.'],
+    where: ['재고 재배치 추천 > 창고 회수'],
+    code: 'stock_return.recommend',
+  },
+  {
+    id: 'stock.pending',
+    group: 'stock',
+    name: '미처리 RT 현황',
+    formula: [
+      '미처리 = 매장 이동요청(T_SHOP_REQ) 처리구분 미처리(C2954) · 삭제 안 됨 — 본사지시 · 자동 RT · 매장간, 요청일 최근 N일',
+      '처리할 매장 = 보내는 매장, 경과 = 요청 등록 시각부터 지금까지',
+      '자동거부 임박 = 48시간 넘은 본사지시 (본사지시는 3일 무응답이면 새벽 배치가 자동거부)',
+    ],
+    source: 'T_SHOP_REQ',
+    notes: ['매장을 누르면 그 매장 요청 목록을 봅니다. 2분 동안 같은 결과를 보여 주며 [새로 고침]으로 지금 상태를 다시 읽습니다.'],
+    where: ['재고 재배치 추천 > 미처리 RT 현황'],
+    code: 'stock_pending.board',
+  },
+  {
+    id: 'stock.aging',
+    group: 'stock',
+    name: '장기 미판매 재고',
+    formula: [
+      '재고 = 이번 달 매장 재고(0 보다 큰 행), 금액 = ERP 재고금액',
+      '미판매 일수 = 오늘 − 그 매장에서 그 스타일의 최종판매일(칼라 · 사이즈 중 가장 최근) — 판매 이력이 없으면 최초출고일부터',
+      '장기 미판매 = 미판매 일수 ≥ 기준(30 · 60 · 90 · 180 · 365일)',
+    ],
+    source: 'T_SHOP_STOCK · T_SHOP_PRDT_BASE · T_STYLE_PLAN',
+    notes: ['브랜드 전체 매장 재고를 읽어 처음은 1~2분 걸립니다. 결과를 12시간 두고 매일 아침 7시에 미리 계산합니다 — [새로 계산]은 지금 재고로 다시 읽습니다.',
+      '매장 × 스타일 목록은 금액 큰 순 앞쪽 3만 건, 전체는 엑셀입니다. 행을 누르면 칼라 · 사이즈별 재고를 봅니다.'],
+    where: ['재고 재배치 추천 > 장기 미판매 재고'],
+    code: 'stock_aging.report',
+  },
 ]
 
 export const helpById = (id: string) => HELP.find((h) => h.id === id)

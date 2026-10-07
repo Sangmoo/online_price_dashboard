@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Bot, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Bot, CheckCircle2, Clock, Hourglass, Undo2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
@@ -10,8 +10,10 @@ import {
 } from '../stockApi'
 import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWrite'
 import { consumeStockOpen, useStockOpen, type StockOpenRequest } from '../stockNav'
+import { Pager, SelectAllFiltered, usePaged } from './stockUi'
+import { AgingTab, PendingTab, ReturnTab } from './StockMoreTabs'
 
-type Tab = 'rt' | 'alloc'
+type Tab = 'rt' | 'alloc' | 'return' | 'pending' | 'aging'
 const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
 const addDaysIso = (isoDate: string, n: number) => {
   const d = new Date(`${isoDate}T00:00:00`)
@@ -78,6 +80,9 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
   const [opts, setOpts] = useState<StockOptions | null>(null)
   const [error, setError] = useState('')
   const req = useStockOpen()          // AI 대화 [화면에서 열기]
+  const [seen, setSeen] = useState<Set<Tab>>(new Set(['rt']))      // 연 탭만 그린다 (미처리 · 장기 미판매는 열 때 불러온다)
+  const [returnSeed, setReturnSeed] = useState<{ cond: AllocCond; nonce: number } | null>(null)
+  useEffect(() => setSeen((v) => (v.has(tab) ? v : new Set(v).add(tab))), [tab])
 
   useEffect(() => {
     if (!req) return
@@ -102,6 +107,9 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
         <div className="seg big" role="tablist" aria-label="추천 종류">
           <button role="tab" aria-selected={tab === 'rt'} className={tab === 'rt' ? 'on' : ''} onClick={() => setTab('rt')}><Store size={14} /> 매장 간 RT</button>
           <button role="tab" aria-selected={tab === 'alloc'} className={tab === 'alloc' ? 'on' : ''} onClick={() => setTab('alloc')}><Warehouse size={14} /> 창고 → 매장 배분</button>
+          <button role="tab" aria-selected={tab === 'return'} className={tab === 'return' ? 'on' : ''} onClick={() => setTab('return')}><Undo2 size={14} /> 창고 회수</button>
+          <button role="tab" aria-selected={tab === 'pending'} className={tab === 'pending' ? 'on' : ''} onClick={() => setTab('pending')}><Clock size={14} /> 미처리 RT 현황</button>
+          <button role="tab" aria-selected={tab === 'aging'} className={tab === 'aging' ? 'on' : ''} onClick={() => setTab('aging')}><Hourglass size={14} /> 장기 미판매 재고</button>
         </div>
         <div className="chips" role="group" aria-label="브랜드">
           {(opts?.brands ?? []).map((b) => (
@@ -116,7 +124,11 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
       {opts && opts.brand === brand && (
         <>
           <div hidden={tab !== 'rt'}><RtTab key={`rt-${brand}`} opts={opts} request={req?.tab === 'rt' && req.brand === opts.brand ? req : null} onContext={(c) => tab === 'rt' && onContextChange?.({ view: 'stock_rt', tab: 'rt', ...c })} /></div>
-          <div hidden={tab !== 'alloc'}><AllocTab key={`al-${brand}`} opts={opts} request={req?.tab === 'alloc' && req.brand === opts.brand ? req : null} onContext={(c) => tab === 'alloc' && onContextChange?.({ view: 'stock_rt', tab: 'alloc', ...c })} /></div>
+          <div hidden={tab !== 'alloc'}><AllocTab key={`al-${brand}`} opts={opts} request={req?.tab === 'alloc' && req.brand === opts.brand ? req : null} onContext={(c) => tab === 'alloc' && onContextChange?.({ view: 'stock_rt', tab: 'alloc', ...c })}
+            onReturn={(cond) => { setReturnSeed({ cond, nonce: Date.now() }); setTab('return') }} /></div>
+          {(seen.has('return') || returnSeed) && <div hidden={tab !== 'return'}><ReturnTab key={`ret-${brand}`} opts={opts} seed={returnSeed?.cond.brand === opts.brand ? returnSeed : null} /></div>}
+          {seen.has('pending') && <div hidden={tab !== 'pending'}><PendingTab key={`pd-${brand}`} opts={opts} /></div>}
+          {seen.has('aging') && <div hidden={tab !== 'aging'}><AgingTab key={`ag-${brand}`} opts={opts} /></div>}
         </>
       )}
     </div>
@@ -326,7 +338,6 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
                   {q && <button className="clear" onClick={() => setQ('')}><X size={13} /></button>}
                 </div>
               )}
-              {view === 'rows' && data.rowsTotal > data.rows.length && <span className="muted small">화면은 앞쪽 {fmtNum(data.rows.length)}건 · 전체는 엑셀</span>}
               {opts.canWrite && (
                 <div className="stock-write-bar">
                   {view === 'rows' && (
@@ -378,13 +389,16 @@ function SelectAll({ keys, select, label }: { keys: string[]; select: Select; la
 }
 
 function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) {
-  const keys = useMemo(() => rows.map((r) => rtKey(r).join('|')), [rows])
+  const allKeys = useMemo(() => rows.map((r) => rtKey(r).join('|')), [rows])
+  const pg = usePaged(rows)
+  const keys = useMemo(() => pg.slice.map((r) => rtKey(r).join('|')), [pg.slice])
   return (
+    <>
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장 간 RT 추천 목록">
         <thead>
           <tr>
-            {select && <SelectAll keys={keys} select={select} label="추천 모두 선택" />}
+            {select && <SelectAll keys={keys} select={select} label="이 페이지 추천 모두 선택" />}
             <th>품번 · 칼라 · 사이즈</th><th className="num">수량</th>
             <th>보내는 매장</th><th className="num" title="현재고 / 보낼 수 있는 수량">재고</th><th className="num">기간 판매</th><th>최종판매일</th>
             <th aria-label="방향" />
@@ -392,7 +406,7 @@ function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) 
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {pg.slice.map((r, i) => (
             <tr key={r.no} className={select?.sel.has(keys[i]) ? 'selected' : ''}>
               {select && <td className="check"><input type="checkbox" checked={select.sel.has(keys[i])} onChange={() => select.flip(keys[i])} aria-label={`${r.prdtCd} ${r.fromShopId}→${r.toShopId} 선택`} /></td>}
               <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span>{r.styleNm && r.styleNm !== r.prdtCd && <div className="muted small">{r.styleNm}</div>}</td>
@@ -412,10 +426,13 @@ function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) 
         </tbody>
       </table>
     </div>
+    <Pager pg={pg}>{select && <SelectAllFiltered keys={allKeys} sel={select.sel} setMany={select.setMany} />}</Pager>
+    </>
   )
 }
 
 function UnfilledTable({ data, rows }: { data: RtResult; rows: RtResult['unfilled'] }) {
+  const pg = usePaged(rows)
   const s = data.summary
   const ex = Object.entries(s.senderExcluded).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
   return (
@@ -429,15 +446,15 @@ function UnfilledTable({ data, rows }: { data: RtResult; rows: RtResult['unfille
           <b>보내는 후보에서 빠진 이유</b>
           {ex.map(([k, v]) => <span key={k} className="chip small">{data.ruleNames[k]} {fmtNum(v)}</span>)}
         </div>
-        {(s.skipped.noGroup > 0 || s.skipped.recvCtl > 0 || !!s.skipped.incoming) && (
-          <div className="muted small">받는 매장에서 뺀 것: RT 그룹 없음 · 정상 매장 아님 {fmtNum(s.skipped.noGroup)}건 · 자동RT 반입 수불제어 {fmtNum(s.skipped.recvCtl)}건{s.skipped.incoming ? ` · 이미 지시 · 요청받아 들어올 예정 ${fmtNum(s.skipped.incoming)}건` : ''}</div>
+        {(s.skipped.noGroup > 0 || s.skipped.recvCtl > 0 || !!s.skipped.incoming || !!s.skipped.virtual) && (
+          <div className="muted small">받는 매장에서 뺀 것: RT 그룹 없음 · 정상 매장 아님 {fmtNum(s.skipped.noGroup)}건 · 자동RT 반입 수불제어 {fmtNum(s.skipped.recvCtl)}건{s.skipped.incoming ? ` · 이미 지시 · 요청받아 들어올 예정 ${fmtNum(s.skipped.incoming)}건` : ''}{s.skipped.virtual ? ` · 행사 · 가상 매장 ${fmtNum(s.skipped.virtual)}건` : ''}</div>
         )}
       </div>
       <div className="table-wrap tall">
         <table className="table stock-table" aria-label="못 채운 수요">
           <thead><tr><th>매장</th><th>품번 · 칼라 · 사이즈</th><th className="num">재고</th><th className="num">기간 판매</th><th className="num">자동RT 취소</th><th className="num">못 채운 수량</th><th>이유</th></tr></thead>
           <tbody>
-            {rows.map((u, i) => (
+            {pg.slice.map((u, i) => (
               <tr key={`${u.shopId}-${u.prdtCd}-${u.colorCd}-${u.sizeCd}-${i}`}>
                 <td><span className="mono">{u.shopId}</span> {u.shopNm}<div className="muted small">{u.team}</div></td>
                 <td><b className="mono">{u.prdtCd}</b> <span className="muted">{u.colorCd} · {u.sizeCd}</span></td>
@@ -449,6 +466,7 @@ function UnfilledTable({ data, rows }: { data: RtResult; rows: RtResult['unfille
           </tbody>
         </table>
       </div>
+      <Pager pg={pg} />
     </>
   )
 }
@@ -533,7 +551,9 @@ function fromRun(opts: StockOptions, r: RecentRun | undefined, today: string): A
   }
 }
 
-function AllocTab({ opts, request, onContext }: { opts: StockOptions; request: StockOpenRequest | null; onContext: (c: Record<string, string>) => void }) {
+function AllocTab({ opts, request, onContext, onReturn }: {
+  opts: StockOptions; request: StockOpenRequest | null; onContext: (c: Record<string, string>) => void; onReturn: (cond: AllocCond) => void
+}) {
   const today = iso(opts.today)
   const [runSeq, setRunSeq] = useState(opts.recentRuns[0]?.seq ?? '')
   const [cond, setCond] = useState<AllocCond>(() => fromRun(opts, opts.recentRuns[0], today))
@@ -750,28 +770,16 @@ function AllocTab({ opts, request, onContext }: { opts: StockOptions; request: S
                       <ArrowRightLeft size={14} /> 매장 간 RT 로 채우기
                     </button>
                   )}
+                  {s.shortRows > 0 && applied && (
+                    <button className="btn ghost sm" disabled={dirty} onClick={() => onReturn(applied)} title="창고 부족 상품을 판매 없는 매장 재고에서 창고로 회수 (추천)">
+                      <Undo2 size={14} /> 창고로 회수 추천
+                    </button>
+                  )}
                 </div>
                 <AllocTable rows={shortRows} showShort />
               </>
             )}
-            {view === 'skus' && (
-              <div className="table-wrap tall">
-                <table className="table stock-table" aria-label="상품별 배분">
-                  <thead><tr><th>품번 · 칼라 · 사이즈</th><th className="num">창고 재고</th><th className="num" title="오늘 이후 출고지시 미명세 + 미확정 배분의뢰">지시 · 의뢰</th><th className="num">창고하한</th><th className="num">배분 가능</th><th className="num">후보 매장</th><th className="num">필요</th><th className="num">배분</th><th className="num">부족</th><th className="num">매장상한</th></tr></thead>
-                  <tbody>
-                    {skus.map((k) => (
-                      <tr key={`${k.prdtCd}-${k.colorCd}-${k.sizeCd}`} className="clickable" onClick={() => setCand(k)}>
-                        <td><b className="mono">{k.prdtCd}</b> <span className="muted">{k.colorCd} · {k.sizeCd}</span></td>
-                        <td className="num">{fmtNum(k.whStock)}</td><td className="num">{fmtNum(k.reserved)}</td><td className="num">{k.minWh}</td>
-                        <td className="num"><b>{fmtNum(k.avail)}</b></td><td className="num">{k.shops}</td><td className="num">{k.demand}</td>
-                        <td className="num"><b>{k.alloc}</b></td><td className={`num ${k.short ? 'danger-text' : ''}`}>{k.short || '-'}</td><td className="num">{k.maxStock === 9999 ? '없음' : k.maxStock}</td>
-                      </tr>
-                    ))}
-                    {!skus.length && <tr><td colSpan={10} className="empty">상품이 없습니다.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {view === 'skus' && <SkuTable skus={skus} onPick={setCand} />}
             {view === 'shops' && (
               <div className="stock-two"><div className="stock-bars"><b>많이 받는 매장 (상위 15)</b>
                 {data.topShops.map((x) => {
@@ -798,20 +806,23 @@ function AllocTab({ opts, request, onContext }: { opts: StockOptions; request: S
 }
 
 function AllocTable({ rows, select, showShort }: { rows: AllocRow[]; select?: Select; showShort?: boolean }) {
-  const keys = useMemo(() => rows.map((r) => alKey(r).join('|')), [rows])
+  const pg = usePaged(rows)
+  const keys = useMemo(() => pg.slice.map((r) => alKey(r).join('|')), [pg.slice])
+  const allKeys = useMemo(() => rows.filter((r) => r.ask).map((r) => alKey(r).join('|')), [rows])
   return (
+    <>
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장별 배분">
         <thead>
           <tr>
-            {select && <SelectAll keys={keys} select={select} label="배분 모두 선택" />}
+            {select && <SelectAll keys={keys} select={select} label="이 페이지 배분 모두 선택" />}
             <th>품번 · 칼라 · 사이즈</th><th className="num">순위</th><th>매장</th><th>유통 · 등급</th><th className="num">판매율</th><th className="num">완불 · 판매</th><th className="num">현재고</th>
             <th className="num">배분(완불)</th><th className="num">배분(판매)</th><th className="num">합계</th>
             <th className="num" title="매장재고상한까지 받을 수 있는 완불 + 판매 수량">필요</th><th className="num" title="창고 수량이 모자라 못 받은 수량">창고 부족</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {pg.slice.map((r, i) => (
             <tr key={`${r.prdtCd}-${r.colorCd}-${r.sizeCd}-${r.shopId}`}
               className={`${r.short > 0 ? 'row-short' : ''} ${select?.sel.has(keys[i]) ? 'selected' : ''}`}>
               {select && <td className="check"><input type="checkbox" checked={select.sel.has(keys[i])} disabled={!r.ask} onChange={() => select.flip(keys[i])} aria-label={`${r.shopId} ${r.prdtCd} 선택`} /></td>}
@@ -829,6 +840,33 @@ function AllocTable({ rows, select, showShort }: { rows: AllocRow[]; select?: Se
         </tbody>
       </table>
     </div>
+    <Pager pg={pg}>{select && <SelectAllFiltered keys={allKeys} sel={select.sel} setMany={select.setMany} />}</Pager>
+    </>
+  )
+}
+
+function SkuTable({ skus, onPick }: { skus: AllocSku[]; onPick: (k: AllocSku) => void }) {
+  const pg = usePaged(skus)
+  return (
+    <>
+      <div className="table-wrap tall">
+        <table className="table stock-table" aria-label="상품별 배분">
+          <thead><tr><th>품번 · 칼라 · 사이즈</th><th className="num">창고 재고</th><th className="num" title="오늘 이후 출고지시 미명세 + 미확정 배분의뢰">지시 · 의뢰</th><th className="num">창고하한</th><th className="num">배분 가능</th><th className="num">후보 매장</th><th className="num">필요</th><th className="num">배분</th><th className="num">부족</th><th className="num">매장상한</th></tr></thead>
+          <tbody>
+            {pg.slice.map((k) => (
+              <tr key={`${k.prdtCd}-${k.colorCd}-${k.sizeCd}`} className="clickable" onClick={() => onPick(k)}>
+                <td><b className="mono">{k.prdtCd}</b> <span className="muted">{k.colorCd} · {k.sizeCd}</span></td>
+                <td className="num">{fmtNum(k.whStock)}</td><td className="num">{fmtNum(k.reserved)}</td><td className="num">{k.minWh}</td>
+                <td className="num"><b>{fmtNum(k.avail)}</b></td><td className="num">{k.shops}</td><td className="num">{k.demand}</td>
+                <td className="num"><b>{k.alloc}</b></td><td className={`num ${k.short ? 'danger-text' : ''}`}>{k.short || '-'}</td><td className="num">{k.maxStock === 9999 ? '없음' : k.maxStock}</td>
+              </tr>
+            ))}
+            {!skus.length && <tr><td colSpan={10} className="empty">상품이 없습니다.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <Pager pg={pg} />
+    </>
   )
 }
 
@@ -992,6 +1030,7 @@ function RtPerformancePanel({ brand, today }: { brand: string; today: string }) 
   const [from, setFrom] = useState(addDaysIso(t, -13))
   const [to, setTo] = useState(t)
   const [scope, setScope] = useState<'web' | 'all'>('web')
+  const [virt, setVirt] = useState(false)
   const [d, setD] = useState<RtPerformance | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1000,13 +1039,13 @@ function RtPerformancePanel({ brand, today }: { brand: string; today: string }) 
   const load = (refresh = false) => {
     setLoading(true)
     setError('')
-    stockApi.rtPerformance(brand, from, to, scope, refresh).then(setD).catch((e) => setError(errText(e))).finally(() => setLoading(false))
+    stockApi.rtPerformance(brand, from, to, scope, refresh, virt).then(setD).catch((e) => setError(errText(e))).finally(() => setLoading(false))
   }
-  useEffect(() => load(), [brand, from, to, scope]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => load(), [brand, from, to, scope, virt]) // eslint-disable-line react-hooks/exhaustive-deps
   const s = d?.summary
   const exportXlsx = async () => {
     setBusy(true)
-    try { await stockApi.rtPerformanceExport(brand, from, to, scope) } catch (e) { setError(errText(e)) } finally { setBusy(false) }
+    try { await stockApi.rtPerformanceExport(brand, from, to, scope, virt) } catch (e) { setError(errText(e)) } finally { setBusy(false) }
   }
   const shopTable = (list: RtPerformance['senders'], label: string) => (
     <div className="table-wrap tall">
@@ -1041,6 +1080,7 @@ function RtPerformancePanel({ brand, today }: { brand: string; today: string }) 
           <button className={scope === 'web' ? 'on' : ''} onClick={() => setScope('web')}>이 화면에서 지시</button>
           <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>본사지시 전체</button>
         </div>
+        <label className="check-label" title="오픈매장 · 사내 · 온라인 · 행사 매장이 낀 지시까지"><input type="checkbox" checked={virt} onChange={(e) => setVirt(e.target.checked)} /> 행사 · 가상 매장 포함</label>
         <button className="btn ghost sm" onClick={() => load(true)} disabled={loading}><RefreshCw size={14} /> 새로 계산</button>
         <button className="btn success sm stock-write-bar" onClick={exportXlsx} disabled={busy || !d}>{busy ? <Loader2 size={14} className="spin" /> : <Download size={14} />} 엑셀</button>
       </div>
@@ -1057,7 +1097,7 @@ function RtPerformancePanel({ brand, today }: { brand: string; today: string }) 
             <div className="pill" title={`수락 건 중 받은 매장이 ${d.soldDays}일 안에 같은 상품을 판매한 비율 (괄호는 ${d.soldDays}일이 지난 건만)`}>
               <span>판매 전환 ({d.soldDays}일)</span><b>{s.soldRate != null ? `${s.soldRate}%` : '-'}</b>
               <span className="muted">{s.maturedAccepted ? `${d.soldDays}일 지난 건 ${pct(s.maturedSold, s.maturedAccepted)}` : ''}</span></div>
-            <div className="pill hint-pill">{d.brandNm} · {d.scope === 'web' ? '이 화면에서 지시' : '본사지시 전체'} · {d.asOf} 기준</div>
+            <div className="pill hint-pill">{d.brandNm} · {d.scope === 'web' ? '이 화면에서 지시' : '본사지시 전체'} · {d.asOf} 기준{!d.includeVirtual && d.virtualQty ? ` · 행사 · 가상 매장 ${fmtNum(d.virtualQty)}장 제외` : ''}</div>
           </div>
           {s.total === 0 && scope === 'web' && <div className="alert info"><Info size={14} /> <span>이 기간에 이 화면에서 지시한 RT 가 없습니다. [본사지시 전체]로 ERP 에서 지시한 것까지 볼 수 있습니다.</span></div>}
           <div className="seg" role="tablist" aria-label="RT 성과 보기">

@@ -114,6 +114,10 @@ def tick(now: datetime | None = None) -> str | None:
         if now.hour >= WARM_HOUR:
             _state["day"] = now.strftime("%Y%m%d")
         warm(reason)
+        if reason == "아침 계산":          # 장기 미판매 재고 기준(브랜드별 1~2분)도 아침에 미리 읽는다 — 서버 시작 · 배포 때는 하지 않음
+            from . import stock_aging
+
+            stock_aging.warm_async()
     return reason
 
 

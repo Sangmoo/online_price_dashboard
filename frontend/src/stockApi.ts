@@ -115,7 +115,7 @@ export type RtResult = {
     failFilled: number
     unfilled: number
     unfilledBy: Record<string, number>
-    skipped: { noGroup: number; recvCtl: number; team: number; incoming?: number }
+    skipped: { noGroup: number; recvCtl: number; team: number; incoming?: number; virtual?: number }
     senderExcluded: Record<string, number>
     checked: number
     styles: number
@@ -267,7 +267,7 @@ export type ShortRt = {
   brand: string; brandNm: string; asOf: string; allocAsOf: string; wh: string; from: string; to: string; orderNm: string
   summary: { shortRows: number; shortQty: number; receivers: number; needQty: number; filledReceivers: number; recRows: number; recQty: number
     senders: number; receivingShops: number; unfilled: number; unfilledBy: Record<string, number>
-    skipped: { noGroup: number; recvCtl: number; team: number; incoming: number }; senderExcluded: Record<string, number> }
+    skipped: { noGroup: number; recvCtl: number; team: number; incoming: number; virtual?: number }; senderExcluded: Record<string, number> }
   reasonNames: Record<string, string>; ruleNames: Record<string, string>
   rows: RtRow[]; unfilled: RtUnfilled[]; timing: Record<string, number>
 }
@@ -279,12 +279,52 @@ export type RtWriteSource = {
 export type PerfShop = { shopId: string; shopNm: string | null; team: string | null; total: number; accepted: number; denied: number; autoDenied: number
   pending: number; canceled: number; acceptRate: number | null; avgHours: number | null; sold: number; soldRate: number | null }
 export type RtPerformance = {
-  brand: string; brandNm: string; from: string; to: string; scope: 'web' | 'all'; asOf: string; soldDays: number
+  brand: string; brandNm: string; from: string; to: string; scope: 'web' | 'all'; asOf: string; soldDays: number; includeVirtual?: boolean; virtualQty?: number
   summary: { total: number; byStatus: { code: string; name: string; qty: number }[]; accepted: number; denied: number; autoDenied: number; pending: number
     canceled: number; acceptRate: number | null; avgHours: number | null; sold: number; soldRate: number | null; maturedAccepted: number; maturedSold: number }
   senders: PerfShop[]; receivers: PerfShop[]; reasons: { reason: string; qty: number }[]
   days: { day: string; total: number; accepted: number; denied: number; pending: number }[]
 }
+export type PendingGroup = { key: string; name: string | null; team?: string | null; rows: number; qty: number; urgent: number; oldestHours: number
+  d0: number; d1: number; d2: number; d3: number; C6811: number; C6812: number; C6813: number }
+export type PendingRow = { makeDt: string; seq: number; type: string; typeNm: string; fromShopId: string; fromShopNm: string | null; fromTeam: string | null
+  toShopId: string; toShopNm: string | null; prdtCd: string; styleNm: string | null; colorCd: string; sizeCd: string; qty: number; requestedAt: string | null
+  hours: number; age: 'd0' | 'd1' | 'd2' | 'd3'; urgent: boolean; requestedBy: string | null; ref: string | null }
+export type PendingBoard = {
+  brand: string; brandNm: string; from: string; to: string; days: number; types: string[]; typeNames: Record<string, string>
+  ages: { key: string; name: string }[]; urgentHours: number; asOf: string; includeVirtual: boolean; virtualRows: number
+  summary: { rows: number; qty: number; shops: number; urgent: number; byAge: Record<string, number>; byType: Record<string, number> }
+  shops: PendingGroup[]; teams: PendingGroup[]; rows: PendingRow[]
+}
+export type ReturnRow = { prdtCd: string; styleNm: string | null; colorCd: string; sizeCd: string; shopId: string; shopNm: string | null; team: string | null
+  closed: boolean; stock: number; avail: number; qty: number; lastSale: string | null; daysNoSale: number | null; lastDelv: string | null
+  daysSinceDelv: number | null; skuShort: number }
+export type ReturnSku = { prdtCd: string; styleNm: string | null; colorCd: string; sizeCd: string; whStock: number; avail: number; demand: number; short: number
+  candidates: number; candQty: number; returnQty: number; left: number }
+export type ReturnResult = {
+  brand: string; brandNm: string; wh: string; from: string; to: string; allocAsOf: string; asOf: string; lookback: number; salesFrom: string
+  mode: 'need' | 'all'; modeNm: string
+  summary: { shortSkus: number; shortQty: number; returnQty: number; rows: number; shops: number; coveredSkus: number; partialSkus: number
+    noSourceSkus: number; coveredQty: number; excluded: Record<string, number> }
+  rows: ReturnRow[]; skus: ReturnSku[]; topShops: ShopQty[]; timing: Record<string, number>
+}
+export type AgingRow = { shopId: string; shopNm: string | null; team: string | null; prdtCd: string; styleNm: string | null; planYy: string | null
+  sesn: string | null; sesnNm: string | null; qty: number; amt: number; skus: number; days: number | null; neverSold: boolean; lastSale: string | null
+  lastDelv: string | null; firstDelv: string | null }
+export type AgingShop = { shopId: string; shopNm: string | null; team: string | null; closed: boolean; qty: number; amt: number; agedQty: number
+  agedAmt: number; agedStyles: number; agedRate: number | null }
+export type AgingStyle = { prdtCd: string; styleNm: string | null; planYy: string | null; sesn: string | null; sesnNm: string | null; qty: number; amt: number
+  agedQty: number; agedAmt: number; agedShops: number; maxDays: number | null }
+export type AgingReport = {
+  brand: string; brandNm: string; minDays: number; asOf: string; baseSec: number; ym: string; virtualQty: number
+  cond: { planYy: string[]; seasons: string[]; teams: string[]; prdt: string | null; includeVirtual: boolean }
+  summary: { qty: number; amt: number; rows: number; agedQty: number; agedAmt: number; agedRows: number; agedRate: number | null; shops: number
+    agedShops: number; agedStyles: number }
+  buckets: { key: string; name: string; qty: number; amt: number; rows: number }[]
+  shops: AgingShop[]; styles: AgingStyle[]; stylesTotal: number; detail: AgingRow[]; detailTotal: number; timing: Record<string, number>
+}
+export type AgingCond = { brand: string; minDays: number; planYy: string[]; seasons: string[]; teams: string[]; prdt: string; includeVirtual: boolean }
+export type AgingSku = { colorCd: string; sizeCd: string; qty: number; amt: number; lastSale: string | null; lastDelv: string | null; firstDelv: string | null; days: number | null }
 export type AskSeqns = { brand: string; askDt: string; next: number; used: { seqn: number; brand: string; brandNm: string; clsby: string; rows: number; confirmed: boolean; web: boolean }[] }
 
 const list = (v: string[]) => v.join(',')
@@ -294,6 +334,10 @@ export const rtQuery = (c: RtCond) =>
 export const allocQuery = (c: AllocCond) =>
   qs({ brand: c.brand, wh: c.wh, dateFrom: c.dateFrom, dateTo: c.dateTo, base: c.base, grdGrp: c.grdGrp, planYy: list(c.planYy),
     seasons: list(c.seasons), prdtGrps: list(c.prdtGrps), items: list(c.items), prdt: c.prdt.trim(), teams: list(c.teams), rate: c.rate })
+
+export const agingQuery = (c: AgingCond) =>
+  qs({ brand: c.brand, minDays: c.minDays, planYy: list(c.planYy), seasons: list(c.seasons), teams: list(c.teams), prdt: c.prdt.trim() || undefined,
+    includeVirtual: c.includeVirtual ? 'true' : undefined })
 
 async function json<T>(url: string, signal?: AbortSignal): Promise<T> {
   return (await apiFetch(url, { signal })).json()
@@ -326,10 +370,23 @@ export const stockApi = {
   allocRegistered: (brand: string, dateFrom: string, dateTo: string) => json<AllocRegistered>(`/api/stock-rt/alloc/registered?${qs({ brand, dateFrom, dateTo })}`),
   allocDelete: (brand: string, keys: (string | number)[][]) => post<DeleteResult>('/api/stock-rt/alloc/delete', { brand, keys }),
 
-  rtPerformance: (brand: string, dateFrom: string, dateTo: string, scope: string, refresh = false) =>
-    json<RtPerformance>(`/api/stock-rt/rt/performance?${qs({ brand, dateFrom, dateTo, scope, refresh: refresh ? 'true' : undefined })}`),
-  rtPerformanceExport: (brand: string, dateFrom: string, dateTo: string, scope: string) =>
-    downloadFile(`/api/stock-rt/rt/performance/export?${qs({ brand, dateFrom, dateTo, scope })}`, undefined, 'RT성과.xlsx'),
+  rtPerformance: (brand: string, dateFrom: string, dateTo: string, scope: string, refresh = false, includeVirtual = false) =>
+    json<RtPerformance>(`/api/stock-rt/rt/performance?${qs({ brand, dateFrom, dateTo, scope, refresh: refresh ? 'true' : undefined, includeVirtual: includeVirtual ? 'true' : undefined })}`),
+  rtPerformanceExport: (brand: string, dateFrom: string, dateTo: string, scope: string, includeVirtual = false) =>
+    downloadFile(`/api/stock-rt/rt/performance/export?${qs({ brand, dateFrom, dateTo, scope, includeVirtual: includeVirtual ? 'true' : undefined })}`, undefined, 'RT성과.xlsx'),
+  // ---- 미처리 RT 현황 · 창고 회수 · 장기 미판매 재고
+  pending: (brand: string, days: number, types: string[], includeVirtual: boolean, refresh = false) =>
+    json<PendingBoard>(`/api/stock-rt/pending?${qs({ brand, days, types: list(types), includeVirtual: includeVirtual ? 'true' : undefined, refresh: refresh ? 'true' : undefined })}`),
+  pendingExport: (brand: string, days: number, types: string[], includeVirtual: boolean) =>
+    downloadFile(`/api/stock-rt/pending/export?${qs({ brand, days, types: list(types), includeVirtual: includeVirtual ? 'true' : undefined })}`, undefined, '미처리RT현황.xlsx'),
+  returnRec: (c: AllocCond, lookback: number, mode: string, refresh = false, signal?: AbortSignal) =>
+    json<ReturnResult>(`/api/stock-rt/return?${allocQuery(c)}&${qs({ lookback, mode })}${refresh ? '&refresh=true' : ''}`, signal),
+  returnExport: (c: AllocCond, lookback: number, mode: string) =>
+    downloadFile(`/api/stock-rt/return/export?${allocQuery(c)}&${qs({ lookback, mode })}`, undefined, '창고회수추천.xlsx'),
+  aging: (c: AgingCond, refresh = false, signal?: AbortSignal) => json<AgingReport>(`/api/stock-rt/aging?${agingQuery(c)}${refresh ? '&refresh=true' : ''}`, signal),
+  agingExport: (c: AgingCond) => downloadFile(`/api/stock-rt/aging/export?${agingQuery(c)}`, undefined, '장기미판매재고.xlsx'),
+  agingSkus: (brand: string, shopId: string, prdtCd: string) => json<{ rows: AgingSku[] }>(`/api/stock-rt/aging/skus?${qs({ brand, shopId, prdtCd })}`),
+
   // ---- 자동 RT 설정 점검 · 창고 부족 → 매장 간 RT
   settingCheck: (c: RtCond) => json<SettingCheck>(`/api/stock-rt/rt/setting-check?${rtQuery(c)}`),
   settingExport: (c: RtCond) => downloadFile(`/api/stock-rt/rt/setting-check/export?${rtQuery(c)}`, undefined, '자동RT설정점검.xlsx'),

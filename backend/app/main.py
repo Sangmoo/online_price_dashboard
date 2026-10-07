@@ -1143,6 +1143,18 @@ def _alloc_args(brand: str | None = None, wh: str | None = None, dateFrom: str |
             "seasons": seasons, "prdt_grps": prdtGrps, "items": items, "prdt": prdt, "teams": teams, "rate": rate}
 
 
+def _json_gz(request: Request, obj) -> Response:
+    """큰 JSON(추천 전체 행 수천 ~ 수만 건)을 gzip 으로 보낸다 — 화면에서 100행씩 넘겨 보며 전체를 고르고 검색할 수 있게"""
+    import gzip
+    import json
+
+    data = json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
+    if len(data) > 20000 and "gzip" in (request.headers.get("accept-encoding") or ""):
+        return Response(gzip.compress(data, 5), media_type="application/json",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(data, media_type="application/json")
+
+
 @app.get("/api/stock-rt/options")
 def stock_rt_options(brand: str | None = None, me: dict = Depends(stock_page)):
     """조건 선택지: 브랜드(권한) · 시즌 · 팀 · 창고 · 판매보충기준 · 등급 그룹 · 최근 판매분 자동보충 실행 조건"""
@@ -1154,13 +1166,12 @@ def stock_rt_options(brand: str | None = None, me: dict = Depends(stock_page)):
 
 
 @app.get("/api/stock-rt/rt")
-def stock_rt_recommend(args: dict = Depends(_rt_args), refresh: bool = False, me: dict = Depends(stock_page)):
-    """매장 간 RT 추천 (자동 RT 규칙, 최대 31일). 화면에는 앞쪽 2,000행 · 못 채운 수요 1,000행만, 엑셀은 전부"""
+def stock_rt_recommend(request: Request, args: dict = Depends(_rt_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """매장 간 RT 추천 (자동 RT 규칙, 최대 31일). 전체 행을 gzip 으로 보내고 화면은 100행씩 넘겨 본다"""
     from . import stock_rt
 
     d = stock_rt.recommend(**args, allowed=brand_scope.brands_of(me), refresh=refresh)
-    return {**d, "rows": d["rows"][:stock_rt.MAX_ROWS], "unfilled": d["unfilled"][:1000],
-            "rowsTotal": len(d["rows"]), "unfilledTotal": len(d["unfilled"])}
+    return _json_gz(request, {**d, "rowsTotal": len(d["rows"]), "unfilledTotal": len(d["unfilled"])})
 
 
 @app.get("/api/stock-rt/rt/export")
@@ -1184,14 +1195,13 @@ def stock_rt_stats(brand: str | None = None, dateFrom: str | None = None, dateTo
 
 
 @app.get("/api/stock-rt/alloc")
-def stock_alloc_recommend(args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
-    """창고 → 매장 배분 추천 (판매분 자동보충 규칙, 최대 31일). 화면에는 배분 행 · 상품별 앞쪽 3,000행"""
+def stock_alloc_recommend(request: Request, args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """창고 → 매장 배분 추천 (판매분 자동보충 규칙, 최대 31일). 전체 행을 gzip 으로 (후보 매장 전체 allRows 는 상품별 팝업에서)"""
     from . import wh_alloc
 
     d = wh_alloc.recommend(**args, allowed=brand_scope.brands_of(me), refresh=refresh)
     out = {k: v for k, v in d.items() if k != "allRows"}
-    return {**out, "rows": d["rows"][:wh_alloc.MAX_ROWS], "skus": d["skus"][:wh_alloc.MAX_ROWS], "shortRows": d["shortRows"][:wh_alloc.MAX_ROWS],
-            "rowsTotal": len(d["rows"]), "skusTotal": len(d["skus"]), "shortRowsTotal": len(d["shortRows"])}
+    return _json_gz(request, {**out, "rowsTotal": len(d["rows"]), "skusTotal": len(d["skus"]), "shortRowsTotal": len(d["shortRows"])})
 
 
 @app.get("/api/stock-rt/alloc/candidates")
@@ -1321,19 +1331,19 @@ def stock_rt_setting_export(args: dict = Depends(_rt_args), me: dict = Depends(s
 
 @app.get("/api/stock-rt/rt/performance")
 def stock_rt_performance(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, scope: str = "web",  # noqa: N803
-                         refresh: bool = False, me: dict = Depends(stock_page)):
-    """RT 성과: 본사지시 RT 의 매장 수락 · 거부 · 미처리, 거부 사유, 받은 매장 7일 내 판매 전환"""
+                         refresh: bool = False, includeVirtual: bool = False, me: dict = Depends(stock_page)):  # noqa: N803
+    """RT 성과: 본사지시 RT 의 매장 수락 · 거부 · 미처리, 거부 사유, 받은 매장 7일 내 판매 전환 (행사 · 가상 매장은 기본 제외)"""
     from . import stock_perf
 
-    return stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me), refresh=refresh)
+    return stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me), refresh=refresh, include_virtual=includeVirtual)
 
 
 @app.get("/api/stock-rt/rt/performance/export")
 def stock_rt_performance_export(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, scope: str = "web",  # noqa: N803
-                                me: dict = Depends(stock_page)):
+                                includeVirtual: bool = False, me: dict = Depends(stock_page)):  # noqa: N803
     from . import stock_perf
 
-    d = stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me))
+    d = stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me), include_virtual=includeVirtual)
     content = stock_perf.export_xlsx(d)
     downloads.record(me, "stock_rt", "RT성과", {"brand": d["brand"], "from": d["from"], "to": d["to"], "scope": scope},
                      rows=len(d["senders"]), size=len(content))
@@ -1341,11 +1351,11 @@ def stock_rt_performance_export(brand: str | None = None, dateFrom: str | None =
 
 
 @app.get("/api/stock-rt/alloc/short-rt")
-def stock_alloc_short_rt(args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
+def stock_alloc_short_rt(request: Request, args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
     """창고 부족 → 매장 간 RT 로 채우기 추천 (같은 창고 배분 조건의 창고 부족 행)"""
     from . import stock_rt
 
-    return stock_rt.fill_shortage(args, brand_scope.brands_of(me), refresh=refresh)
+    return _json_gz(request, stock_rt.fill_shortage(args, brand_scope.brands_of(me), refresh=refresh))
 
 
 @app.post("/api/stock-rt/alloc/short-rt/preview")
@@ -1362,6 +1372,81 @@ def stock_alloc_short_rt_register(body: dict, args: dict = Depends(_alloc_args),
     from . import stock_write
 
     return stock_write.rt_register(me, args, body.get("keys"), body.get("indcDt"), brand_scope.brands_of(me), source="short")
+
+
+# ---- 미처리 RT 현황 · 창고 회수 추천 · 장기 미판매 재고
+def _codes(v: str | None) -> list[str]:
+    return [x for x in (v or "").split(",") if x]
+
+
+@app.get("/api/stock-rt/pending")
+def stock_pending_board(brand: str | None = None, days: int = 14, types: str | None = None, includeVirtual: bool = False,  # noqa: N803
+                        refresh: bool = False, me: dict = Depends(stock_page)):
+    """매장이 아직 처리하지 않은 RT 요청 (본사지시 · 자동 RT · 매장간), 처리할 매장별 · 경과 시간별"""
+    from . import stock_pending
+
+    return stock_pending.board(brand, days, _codes(types) or None, includeVirtual, brand_scope.brands_of(me), refresh)
+
+
+@app.get("/api/stock-rt/pending/export")
+def stock_pending_export(brand: str | None = None, days: int = 14, types: str | None = None, includeVirtual: bool = False,  # noqa: N803
+                         me: dict = Depends(stock_page)):
+    from . import stock_pending
+
+    d = stock_pending.board(brand, days, _codes(types) or None, includeVirtual, brand_scope.brands_of(me))
+    content = stock_pending.export_xlsx(d)
+    downloads.record(me, "stock_rt", "미처리RT현황", {"brand": d["brand"], "days": days}, rows=len(d["rows"]), size=len(content))
+    return _xlsx_response(content, f"미처리RT현황_{d['brandNm']}_{d['to']}.xlsx")
+
+
+@app.get("/api/stock-rt/return")
+def stock_return_recommend(request: Request, args: dict = Depends(_alloc_args), lookback: int = 14, mode: str = "need", refresh: bool = False,
+                           me: dict = Depends(stock_page)):
+    """창고 회수 추천: 창고 부족 상품을 최근 판매 없는 매장 재고에서 회수 (추천만)"""
+    from . import stock_return
+
+    return _json_gz(request, stock_return.recommend(args, lookback, mode, brand_scope.brands_of(me), refresh))
+
+
+@app.get("/api/stock-rt/return/export")
+def stock_return_export(args: dict = Depends(_alloc_args), lookback: int = 14, mode: str = "need", me: dict = Depends(stock_page)):
+    from . import stock_return
+
+    d = stock_return.recommend(args, lookback, mode, brand_scope.brands_of(me))
+    content = stock_return.export_xlsx(d)
+    downloads.record(me, "stock_rt", "창고회수추천", {"brand": d["brand"], "lookback": lookback, "mode": mode}, rows=len(d["rows"]), size=len(content))
+    return _xlsx_response(content, f"창고회수추천_{d['brandNm']}_{d['to']}.xlsx")
+
+
+def _aging_args(brand: str | None = None, minDays: int = 90, planYy: str | None = None, seasons: str | None = None,  # noqa: N803
+                teams: str | None = None, prdt: str | None = None, includeVirtual: bool = False) -> dict:  # noqa: N803
+    return {"brand": brand, "min_days": minDays, "plan_yy": planYy, "seasons": seasons, "teams": teams, "prdt": prdt,
+            "include_virtual": includeVirtual}
+
+
+@app.get("/api/stock-rt/aging")
+def stock_aging_report(request: Request, args: dict = Depends(_aging_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """장기 미판매 재고 (매장 × 스타일, 미판매 일수 구간 · 매장별 · 스타일별)"""
+    from . import stock_aging
+
+    return _json_gz(request, stock_aging.report(**args, allowed=brand_scope.brands_of(me), refresh=refresh))
+
+
+@app.get("/api/stock-rt/aging/skus")
+def stock_aging_skus(shopId: str, prdtCd: str, brand: str | None = None, me: dict = Depends(stock_page)):  # noqa: N803
+    from . import stock_aging
+
+    return {"rows": stock_aging.skus(brand, shopId, prdtCd, brand_scope.brands_of(me))}
+
+
+@app.get("/api/stock-rt/aging/export")
+def stock_aging_export(args: dict = Depends(_aging_args), me: dict = Depends(stock_page)):
+    from . import stock_aging
+
+    d = stock_aging.report(**args, allowed=brand_scope.brands_of(me))
+    content = stock_aging.export_xlsx(d)
+    downloads.record(me, "stock_rt", "장기미판매재고", {"brand": d["brand"], "minDays": d["minDays"]}, rows=len(d["detail"]), size=len(content))
+    return _xlsx_response(content, f"장기미판매재고_{d['brandNm']}_{d['minDays']}일.xlsx")
 
 
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")

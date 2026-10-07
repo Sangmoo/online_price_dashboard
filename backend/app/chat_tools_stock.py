@@ -6,6 +6,9 @@
 - check_auto_rt_settings: 자동 RT 설정 점검 (보낼 수 있는데 지정가능수 0 · 부족한 매장과 권장값)
 - pick_store_rt_rows: 매장 간 RT 추천에서 조건에 맞는 행을 골라 [화면에서 열고 선택] 카드 (관리자는 화면에서 확인 후 직접 지시)
 - get_rt_performance: RT 성과 (본사지시 RT 수락 · 거부 · 미처리, 거부 사유, 받은 매장 7일 내 판매 전환)
+- get_pending_rt: 매장이 아직 처리하지 않은 RT 요청 (처리할 매장별 · 경과 시간 · 본사지시 자동거부 임박)
+- recommend_wh_return: 창고 회수 추천 (창고 부족 상품을 판매 없는 매장 재고에서 회수)
+- get_aging_stock: 장기 미판매 재고 (매장 × 스타일, 미판매 일수 구간 · 매장별 · 스타일별)
 - open_stock_rt_screen: 대화로 화면 열기 — 조건을 정리해 대화창에 [화면에서 열기] 카드를 띄운다 (누르면 그 조건으로 화면을 열고 계산)
 결과는 화면과 같은 캐시를 써서, 화면에서 본 조건이면 바로 돌려준다. 브랜드 데이터 권한(allowed)을 그대로 적용한다.
 """
@@ -206,9 +209,77 @@ TOOLS += [
         "eager_input_streaming": True,
     },
 ]
+TOOLS += [
+    {
+        "name": "get_pending_rt",
+        "description": (
+            "미처리 RT 현황: 매장이 아직 수락 · 거부하지 않은 RT 요청(T_SHOP_REQ 미처리) — 본사지시 · 자동 RT · 매장간, 요청일 최근 N일(기본 14). "
+            "처리할 매장(보내는 매장)별 건수 · 가장 오래된 경과 시간 · 경과 구간(1일 미만 · 1~2일 · 2~3일 · 3일 이상), "
+            "본사지시는 3일 무응답이면 자동거부되므로 48시간 넘은 건은 '자동거부 임박'. 행사 · 가상 매장은 기본 제외. "
+            "'RT 처리 안 한 매장 어디야?', '자동거부 될 RT 있어?' 같은 질문에 씁니다. view=shops(매장별, 기본) · teams · rows(요청 목록)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "days": {"type": "integer", "minimum": 1, "maximum": 31},
+                "types": {"type": "array", "items": {"type": "string", "enum": ["본사지시", "자동 RT", "매장간"]}},
+                "shop_id": {"type": "string", "description": "이 매장(처리할 매장) 요청만"},
+                "view": {"type": "string", "enum": ["shops", "teams", "rows"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
+        "name": "recommend_wh_return",
+        "description": (
+            "창고 회수 추천: 창고 → 매장 배분(판매분 자동보충 규칙, recommend_wh_allocation 과 같은 조건 · 기본 최근 자동보충 실행 조건 · 어제)에서 "
+            "창고 재고가 모자라 보충 못 하는 상품을, 최근 N일(기본 14) 그 상품 판매가 없는 매장 재고에서 창고로 회수하도록 추천합니다. "
+            "폐점 · 비정상 매장 → 판매 이력 없는/오래된 매장 순. mode=need(부족 수량만큼, 기본) · all(판매 없는 재고 전부). "
+            "'창고 부족한 거 어디서 회수하면 돼?', '회수 추천' 같은 질문에 씁니다. 추천일 뿐 ERP 에 반품 지시를 넣지 않는다고 밝히세요. "
+            "view=summary · rows(회수 행) · skus(상품별)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "date_from": _FROM, "date_to": _TO, "seasons": _SEASONS,
+                "prdt_cd": {"type": "string", "description": "품번 (앞부분만 넣어도 됨)"},
+                "lookback_days": {"type": "integer", "minimum": 3, "maximum": 90, "description": "판매 없음 기준 기간 (기본 14일)"},
+                "mode": {"type": "string", "enum": ["need", "all"]},
+                "view": {"type": "string", "enum": ["summary", "rows", "skus"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
+        "name": "get_aging_stock",
+        "description": (
+            "장기 미판매 재고: 이번 달 매장 재고 중 그 매장에서 오래 팔리지 않은 재고(매장 × 스타일). 미판매 일수 = 오늘 − 최종판매일(판매 이력 없으면 최초출고일). "
+            "min_days(기본 90) 이상을 장기 미판매로 봅니다. 구간별(30 · 60 · 90 · 180 · 365일) 수량 · 금액, 매장별 · 스타일별 장기 미판매 재고와 금액. "
+            "기획년도 · 시즌 · 팀 · 품번으로 거를 수 있고 행사 · 가상 매장은 기본 제외. 처음 계산은 1~2분 걸릴 수 있습니다(이후 12시간 바로). "
+            "'안 팔리는 재고 많은 매장', '1년 넘게 안 팔린 재고', '장기 재고 금액' 같은 질문에 씁니다. view=summary · shops · styles · detail."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "min_days": {"type": "integer", "minimum": 7, "maximum": 1000},
+                "plan_yy": {"type": "array", "items": {"type": "string"}}, "seasons": _SEASONS, "teams": _TEAMS,
+                "prdt_cd": {"type": "string"}, "shop_id": {"type": "string", "description": "이 매장만 (detail 보기)"},
+                "view": {"type": "string", "enum": ["summary", "shops", "styles", "detail"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+]
 TOOL_LABELS = {"recommend_store_rt": "매장 간 RT 추천", "recommend_wh_allocation": "창고 → 매장 배분 추천", "get_auto_rt_stats": "자동 RT 현황",
                "check_auto_rt_settings": "자동 RT 설정 점검", "open_stock_rt_screen": "재고 재배치 화면 열기",
-               "pick_store_rt_rows": "RT 추천 골라 선택", "get_rt_performance": "RT 성과"}
+               "pick_store_rt_rows": "RT 추천 골라 선택", "get_rt_performance": "RT 성과", "get_pending_rt": "미처리 RT 현황",
+               "recommend_wh_return": "창고 회수 추천", "get_aging_stock": "장기 미판매 재고"}
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
@@ -303,6 +374,12 @@ def run(name: str, inp: dict, *, allowed: list[str] | None) -> dict:
             return _pick(inp, allowed)
         if name == "get_rt_performance":
             return _perf(inp, allowed)
+        if name == "get_pending_rt":
+            return _pending(inp, allowed)
+        if name == "recommend_wh_return":
+            return _return(inp, allowed)
+        if name == "get_aging_stock":
+            return _aging(inp, allowed)
     except HTTPException as ex:
         raise _http(ex)
     raise StockToolError(f"알 수 없는 도구: {name}")
@@ -492,7 +569,7 @@ def _open(inp: dict, allowed: list[str] | None) -> dict:
     }
 
 
-PICK_MAX = 2000      # 화면에 보이는 추천 행 수와 같음 (그보다 뒤 행은 화면에서 고를 수 없음)
+PICK_MAX = 5000      # 한 번에 고르는 최대 행 (화면은 전체 행을 100행씩 넘겨 본다)
 
 
 def _pick(inp: dict, allowed: list[str] | None) -> dict:
@@ -510,8 +587,7 @@ def _pick(inp: dict, allowed: list[str] | None) -> dict:
     froms = {x.upper() for x in _list(inp, "from_shop_ids")}
     tos = {x.upper() for x in _list(inp, "to_shop_ids")}
     min_qty = _int(inp, "min_qty", 1, 1, 1000)
-    visible = d["rows"][:PICK_MAX]
-    rows = [r for r in visible if r["toFailCnt"] >= fail and r["toSales"] >= rsales and (ssales is None or r["fromSales"] <= ssales)
+    rows = [r for r in d["rows"] if r["toFailCnt"] >= fail and r["toSales"] >= rsales and (ssales is None or r["fromSales"] <= ssales)
             and (not whys or r["why"] in whys) and (not froms or r["fromShopId"] in froms) and (not tos or r["toShopId"] in tos) and r["qty"] >= min_qty]
     crit = []
     if fail:
@@ -538,8 +614,10 @@ def _pick(inp: dict, allowed: list[str] | None) -> dict:
         "note": "아직 선택 · 등록하지 않았습니다. 대화창 카드의 [화면에서 열고 선택]을 누르면 화면에서 이 행들이 체크되고, 관리자가 확인 후 [본사지시 RT 지시]를 눌러야 ERP 에 들어갑니다.",
         "rows": rows[:10],
     }
-    if len(d["rows"]) > PICK_MAX:
-        result["warning"] = f"추천이 {len(d['rows']):,}행이라 화면에 보이는 앞쪽 {PICK_MAX:,}행 안에서만 골랐습니다."
+    if len(rows) > PICK_MAX:
+        result["warning"] = f"조건에 맞는 행이 {len(rows):,}건이라 앞쪽 {PICK_MAX:,}건만 고릅니다. 기준을 더 좁혀 보세요."
+        rows = rows[:PICK_MAX]
+        qty = sum(r["qty"] for r in rows)
     out: dict = {"result": result, "table": _table(stock_rt.RT_COLS, rows[:30])}
     if rows:
         lines = [f"계산 조건: {stock_rt.cond_text(d)}", f"고른 기준: {label}", f"선택: {len(rows):,}건 · {qty:,}장 (추천 {len(d['rows']):,}건 중)"]
@@ -574,3 +652,84 @@ def _perf(inp: dict, allowed: list[str] | None) -> dict:
     from .stock_perf import PERF_COLS
 
     return {"result": {**result, "rows": rows[:10]}, "table": _table(PERF_COLS, rows)}
+
+
+def _pending(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_pending
+
+    view = _str(inp, "view") or "shops"
+    if view not in ("shops", "teams", "rows"):
+        raise StockToolError("view 는 shops, teams, rows 중 하나입니다.")
+    limit = _int(inp, "limit", 30, 1, 200)
+    names = {v: k for k, v in stock_pending.TYPES.items()}
+    tps = _list(inp, "types")
+    if any(t not in names for t in tps):
+        raise StockToolError("types 는 본사지시 · 자동 RT · 매장간 중에서 고르세요.")
+    d = stock_pending.board(_str(inp, "brand"), _int(inp, "days", 14, 1, 31), [names[t] for t in tps] or None, False, allowed)
+    shop = (_str(inp, "shop_id") or "").upper() or None
+    result: dict[str, Any] = {"brand": d["brandNm"], "period": f"{d['from']} ~ {d['to']}", "asOf": d["asOf"], **d["summary"],
+                              "byType": {d["typeNames"][k]: v for k, v in d["summary"]["byType"].items()},
+                              "byAge": {a["name"]: d["summary"]["byAge"][a["key"]] for a in d["ages"]},
+                              "note": f"본사지시는 3일 무응답이면 자동거부 — {d['urgentHours']}시간 넘은 본사지시 = urgent (자동거부 임박). 행사 · 가상 매장 제외"}
+    if view == "rows" or shop:
+        rows = [r for r in d["rows"] if not shop or r["fromShopId"] == shop][:limit]
+        return {"result": {**result, "rows": rows[:20]}, "table": _table(stock_pending.PENDING_COLS, rows)}
+    rows = (d["teams"] if view == "teams" else d["shops"])[:limit]
+    return {"result": {**result, "rows": rows[:20]}, "table": _table(stock_pending.SHOP_COLS, rows)}
+
+
+def _alloc_args_from(inp: dict, allowed: list[str] | None) -> dict:
+    """recommend_wh_allocation 과 같은 시작 조건 (최근 판매분 자동보충 실행 조건 + 주어진 값)"""
+    brand = sc.brand_code(_str(inp, "brand"), allowed)
+    args: dict[str, Any] = {"brand": brand, "frm": _str(inp, "date_from"), "to": _str(inp, "date_to")}
+    runs = wh_alloc.recent_runs(brand, 1)
+    if runs:
+        r = runs[0]
+        args.update({"wh": r["wh"], "base": r["base"], "grd_grp": r["grdGrp"], "plan_yy": r["planYy"], "seasons": r["seasons"],
+                     "prdt_grps": r["prdtGrps"], "items": r["items"], "prdt": r["prdt"], "teams": r["teams"], "rate": r["rate"]})
+    if _list(inp, "seasons"):
+        args["seasons"] = _seasons(_list(inp, "seasons"))
+    if _str(inp, "prdt_cd"):
+        args["prdt"] = _str(inp, "prdt_cd")
+    return args
+
+
+def _return(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_return
+
+    view = _str(inp, "view") or "summary"
+    if view not in ("summary", "rows", "skus"):
+        raise StockToolError("view 는 summary, rows, skus 중 하나입니다.")
+    limit = _int(inp, "limit", 30, 1, 200)
+    mode = _str(inp, "mode") or "need"
+    d = stock_return.recommend(_alloc_args_from(inp, allowed), _int(inp, "lookback_days", 14, 3, 90), mode, allowed)
+    result: dict[str, Any] = {"brand": d["brandNm"], "warehouse": d["wh"], "allocPeriod": f"{d['from']} ~ {d['to']}", "asOf": d["asOf"],
+                              "noSaleSince": d["salesFrom"], "mode": d["modeNm"], **d["summary"],
+                              "note": "추천만 (ERP 에 반품 지시를 넣지 않음). 받아야 하는 매장 · 최근 판매 매장 · 행사 · 가상 매장은 회수 후보에서 뺌",
+                              "topShops": d["topShops"][:10]}
+    if view == "skus":
+        return {"result": {**result, "rows": d["skus"][:20]}, "table": _table(stock_return.RETURN_SKU_COLS, d["skus"][:limit])}
+    return {"result": {**result, "rows": d["rows"][:10 if view == "summary" else 20]},
+            "table": _table(stock_return.RETURN_COLS, d["rows"][:limit if view == "rows" else 30])}
+
+
+def _aging(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_aging
+
+    view = _str(inp, "view") or "summary"
+    if view not in ("summary", "shops", "styles", "detail"):
+        raise StockToolError("view 는 summary, shops, styles, detail 중 하나입니다.")
+    limit = _int(inp, "limit", 30, 1, 200)
+    d = stock_aging.report(_str(inp, "brand"), _int(inp, "min_days", 90, 7, 1000), _list(inp, "plan_yy"), _seasons(_list(inp, "seasons")),
+                           _teams(_list(inp, "teams")), _str(inp, "prdt_cd"), False, allowed)
+    shop = (_str(inp, "shop_id") or "").upper() or None
+    result: dict[str, Any] = {"brand": d["brandNm"], "minDays": d["minDays"], "stockAsOf": d["asOf"], **d["summary"],
+                              "buckets": [{"name": b["name"], "qty": b["qty"], "amt": b["amt"]} for b in d["buckets"]],
+                              "note": "미판매 일수 = 오늘 − 그 매장 최종판매일(없으면 최초출고일). 금액 = ERP 재고금액. 행사 · 가상 매장 제외"}
+    if view == "detail" or shop:
+        rows = [r for r in d["detail"] if not shop or r["shopId"] == shop][:limit]
+        return {"result": {**result, "rows": rows[:20]}, "table": _table(stock_aging.AGING_COLS, rows)}
+    if view == "styles":
+        return {"result": {**result, "rows": d["styles"][:20]}, "table": _table(stock_aging.AGING_STYLE_COLS, d["styles"][:limit])}
+    return {"result": {**result, "rows": d["shops"][:10 if view == "summary" else 20]},
+            "table": _table(stock_aging.AGING_SHOP_COLS, d["shops"][:limit if view == "shops" else 30])}

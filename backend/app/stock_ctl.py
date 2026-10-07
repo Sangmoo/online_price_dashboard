@@ -216,14 +216,39 @@ def chunks(values: list, n: int = 500):
 
 
 # ---------------------------------------------------------------- 매장 기준 정보
+# 행사 · 가상 매장 (재고 재배치 추천 · 통계에서 제외): ERP 매장 마스터의 가상매장구분(C708) · 유통형태(C002) · 매장MD유형(C387) · 매장관리구분(C377) · 실매장 여부
+VIRTUAL_FORMS = {"C00206": "해외", "C00207": "특판", "C00208": "사내", "C00209": "기타 유통", "C00210": "사입/판매분자동생성"}
+VIRTUAL_MD = {"C3876": "해외법인", "C3877": "홈쇼핑", "C3878": "이관", "C3879": "기타 MD", "C3880": "EBIZ", "C3881": "사내행사"}
+VIRTUAL_MGN = {"C3775": "홈쇼핑", "C3776": "이관", "C3777": "행사", "C3778": "업체", "C3779": "기타 관리"}
+VIRTUAL_SIMUL = {"C708010": "LOSS매장", "C708020": "재고조정매장", "C708030": "해외매장", "C708040": "사내매장", "C708050": "온라인매장",
+                 "C708060": "클레임판매매장", "C708070": "오픈매장", "C708100": "직원구매매장", "C708110": "B품 매장"}
+
+
+def virtual_reason(simul: str | None, form: str | None, md: str | None, mgn: str | None, real: str | None) -> str | None:
+    """행사 · 가상 매장이면 이유(가장 구체적인 것 하나), 아니면 None"""
+    if simul:
+        return VIRTUAL_SIMUL.get(simul, "가상매장")
+    if md in VIRTUAL_MD:
+        return VIRTUAL_MD[md]
+    if mgn in VIRTUAL_MGN:
+        return VIRTUAL_MGN[mgn]
+    if form in VIRTUAL_FORMS:
+        return VIRTUAL_FORMS[form]
+    if real == "N":
+        return "실매장 아님"
+    return None
+
+
 def shops() -> dict[str, dict]:
     """매장 마스터 + 자동 RT 그룹 설정 (10분 캐시)"""
     def load():
         out: dict[str, dict] = {}
-        for sid, nm, mo, dshop, team, typ, attr2 in db.query(
-                "SELECT SHOP_ID, SHOP_NM, MO_BRD_CD, DSHOP_CLSBY, TEAM_CD, SHOP_TYPE, ATTR2 FROM T_SHOP")[1]:
+        for sid, nm, mo, dshop, team, typ, attr2, simul, form, md, mgn, real in db.query(
+                """SELECT SHOP_ID, SHOP_NM, MO_BRD_CD, DSHOP_CLSBY, TEAM_CD, SHOP_TYPE, ATTR2, SIMUL_SHOP_CLSBY, SHOP_FORM, SHOP_MD_TYPE,
+                          MGN_CLSBY, REAL_SHOP_YN FROM T_SHOP""")[1]:
+            why = virtual_reason(simul, form, md, mgn, real)
             out[sid] = {"shopId": sid, "shopNm": nm, "moBrd": mo, "normal": dshop == "C0500", "team": team, "type": typ,
-                        "attr2": attr2, "rt": None}
+                        "attr2": attr2, "rt": None, "virtual": bool(why), "virtualWhy": why}
         for r in db.query("""SELECT SHOP_ID, RT_GRP_ID, REQ_ABLE_QTY, REQ_ABLE_YN, ASIGN_ABLE_QTY, MIN_RETAIN_STOCK_QTY,
                                     F_DELV_AF_DAYS, L_DELV_AF_DAYS
                                FROM T_SHOP_RT_GRP_DETL""")[1]:

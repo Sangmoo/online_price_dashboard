@@ -468,6 +468,12 @@
 .stock-short-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: rgba(245, 158, 11, 0.5); vertical-align: -1px; }
 .stock-short-note, .stock-done { margin: 10px 12px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .stock-subbar.flat { padding: 0; border-bottom: 0; }
+.stock-pager { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-top: 1px solid var(--border); }
+.stock-pager-btns { display: flex; align-items: center; gap: 2px; }
+.stock-pager-btns .input.sm { width: auto; min-width: 84px; }
+.stock-pager > .btn { margin-left: auto; }
+.stock-aging-buckets { padding: 14px 16px; }
+.stock-head .seg.big { flex-wrap: wrap; }
 .stock-ai-pick .check-label { margin-left: auto; }
 .stock-perf > .seg { align-self: flex-start; }
 .stock-short-note .btn { margin-left: auto; }

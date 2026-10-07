@@ -39,15 +39,16 @@ def _reason(v: str | None) -> str:
 
 
 def performance(brand: str | None = None, frm: str | None = None, to: str | None = None, scope: str = "web",
-                allowed: list[str] | None = None, refresh: bool = False) -> dict:
+                allowed: list[str] | None = None, refresh: bool = False, include_virtual: bool = False) -> dict:
     b = sc.brand_code(brand, allowed)
     f, t = sc.period(frm, to, 14)
     if scope not in ("web", "all"):
         sc.bad("범위는 web(이 화면에서 지시) 또는 all(본사지시 전체) 입니다.")
-    return sc.cached(("rtperf", b, f, t, scope), CACHE_TTL, lambda: _compute(b, f, t, scope), force=refresh)
+    iv = bool(include_virtual)
+    return sc.cached(("rtperf", b, f, t, scope, iv), CACHE_TTL, lambda: _compute(b, f, t, scope, iv), force=refresh)
 
 
-def _compute(brand: str, f: str, t: str, scope: str) -> dict:
+def _compute(brand: str, f: str, t: str, scope: str, include_virtual: bool = False) -> dict:
     rows = db.query(f"""SELECT /*+ INDEX(I T_INDC_RT_IDX01) */ I.INDC_ID, I.DELV_MOVE_SHOP_ID, I.STOR_MOVE_SHOP_ID, I.PRDT_CD, I.COLOR_CD, I.SIZE_CD,
                                NVL(I.INDC_QTY, 0), I.INDC_DT, NVL(I.CNFM_YN, 'N'), R.INS_DAY, R.PRCS_CLSBY, R.PRCS_DAY, R.RESN, R.DEL_DAY,
                                R.REQ_PRCS_DT, R.PRCS_USERID
@@ -55,8 +56,13 @@ def _compute(brand: str, f: str, t: str, scope: str) -> dict:
                          WHERE I.INDC_DT BETWEEN :f AND :t AND I.BRD_CD = :b AND I.DEL_DAY IS NULL {"AND I.ATTR1 = :m" if scope == "web" else ""}
                            AND R.MAKE_DT(+) = I.SHOP_REQ_MAKE_DT AND R.SEQ(+) = I.SHOP_REQ_SEQ""",
                     {"f": f, "t": t, "b": brand, **({"m": sc.WEB_MARK} if scope == "web" else {})}, arraysize=20000)[1]
+    shops = sc.shops()
     items = []
+    virtual_qty = 0
     for (iid, dl, st, p, c, s, q, dt, cnfm, req_ins, prcs, prcs_day, resn, rdel, req_prcs_dt, prcs_user) in rows:
+        if not include_virtual and ((shops.get(dl) or {}).get("virtual") or (shops.get(st) or {}).get("virtual")):
+            virtual_qty += int(q)              # 행사 · 가상 매장(오픈매장 · 사내 · 온라인 등)이 낀 지시는 통계에서 뺀다
+            continue
         if cnfm != "Y":
             status = "N"
         elif rdel:
@@ -98,7 +104,6 @@ def _compute(brand: str, f: str, t: str, scope: str) -> dict:
         x["matured"] = bool(a and until <= today)
         x["sold"] = bool(a and any(a <= _d8(d) <= until for d in sold.get((x["to"],) + x["sku"], [])))
 
-    shops = sc.shops()
     nm = {sid: sh["shopNm"] for sid, sh in shops.items()}
     tm = sc.team_names()
 
@@ -141,6 +146,7 @@ def _compute(brand: str, f: str, t: str, scope: str) -> dict:
         g["pending"] += x["qty"] if x["status"] in ("C2954", "N") else 0
     return {
         "brand": brand, "brandNm": sc.BRAND_CODES[brand], "from": sc.ymd_label(f), "to": sc.ymd_label(t), "scope": scope,
+        "includeVirtual": include_virtual, "virtualQty": virtual_qty,
         "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"), "soldDays": SOLD_DAYS,
         "summary": {"total": sum(x["qty"] for x in items), "byStatus": [{"code": k, "name": v, "qty": tot[k]} for k, v in STATUS_NM.items() if tot[k]],
                     "accepted": tot["C2951"], "denied": tot["C2952"], "autoDenied": tot["AUTO"], "pending": tot["C2954"] + tot["N"],

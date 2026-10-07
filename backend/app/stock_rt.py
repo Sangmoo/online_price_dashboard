@@ -41,7 +41,7 @@ REASONS = {"no_stock": "같은 RT 그룹에 재고 없음", "rules": "재고는 
            "recv_limit": "받는 매장 하루 요청가능수 초과"}
 RULES = {"moving": "이동중 · 요청중 · 지시 · 최소보유로 남는 재고 없음", "days": "최초/최종 출고 경과일 미달", "control": "자동 RT 반출 제어 · 제외 스타일",
          "grade": "매장등급 없음", "abnormal": "정상 매장 아님", "today": "오늘 같은 상품 지정받음", "asign0": "자동 RT 지정가능수 0",
-         "nobase": "매장 상품 기준 없음(2023년 이후 출고 없음)"}
+         "nobase": "매장 상품 기준 없음(2023년 이후 출고 없음)", "virtual": "행사 · 가상 매장"}
 
 def _days_since(d8: str | None, now: date) -> int:
     if not d8:
@@ -318,6 +318,8 @@ def _match_senders(brand, recv, stock, sales, res, shops, graded, ctl, limits, o
         real = q - res["moving"].get(k, 0) - res["pending"].get(k, 0) - res["instrOut"].get(k, 0)
         if not sh["normal"]:
             excluded["abnormal"] += 1
+        elif sh.get("virtual"):
+            excluded["virtual"] += 1
         elif sid not in graded:
             excluded["grade"] += 1
         elif limits and rt["asign"] <= 0:
@@ -452,7 +454,7 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
     t0 = time.perf_counter()
     res = _reserved(brand, td)
     lap("reserved", t0)
-    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
+    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0, "virtual": 0}
     recv: list[dict] = []
     for k in sorted(sold | set(failed)):
         st = stock.get(k, 0)
@@ -462,6 +464,9 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
         sh = shops.get(sid)
         if not sh or not sh["rt"] or not sh["normal"]:
             skipped["noGroup"] += 1
+            continue
+        if sh.get("virtual"):                     # 행사 · 가상 매장은 받는 매장에서 뺀다
+            skipped["virtual"] += 1
             continue
         if tm and sh["team"] not in tm:
             skipped["team"] += 1
@@ -548,7 +553,7 @@ def _fill_shortage(d: dict) -> dict:
     stock = {tuple(r[:4]): int(r[4]) for r in _stock(pcs, td[:6])} if pcs else {}
     res = _reserved(brand, td)
     timing["stock"] = round(time.perf_counter() - t0, 2)
-    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
+    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0, "virtual": 0}
     recv: list[dict] = []
     for r in short:
         sid, p, c, s = r["shopId"], r["prdtCd"], r["colorCd"], r["sizeCd"]
@@ -556,6 +561,9 @@ def _fill_shortage(d: dict) -> dict:
         sh = shops.get(sid)
         if not sh or not sh["rt"] or not sh["normal"]:
             skipped["noGroup"] += 1
+            continue
+        if sh.get("virtual"):
+            skipped["virtual"] += 1
             continue
         if ctl.controlled_id(sid, p, c, "36"):
             skipped["recvCtl"] += 1

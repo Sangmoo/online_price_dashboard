@@ -18,7 +18,8 @@ from collections import deque
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
+# ERP_LOG_DIR: 다른 폴더에 쓰기 (자동 테스트는 임시 폴더 — 테스트가 일부러 내는 오류가 운영 error.log 에 섞이지 않게)
+LOG_DIR = Path(os.getenv("ERP_LOG_DIR") or Path(__file__).resolve().parents[1] / "logs")
 APP_LOG = LOG_DIR / "app.log"
 ERROR_LOG = LOG_DIR / "error.log"
 SLOW_SQL_SEC = float(os.getenv("SLOW_SQL_SEC", "3"))
