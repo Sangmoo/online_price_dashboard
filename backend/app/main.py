@@ -1218,7 +1218,10 @@ def stock_alloc_export(args: dict = Depends(_alloc_args), me: dict = Depends(sto
 
 # ---- ERP 등록 · 삭제 (본사지시 RT 지시 · 배분의뢰). 지금은 관리자만 — 나중에 일반 사용자에게 열 때는 stock_writer 만 바꾸면 된다
 def stock_writer(request: Request) -> dict:
+    """ERP 에 넣는 INS_USERID 는 로그인한 사번(me["id"]). 다른 사용자 화면 미리보기 중에는 그 사람 사번으로 들어가므로 막는다"""
     me = stock_page(request)
+    if ">" in str(getattr(getattr(request, "state", None), "usr_id", "") or ""):
+        raise auth.AuthError(403, "사용자 화면 미리보기 중에는 ERP 에 등록 · 삭제할 수 없습니다.", "FORBIDDEN")
     if me["role"] != "ADMIN":
         raise auth.AuthError(403, "ERP 등록 · 삭제는 관리자만 할 수 있습니다.", "FORBIDDEN")
     return me
@@ -1293,6 +1296,51 @@ def stock_alloc_write_delete(body: dict, me: dict = Depends(stock_writer)):
     from . import stock_write
 
     return stock_write.alloc_delete(me, body.get("brand"), body.get("keys"), brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/rt/setting-check")
+def stock_rt_setting_check(args: dict = Depends(_rt_args), me: dict = Depends(stock_page)):
+    """자동 RT 설정 점검: 보낼 수 있는 매장의 지정가능수(ASIGN_ABLE_QTY) · 실제 지정 수 · 권장값 (추천은 하루 한도 없이)"""
+    from . import stock_rt
+
+    return stock_rt.setting_check(args, brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/rt/setting-check/export")
+def stock_rt_setting_export(args: dict = Depends(_rt_args), me: dict = Depends(stock_page)):
+    from . import stock_ctl, stock_rt
+
+    d = stock_rt.setting_check(args, brand_scope.brands_of(me))
+    s = d["summary"]
+    notes = [f"자동 RT 설정 점검 ({d['asOf']} 기준 · {d['brandNm']} · {d['from']} ~ {d['to']})",
+             f"보내는 매장 {s['senders']}곳 중 지정가능수 0 {s['blockedShops']}곳 · 부족 {s['lowShops']}곳 — 권장 = 올림((기간 실제 지정 + 자동RT 취소 채움) ÷ 기간 일수)"]
+    content = stock_ctl.xlsx([("자동 RT 설정 점검", notes, stock_rt.CHECK_COLS, d["rows"])])
+    downloads.record(me, "stock_rt", "자동RT설정점검", {"brand": d["brand"], "from": d["from"], "to": d["to"]}, rows=len(d["rows"]), size=len(content))
+    return _xlsx_response(content, f"자동RT설정점검_{d['brandNm']}_{d['to']}.xlsx")
+
+
+@app.get("/api/stock-rt/alloc/short-rt")
+def stock_alloc_short_rt(args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """창고 부족 → 매장 간 RT 로 채우기 추천 (같은 창고 배분 조건의 창고 부족 행)"""
+    from . import stock_rt
+
+    return stock_rt.fill_shortage(args, brand_scope.brands_of(me), refresh=refresh)
+
+
+@app.post("/api/stock-rt/alloc/short-rt/preview")
+def stock_alloc_short_rt_preview(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+    from . import stock_write
+
+    p = stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me), source="short")
+    return {k: v for k, v in p.items() if k != "rows"}
+
+
+@app.post("/api/stock-rt/alloc/short-rt/register")
+def stock_alloc_short_rt_register(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+    """창고 부족 채우기 → 본사지시 RT 지시 등록 (T_INDC_RT 미확정)"""
+    from . import stock_write
+
+    return stock_write.rt_register(me, args, body.get("keys"), body.get("indcDt"), brand_scope.brands_of(me), source="short")
 
 
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")

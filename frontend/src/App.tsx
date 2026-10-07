@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
+import { OPEN_VIEW_EVENT } from './stockNav'
 import {
   BarChart3,
   BookOpen,
@@ -309,6 +310,15 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
     if (view) setVisited((v) => (v.has(view) ? v : new Set(v).add(view)))
   }, [view])
   const keep = (k: ViewKey) => visited.has(k) || view === k
+  // AI 대화 카드의 [화면에서 열기] 등 다른 곳에서 메뉴를 열 때
+  useEffect(() => {
+    const on = (e: Event) => {
+      const k = (e as CustomEvent<string>).detail as ViewKey
+      if (allowed.some((m) => m.key === k)) setView(k)
+    }
+    window.addEventListener(OPEN_VIEW_EVENT, on)
+    return () => window.removeEventListener(OPEN_VIEW_EVENT, on)
+  }, [allowed])
   const [noticeFocus, setNoticeFocus] = useState<{ id: string; nonce: number } | null>(null)
   const openNotice = useCallback((id: string) => {
     setNoticeFocus({ id, nonce: Date.now() })

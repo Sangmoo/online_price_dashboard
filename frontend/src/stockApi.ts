@@ -253,6 +253,29 @@ export type AllocRegistered = {
   rows: { askDt: string; askSeqn: number; seq: number; shopId: string; shopNm: string | null; prdtCd: string; colorCd: string; sizeCd: string; qty: number
     wh: string; delvPreDt: string | null; confirmed: boolean; statusNm: string; rmk: string | null; insDay: string; insUser: string; deletable: boolean }[]
 }
+export type SettingCheckRow = {
+  shopId: string; shopNm: string | null; team: string | null; rtGrp: string | null; asign: number; reqAble: number | null; minRetain: number | null
+  assigned: number; assignedPerDay: number; recRows: number; recQty: number; failQty: number; receivers: number; suggest: number; blocked: boolean; status: string
+}
+export type SettingCheck = {
+  brand: string; brandNm: string; from: string; to: string; days: number; asOf: string
+  summary: { senders: number; blockedShops: number; lowShops: number; recQty: number; blockedQty: number; failRequests: number; failFilled: number
+    blockedFailQty: number; lowFailQty: number }
+  rows: SettingCheckRow[]
+}
+export type ShortRt = {
+  brand: string; brandNm: string; asOf: string; allocAsOf: string; wh: string; from: string; to: string; orderNm: string
+  summary: { shortRows: number; shortQty: number; receivers: number; needQty: number; filledReceivers: number; recRows: number; recQty: number
+    senders: number; receivingShops: number; unfilled: number; unfilledBy: Record<string, number>
+    skipped: { noGroup: number; recvCtl: number; team: number; incoming: number }; senderExcluded: Record<string, number> }
+  reasonNames: Record<string, string>; ruleNames: Record<string, string>
+  rows: RtRow[]; unfilled: RtUnfilled[]; timing: Record<string, number>
+}
+/** RT 지시 등록 대상: 매장 간 RT 추천 또는 창고 부족 채우기 */
+export type RtWriteSource = {
+  preview: (keys: string[][]) => Promise<WritePreview>
+  register: (keys: string[][], indcDt: string) => Promise<RtRegResult>
+}
 export type AskSeqns = { brand: string; askDt: string; next: number; used: { seqn: number; brand: string; brandNm: string; clsby: string; rows: number; confirmed: boolean; web: boolean }[] }
 
 const list = (v: string[]) => v.join(',')
@@ -293,4 +316,17 @@ export const stockApi = {
     post<AllocRegResult>(`/api/stock-rt/alloc/register?${allocQuery(c)}`, { keys, askDt, askSeqn, delvPreDt }),
   allocRegistered: (brand: string, dateFrom: string, dateTo: string) => json<AllocRegistered>(`/api/stock-rt/alloc/registered?${qs({ brand, dateFrom, dateTo })}`),
   allocDelete: (brand: string, keys: (string | number)[][]) => post<DeleteResult>('/api/stock-rt/alloc/delete', { brand, keys }),
+
+  // ---- 자동 RT 설정 점검 · 창고 부족 → 매장 간 RT
+  settingCheck: (c: RtCond) => json<SettingCheck>(`/api/stock-rt/rt/setting-check?${rtQuery(c)}`),
+  settingExport: (c: RtCond) => downloadFile(`/api/stock-rt/rt/setting-check/export?${rtQuery(c)}`, undefined, '자동RT설정점검.xlsx'),
+  shortRt: (c: AllocCond, refresh = false) => json<ShortRt>(`/api/stock-rt/alloc/short-rt?${allocQuery(c)}${refresh ? '&refresh=true' : ''}`),
+  shortRtSource: (c: AllocCond): RtWriteSource => ({
+    preview: (keys) => post<WritePreview>(`/api/stock-rt/alloc/short-rt/preview?${allocQuery(c)}`, { keys }),
+    register: (keys, indcDt) => post<RtRegResult>(`/api/stock-rt/alloc/short-rt/register?${allocQuery(c)}`, { keys, indcDt }),
+  }),
+  rtSource: (c: RtCond): RtWriteSource => ({
+    preview: (keys) => post<WritePreview>(`/api/stock-rt/rt/preview?${rtQuery(c)}`, { keys }),
+    register: (keys, indcDt) => post<RtRegResult>(`/api/stock-rt/rt/register?${rtQuery(c)}`, { keys, indcDt }),
+  }),
 }

@@ -282,3 +282,100 @@ test('메뉴를 옮겼다 돌아와도 조회 결과가 그대로 · 사이드�
   expect(await page.locator('.sidebar-scroll .sidebar-brand').count()).toBe(0)
   await expect(page.locator('.sidebar > .sidebar-brand')).toBeVisible()
 })
+
+test('자동 RT 설정 점검: 지정가능수 0 · 부족 매장과 권장값 · 엑셀', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['stock_rt']))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
+  const row = (shopId: string, shopNm: string, asign: number, suggest: number, status: string) => ({
+    shopId, shopNm, team: '쉬즈4팀', rtGrp: '201501001', asign, reqAble: 30, minRetain: 0, assigned: asign * 7, assignedPerDay: asign, recRows: 90,
+    recQty: 100, failQty: 40, receivers: 30, suggest, blocked: asign === 0, status })
+  api.on('GET', '/api/stock-rt/rt/setting-check', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', from: RT.from, to: RT.to, days: 7, asOf: RT.asOf,
+    summary: { senders: 3, blockedShops: 1, lowShops: 1, recQty: 300, blockedQty: 100, failRequests: 788, failFilled: 784, blockedFailQty: 40, lowFailQty: 40 },
+    rows: [row('S41017', '스타필드코엑스몰', 0, 23, '지정가능수 0 — 자동 RT 에서 보내는 매장으로 지정되지 않음'), row('S11003', '롯데잠실', 2, 6, '지정가능수 부족'),
+      row('S11016', '롯데영등포', 9, 9, '적정')] } }))
+  api.on('GET', '/api/stock-rt/rt/setting-check/export', () => ({ body: Buffer.from('PK'), headers: {
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent('자동RT설정점검_쉬즈미스.xlsx')}` } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('button', { name: /추천 계산/ }).click()
+  await page.getByRole('button', { name: /자동 RT 설정 점검/ }).click()
+  const t = page.getByRole('table', { name: '자동 RT 설정 점검' })
+  await expect(t.getByRole('row')).toHaveCount(3)                       // 적정 매장은 기본으로 숨김
+  await expect(t.getByRole('row').nth(1)).toHaveClass(/row-short/)
+  await expect(t.getByRole('row').nth(1)).toContainText('스타필드코엑스몰')
+  await expect(page.locator('.stock-stats')).toContainText('지정가능수 0')
+  await shot(page, 'stock-rt-check')
+  await page.getByLabel('적정 매장도 보기').check()
+  await expect(t.getByRole('row')).toHaveCount(4)
+  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/rt/setting-check')[0].query)).toMatchObject({ brand: 'S', order: 'slow' })
+  const dl = page.waitForEvent('download')
+  await page.locator('.stock-stats').getByRole('button', { name: '엑셀' }).click()
+  expect((await dl).suggestedFilename()).toBe('자동RT설정점검_쉬즈미스.xlsx')
+})
+
+test('창고 부족 → 매장 간 RT 로 채우기: 추천을 보고 관리자는 본사지시 RT 지시', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
+  api.on('GET', '/api/stock-rt/alloc', () => ({ json: ALLOC }))
+  const fill = { ...RT.rows[1], no: 1, toShopId: 'S21018', toShopNm: '천호점', qty: 2, why: '창고 부족', prdtCd: 'SWWBLQ42010', colorCd: 'IV', sizeCd: '77' }
+  api.on('GET', '/api/stock-rt/alloc/short-rt', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: '2026-10-07 16:30', allocAsOf: ALLOC.asOf, wh: 'IN',
+    from: ALLOC.from, to: ALLOC.to, orderNm: '자동 RT 순서', summary: { shortRows: 2, shortQty: 3, receivers: 2, needQty: 3, filledReceivers: 1, recRows: 1, recQty: 2,
+      senders: 1, receivingShops: 1, unfilled: 1, unfilledBy: { no_stock: 1, rules: 0, limit: 0, recv_limit: 0 }, skipped: { noGroup: 0, recvCtl: 0, team: 0, incoming: 0 },
+      senderExcluded: RT.summary.senderExcluded }, reasonNames: RT.reasonNames, ruleNames: RT.ruleNames, rows: [fill], unfilled: RT.unfilled, timing: { total: 3.1 } } }))
+  api.on('POST', '/api/stock-rt/alloc/short-rt/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: 'x', count: 1, qty: 2, senders: 1, receivers: 1, skipped: [] } }))
+  api.on('POST', '/api/stock-rt/alloc/short-rt/register', () => ({ json: { ok: true, indcDt: ymd(now), count: 1, qty: 2, firstId: `${ymd(now)}00050`,
+    lastId: `${ymd(now)}00051`, senders: 1, receivers: 1, skipped: [] } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('tab', { name: /창고 → 매장 배분/ }).click()
+  await page.getByRole('button', { name: /배분 계산/ }).click()
+  await page.getByRole('button', { name: /창고 부족 \(2\)/ }).click()
+  await page.getByRole('button', { name: /매장 간 RT 로 채우기/ }).click()
+  const dlg = page.getByRole('dialog', { name: '창고 부족을 매장 간 RT 로 채우기' })
+  await expect(dlg).toContainText('RT 로 채움')
+  const t = dlg.getByRole('table', { name: '매장 간 RT 추천 목록' })
+  await expect(t.getByRole('row').nth(1)).toContainText('창고 부족')
+  await t.getByLabel('추천 모두 선택').check()
+  await shot(page, 'stock-short-rt')
+  await dlg.getByRole('button', { name: /본사지시 RT 지시 \(1건 · 2장\)/ }).click()
+  await page.getByRole('dialog', { name: '본사지시 RT 지시 등록' }).getByRole('button', { name: '2장 지시' }).click()
+  await expect(dlg).toContainText(`지시번호 ${ymd(now)}00050`)
+  expect(api.find('POST', '/api/stock-rt/alloc/short-rt/register')[0].body).toEqual({ keys: [['SWWBLQ42010', 'IV', '77', 'S32017', 'S21018']], indcDt: isoDay(now) })
+  expect(Object.fromEntries(api.find('POST', '/api/stock-rt/alloc/short-rt/register')[0].query)).toMatchObject({ brand: 'S', wh: 'IN', base: '202609003' })
+  await expect.poll(() => api.find('GET', '/api/stock-rt/alloc/short-rt').filter((r) => r.query.get('refresh') === 'true').length).toBe(1)
+})
+
+test('AI 대화 [화면에서 열기]: 다른 메뉴에서 눌러도 재고 재배치 화면을 그 조건으로 열고 계산', async ({ page, mockApi }) => {
+  const user = makeUser('USER', ['stock_rt', 'invt_plan'])
+  user.ai = { ...user.ai, enabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2 }
+  const api = await mockApi(user)
+  api.on('GET', '/api/invt-plans/options', () => ({ json: { areas: [], regions: [], areaRegion: {}, invtTypes: ['정기'], stlmTeams: [], rmkMaxBytes: 200, encoding: 'utf-8' } }))
+  api.on('GET', '/api/invt-plans', () => ({ json: { plans: [] } }))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: { ...RT, brand: 'T', brandNm: '리스트' } }))
+  const from = isoDay(daysAgo(13))
+  const events = [
+    { type: 'conversation', id: 'c1', title: '리스트 RT' },
+    { type: 'tool', id: 't1', name: 'open_stock_rt_screen', label: '재고 재배치 화면 열기', input: { brand: '리스트', seasons: ['겨울'] } },
+    { type: 'action', id: 't1', actionKind: 'open_stock', title: '재고 재배치 추천 화면 · 리스트 매장 간 RT',
+      items: [{ tab: 'rt', brand: 'T', view: 'unfilled', run: true, cond: { dateFrom: from, dateTo: isoDay(now), seasons: ['C0074'], prdt: 'TWK' } }],
+      lines: ['브랜드: 리스트 · 매장 간 RT', `판매 기간: ${from} ~ ${isoDay(now)}`, '시즌: 겨울'], warnings: [] },
+    { type: 'tool_done', id: 't1', ok: true },
+    { type: 'text_start' }, { type: 'text', text: '아래 [화면에서 열기]를 누르세요.' }, { type: 'done' },
+  ]
+  api.on('GET', '/api/chat/usage', () => ({ json: { questions: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, questionLimit: 10, costLimitUsd: 2, enabled: true } }))
+  api.on('POST', '/api/chat', () => ({ body: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), headers: { 'Content-Type': 'text/event-stream' } }))
+  await page.goto('/?view=invt_plan')
+  await page.getByRole('button', { name: 'AI 데이터 어시스턴트' }).click()
+  await page.getByPlaceholder(/데이터에 대해 질문하세요/).fill('리스트 겨울 2주 RT 화면으로 보여줘')
+  await page.keyboard.press('Enter')
+  const card = page.locator('.action-card')
+  await expect(card).toContainText('시즌: 겨울')
+  expect(api.find('GET', '/api/stock-rt/rt')).toHaveLength(0)            // 카드만으로는 열지 않음
+  await card.getByRole('button', { name: '화면에서 열기' }).click()
+  await expect.poll(() => api.find('GET', '/api/stock-rt/rt').length).toBe(1)
+  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/rt')[0].query)).toMatchObject({ brand: 'T', dateFrom: from, dateTo: isoDay(now), seasons: 'C0074', prdt: 'TWK' })
+  await expect(page.getByRole('table', { name: '못 채운 수요' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '리스트', exact: true })).toHaveClass(/active/)
+  await expect(page.getByLabel('품번', { exact: true })).toHaveValue('TWK')
+})

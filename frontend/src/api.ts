@@ -533,6 +533,7 @@ export type ChatEvent =
   | { type: 'table'; id: string; title: string; columns: Column[]; rows: Row[]; totalMatched?: number; truncated?: boolean; source?: { tool: string; input: Record<string, unknown> } }
   | { type: 'notice'; message: string }
   | { type: 'action'; id: string; actionKind: 'mall_shop_save'; title: string; items: MallShopSaveItem[]; lines: string[]; warnings: string[] }
+  | { type: 'action'; id: string; actionKind: 'open_stock'; title: string; items: Omit<import('./stockNav').StockOpenRequest, 'nonce'>[]; lines: string[]; warnings: string[] }
   | { type: 'error'; message: string; code?: string }
   | { type: 'usage' } & Usage
   | { type: 'done' }

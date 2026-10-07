@@ -264,6 +264,7 @@ export const HELP: HelpEntry[] = [
     ],
     source: 'T_SHOP_RNDS_BASE(판매) · T_SHOP_STOCK(재고) · T_SHOP_PRDT_BASE · T_SHOP_RT_GRP_DETL · T_AUTO_RT · T_SHOP_MOVE · T_INDC_RT · T_SHOP_REQ · T_RNDS_CNTR',
     notes: [
+      '[자동 RT 설정 점검]: 하루 한도 없이 계산한 추천에서 보낼 수 있는 매장마다 지정가능수(ASIGN_ABLE_QTY) · 기간 실제 지정 수 · 자동RT 취소 요청을 채울 수 있던 수량을 비교합니다. 권장 지정가능수 = 올림((기간 실제 지정 + 취소 채움) ÷ 기간 일수). 설정 변경은 ERP 에서 합니다.',
       '관리자는 추천을 골라 [본사지시 RT 지시]로 ERP 본사지시 RT(T_INDC_RT)에 지시(미확정)만 넣습니다 — 1장에 1행, 확정 · 이동요청은 ERP 에서 매장이 합니다. 넣기 직전에 지금 재고로 다시 확인해 모자란 행은 뺍니다. [등록 내역]에서 매장 확정 전 지시만 삭제할 수 있습니다.',
       '[자동 RT 하루 한도 적용]을 켜면 지정가능수(ASIGN_ABLE_QTY) 0 매장을 빼고 오늘 남은 지정 · 요청 가능 수까지 지킵니다. 지정가능수 0 매장이 많아 추천이 크게 줄어듭니다.',
       '수불제어는 ERP 함수(F_GET_RNDS_CNTR · F_GET_RNDS_CNTR_AUTO_RT)와 같은 규칙으로 계산합니다 (표본 421건 대조 일치).',
@@ -285,6 +286,7 @@ export const HELP: HelpEntry[] = [
     ],
     source: 'T_SALE_SUPLM_BASE · _APLY · _XCLD · T_STYLE_PLAN · T_WH_STOCK_PRDT · T_DELV_INDC · T_DELV_ASK · T_SHOP_STOCK · T_SHOP_GRD_GRP_DETL',
     notes: [
+      '[창고 부족] 탭의 [매장 간 RT 로 채우기]: 창고 부족 수량(− 이미 들어올 지시 · 요청)을 같은 RT 그룹 매장 재고로 채우는 매장 간 RT 를 자동 RT 규칙 · 순서로 추천하고, 관리자는 본사지시 RT 지시로 등록할 수 있습니다.',
       '창고 부족 = 필요(min(완불 + 판매, 매장재고상한 − 현재고)) − 배분. 필요보다 적게 받은 매장은 노란 행으로, [창고 부족] 탭에서 전혀 못 받은 매장까지 따로 봅니다.',
       '관리자는 배분을 골라 [배분의뢰 등록]으로 ERP 출고의뢰(T_DELV_ASK, 판매분의뢰(자동) · 미확정)에 넣습니다 — 의뢰일자 · 차수(확정된 차수는 불가) · 출고예정일을 고르고, 확정 · 출고지시는 ERP 에서 합니다. 이 화면에서 의뢰한 매장 × 상품은 다시 배분하지 않습니다.',
       '최근 판매분 자동보충 실행 조건(SS10DEV.T_AUTO_DVID_MASTER_HIST)을 불러와 같은 조건으로 미리 계산합니다. 오늘 아침 실행과 대조해 상품 목록 · 후보 매장 순서가 일치했습니다.',

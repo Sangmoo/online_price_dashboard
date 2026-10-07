@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Store, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
   stockApi,
-  type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtResult, type RtStats, type StockOptions,
+  type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtResult, type RtStats, type SettingCheck, type ShortRt,
+  type StockOptions,
 } from '../stockApi'
 import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWrite'
+import { consumeStockOpen, useStockOpen, type StockOpenRequest } from '../stockNav'
 
 type Tab = 'rt' | 'alloc'
 const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
@@ -74,12 +76,22 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
   const [brand, setBrand] = useState('')
   const [opts, setOpts] = useState<StockOptions | null>(null)
   const [error, setError] = useState('')
+  const req = useStockOpen()          // AI 대화 [화면에서 열기]
 
   useEffect(() => {
+    if (!req) return
+    setTab(req.tab)
+    if (req.brand !== brand) setBrand(req.brand)
+  }, [req?.nonce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let stale = false                 // 브랜드를 빠르게 바꾸면(AI 화면 열기 등) 늦게 온 이전 브랜드 응답은 버린다
     stockApi.options(brand || undefined).then((o) => {
+      if (stale) return
       setOpts(o)
-      if (!brand) setBrand(o.brand)
-    }).catch((e) => setError(errText(e)))
+      setBrand((b) => b || o.brand)
+    }).catch((e) => { if (!stale) setError(errText(e)) })
+    return () => { stale = true }
   }, [brand])
 
   return (
@@ -102,8 +114,8 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
       {error && <div className="alert error">{error}</div>}
       {opts && opts.brand === brand && (
         <>
-          <div hidden={tab !== 'rt'}><RtTab key={`rt-${brand}`} opts={opts} onContext={(c) => tab === 'rt' && onContextChange?.({ view: 'stock_rt', tab: 'rt', ...c })} /></div>
-          <div hidden={tab !== 'alloc'}><AllocTab key={`al-${brand}`} opts={opts} onContext={(c) => tab === 'alloc' && onContextChange?.({ view: 'stock_rt', tab: 'alloc', ...c })} /></div>
+          <div hidden={tab !== 'rt'}><RtTab key={`rt-${brand}`} opts={opts} request={req?.tab === 'rt' && req.brand === opts.brand ? req : null} onContext={(c) => tab === 'rt' && onContextChange?.({ view: 'stock_rt', tab: 'rt', ...c })} /></div>
+          <div hidden={tab !== 'alloc'}><AllocTab key={`al-${brand}`} opts={opts} request={req?.tab === 'alloc' && req.brand === opts.brand ? req : null} onContext={(c) => tab === 'alloc' && onContextChange?.({ view: 'stock_rt', tab: 'alloc', ...c })} /></div>
         </>
       )}
     </div>
@@ -111,7 +123,7 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
 }
 
 // ---------------------------------------------------------------- 매장 간 RT
-function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<string, string>) => void }) {
+function RtTab({ opts, request, onContext }: { opts: StockOptions; request: StockOpenRequest | null; onContext: (c: Record<string, string>) => void }) {
   const today = iso(opts.today)
   const init: RtCond = {
     brand: opts.brand, dateFrom: addDaysIso(today, -6), dateTo: today, planYy: opts.defaultPlanYy, seasons: opts.defaultSeasons, prdt: '', teams: [],
@@ -122,7 +134,7 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
   const [data, setData] = useState<RtResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats'>('rows')
+  const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats' | 'check'>('rows')
   const [q, setQ] = useState('')
   const [exporting, setExporting] = useState(false)
   const [writing, setWriting] = useState<'register' | 'list' | null>(null)
@@ -134,14 +146,14 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
   const bad = !cond.dateFrom || !cond.dateTo || days < 1 ? '기간을 고르세요.' : days > opts.maxDays ? `기간은 최대 ${opts.maxDays}일입니다.` : ''
   const seasonNm = useMemo(() => Object.fromEntries(opts.seasons.map((s) => [s.code, s.name])), [opts])
 
-  const run = (refresh = false) => {
-    if (bad) return
+  const run = (refresh = false, override?: RtCond) => {
+    if (bad && !override) return
     abort.current?.abort()
     const ac = new AbortController()
     abort.current = ac
     setLoading(true)
     setError('')
-    const c = { ...cond }
+    const c = { ...(override ?? cond) }
     stockApi.rt(c, refresh, ac.signal).then((d) => {
       setData(d)
       setApplied(c)
@@ -150,8 +162,17 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
     }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
   }
   useEffect(() => () => abort.current?.abort(), [])
+  useEffect(() => {                   // AI 대화에서 정한 조건으로 열고 계산
+    if (!request) return
+    consumeStockOpen(request.nonce)
+    const c = { ...init, ...request.cond } as RtCond
+    setCond(c)
+    if (request.view) setView(request.view as typeof view)
+    if (request.run !== false) run(false, c)
+  }, [request?.nonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty = applied !== null && JSON.stringify(applied) !== JSON.stringify(cond)
+  const rtSrc = useMemo(() => (applied ? stockApi.rtSource(applied) : null), [applied])
   const rows = useMemo(() => {
     const k = q.trim().toUpperCase()
     if (!data) return []
@@ -272,6 +293,7 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
                 <button className={view === 'unfilled' ? 'on' : ''} onClick={() => setView('unfilled')}>못 채운 수요 ({fmtNum(data.unfilledTotal)})</button>
                 <button className={view === 'shops' ? 'on' : ''} onClick={() => setView('shops')}>매장별 합계</button>
                 <button className={view === 'stats' ? 'on' : ''} onClick={() => setView('stats')}><BarChart3 size={13} /> 자동 RT 현황</button>
+                <button className={view === 'check' ? 'on' : ''} onClick={() => setView('check')} title="보낼 수 있는데 자동 RT 지정가능수가 0 · 부족한 매장"><Settings2 size={13} /> 자동 RT 설정 점검</button>
               </div>
               {(view === 'rows' || view === 'unfilled') && (
                 <div className="search sm">
@@ -298,11 +320,12 @@ function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<
             {view === 'unfilled' && <UnfilledTable data={data} rows={unfilled} />}
             {view === 'shops' && <ShopTotals data={data} />}
             {view === 'stats' && applied && <RtStatsPanel brand={applied.brand} from={applied.dateFrom} to={applied.dateTo} data={data} />}
+            {view === 'check' && applied && <SettingCheckPanel cond={applied} />}
           </section>
         </>
       )}
-      {writing === 'register' && applied && (
-        <RtRegisterModal cond={applied} keys={selKeys} today={opts.today} onClose={() => setWriting(null)}
+      {writing === 'register' && rtSrc && (
+        <RtRegisterModal source={rtSrc} keys={selKeys} today={opts.today} onClose={() => setWriting(null)}
           onDone={(m) => { setWriting(null); setDone(m); run(true) }} />
       )}
       {writing === 'list' && (
@@ -476,7 +499,7 @@ function fromRun(opts: StockOptions, r: RecentRun | undefined, today: string): A
   }
 }
 
-function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<string, string>) => void }) {
+function AllocTab({ opts, request, onContext }: { opts: StockOptions; request: StockOpenRequest | null; onContext: (c: Record<string, string>) => void }) {
   const today = iso(opts.today)
   const [runSeq, setRunSeq] = useState(opts.recentRuns[0]?.seq ?? '')
   const [cond, setCond] = useState<AllocCond>(() => fromRun(opts, opts.recentRuns[0], today))
@@ -490,6 +513,7 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
   const [exporting, setExporting] = useState(false)
   const [cand, setCand] = useState<AllocSku | null>(null)
   const [writing, setWriting] = useState<'register' | 'list' | null>(null)
+  const [shortRt, setShortRt] = useState(false)
   const [done, setDone] = useState('')
   const { sel, flip, setMany, clear } = useSelection()
   const abort = useRef<AbortController | null>(null)
@@ -504,14 +528,14 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
     const r = opts.recentRuns.find((x) => x.seq === seq)
     if (r) setCond({ ...fromRun(opts, r, today), dateFrom: cond.dateFrom, dateTo: cond.dateTo })
   }
-  const run = (refresh = false) => {
-    if (bad) return
+  const run = (refresh = false, override?: AllocCond) => {
+    if (bad && !override) return
     abort.current?.abort()
     const ac = new AbortController()
     abort.current = ac
     setLoading(true)
     setError('')
-    const c = { ...cond }
+    const c = { ...(override ?? cond) }
     stockApi.alloc(c, refresh, ac.signal).then((d) => {
       setData(d)
       setApplied(c)
@@ -520,6 +544,16 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
     }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
   }
   useEffect(() => () => abort.current?.abort(), [])
+  useEffect(() => {                   // AI 대화에서 정한 조건으로 열고 계산 (최근 자동보충 실행 조건에서 시작)
+    if (!request) return
+    consumeStockOpen(request.nonce)
+    const r = opts.recentRuns[0]
+    setRunSeq(r?.seq ?? '')
+    const c = { ...fromRun(opts, r, today), ...request.cond } as AllocCond
+    setCond(c)
+    if (request.view) setView(request.view as typeof view)
+    if (request.run !== false) run(false, c)
+  }, [request?.nonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty = applied !== null && JSON.stringify(applied) !== JSON.stringify(cond)
   const match = (vals: (string | null)[]) => {
@@ -677,6 +711,11 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
                 <div className="alert warn stock-short-note">
                   <AlertTriangle size={14} /> <span>창고 가용(창고 재고 − 출고지시 · 미확정 의뢰 − 창고하한)이 모자라 필요 수량만큼 못 받은 매장입니다 —
                   일부만 받음 {fmtNum(s.shortRows - s.shortZero)}건 · 전혀 못 받음 {fmtNum(s.shortZero)}건 · 부족 합계 {fmtNum(s.short)}장.</span>
+                  {s.shortRows > 0 && (
+                    <button className="btn primary sm" disabled={dirty} onClick={() => setShortRt(true)} title={dirty ? '조건을 바꿨습니다 — 다시 계산하세요' : '같은 RT 그룹의 다른 매장 재고로 채우는 매장 간 RT 추천'}>
+                      <ArrowRightLeft size={14} /> 매장 간 RT 로 채우기
+                    </button>
+                  )}
                 </div>
                 <AllocTable rows={shortRows} showShort />
               </>
@@ -711,6 +750,7 @@ function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Reco
         </>
       )}
       {cand && applied && <CandidatesModal cond={applied} sku={cand} onClose={() => setCand(null)} />}
+      {shortRt && applied && <ShortRtModal cond={applied} canWrite={opts.canWrite} today={opts.today} onClose={() => setShortRt(false)} />}
       {writing === 'register' && applied && (
         <AllocRegisterModal cond={applied} keys={selKeys} today={opts.today} onClose={() => setWriting(null)}
           onDone={(m) => { setWriting(null); setDone(m); run(true) }} />
@@ -775,6 +815,138 @@ function CandidatesModal({ cond, sku, onClose }: { cond: AllocCond; sku: AllocSk
         {error && <div className="alert error">{error}</div>}
         {!rows && !error && <div className="stock-loading"><Loader2 size={16} className="spin" /> 불러오는 중…</div>}
         {rows && <AllocTable rows={rows.map((r) => ({ ...r, shopNm: r.ctl ? `${r.shopNm ?? ''} (수불제어 · 건너뜀)` : r.shopNm }))} />}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- 자동 RT 설정 점검 (지정가능수)
+function SettingCheckPanel({ cond }: { cond: RtCond }) {
+  const [d, setD] = useState<SettingCheck | null>(null)
+  const [error, setError] = useState('')
+  const [all, setAll] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    setD(null)
+    setError('')
+    stockApi.settingCheck(cond).then(setD).catch((e) => setError(errText(e)))
+  }, [cond])
+  if (error) return <div className="alert error">{error}</div>
+  if (!d) return <div className="stock-loading"><Loader2 size={16} className="spin" /> 보낼 수 있는 매장의 지정가능수를 점검하는 중… (하루 한도 없이 계산한 추천 기준)</div>
+  const s = d.summary
+  const rows = all ? d.rows : d.rows.filter((r) => r.status !== '적정')
+  const exportXlsx = async () => {
+    setBusy(true)
+    try { await stockApi.settingExport(cond) } catch (e) { setError(errText(e)) } finally { setBusy(false) }
+  }
+  return (
+    <div className="stock-stats">
+      <div className="summary-pills">
+        <div className="pill strong"><span>보낼 수 있는 매장</span><b>{fmtNum(s.senders)}곳</b><span className="muted">추천 {fmtNum(s.recQty)}장</span></div>
+        <div className="pill warn-pill"><span>지정가능수 0</span><b>{fmtNum(s.blockedShops)}곳</b><span className="muted">{fmtNum(s.blockedQty)}장 · {pct(s.blockedQty, s.recQty)}</span></div>
+        <div className="pill"><span>지정가능수 부족</span><b>{fmtNum(s.lowShops)}곳</b></div>
+        <div className="pill" title="기간 중 '지시가능매장없음'으로 취소된 요청 중 이 매장들이 채울 수 있었던 수량"><span>취소 요청 채울 수 있던 수량</span>
+          <b>0 매장 {fmtNum(s.blockedFailQty)} · 부족 매장 {fmtNum(s.lowFailQty)}</b></div>
+        <div className="pill hint-pill">{d.brandNm} · {d.from} ~ {d.to} ({d.days}일) · {d.asOf} 기준</div>
+      </div>
+      <div className="alert info">
+        <Info size={14} /> <span>자동 RT 는 보내는 매장의 <b>하루 지정가능수(ASIGN_ABLE_QTY)</b>가 남아 있어야 지정합니다. 0 인 매장은 재고가 있어도 보내는 매장이 될 수 없어
+        '지시가능매장없음'으로 취소됩니다. 권장 지정가능수 = 올림((기간 실제 지정 수 + 취소 요청 채움 수량) ÷ 기간 일수). 설정 변경은 ERP 매장 RT 그룹 설정에서 합니다.</span>
+      </div>
+      <div className="stock-subbar flat">
+        <label className="check-label"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> 적정 매장도 보기</label>
+        <span className="muted small">{fmtNum(rows.length)}곳</span>
+        <button className="btn success sm stock-write-bar" onClick={exportXlsx} disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : <Download size={14} />} 엑셀</button>
+      </div>
+      <div className="table-wrap tall">
+        <table className="table stock-table" aria-label="자동 RT 설정 점검">
+          <thead>
+            <tr><th>매장</th><th>RT 그룹</th><th className="num">지정가능수</th><th className="num">권장</th><th className="num" title="기간 중 실제 자동 RT 지정 수 (하루 평균)">실제 지정</th>
+              <th className="num">추천 보낼 수량</th><th className="num" title="'지시가능매장없음' 취소 요청을 채울 수 있던 수량">취소 채움</th><th className="num">받는 매장</th><th>판단</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.shopId} className={r.blocked ? 'row-short' : ''}>
+                <td><span className="mono">{r.shopId}</span> {r.shopNm}<div className="muted small">{r.team}</div></td>
+                <td className="mono muted">{r.rtGrp}</td>
+                <td className={`num ${r.blocked ? 'danger-text' : ''}`}><b>{r.asign}</b></td>
+                <td className="num"><b>{r.suggest}</b></td>
+                <td className="num">{fmtNum(r.assigned)} <span className="muted">({r.assignedPerDay}/일)</span></td>
+                <td className="num">{fmtNum(r.recQty)}</td><td className="num">{fmtNum(r.failQty)}</td><td className="num">{r.receivers}</td>
+                <td><span className={`tag ${r.blocked ? 'warn' : r.status === '적정' ? 'auto' : 'miss'}`}>{r.status}</span></td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={9} className="empty">점검할 매장이 없습니다.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- 창고 부족 → 매장 간 RT 로 채우기
+function ShortRtModal({ cond, canWrite, today, onClose }: { cond: AllocCond; canWrite: boolean; today: string; onClose: () => void }) {
+  const [d, setD] = useState<ShortRt | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [reg, setReg] = useState(false)
+  const [done, setDone] = useState('')
+  const [tab, setTab] = useState<'rows' | 'unfilled'>('rows')
+  const { sel, flip, setMany, clear } = useSelection()
+  const sec = useElapsed(loading)
+  const load = (refresh = false) => {
+    setLoading(true)
+    setError('')
+    stockApi.shortRt(cond, refresh).then((x) => { setD(x); clear() }).catch((e) => setError(errText(e))).finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [cond]) // eslint-disable-line react-hooks/exhaustive-deps
+  const src = useMemo(() => stockApi.shortRtSource(cond), [cond])
+  const selRows = useMemo(() => (d?.rows ?? []).filter((r) => sel.has(rtKey(r).join('|'))), [d, sel])
+  const selKeys = useMemo(() => selRows.map(rtKey), [selRows])
+  const s = d?.summary
+  return (
+    <div className="modal-backdrop top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal card help-modal stock-write-modal wide" role="dialog" aria-label="창고 부족을 매장 간 RT 로 채우기">
+        <div className="modal-head">
+          <h3><ArrowRightLeft size={17} /> 창고 부족 → 매장 간 RT 로 채우기</h3>
+          <button className="icon-btn" onClick={onClose} title="닫기"><X size={18} /></button>
+        </div>
+        <div className="muted small">창고 수량이 모자라 못 받은 매장(창고 부족 행)에 같은 RT 그룹 매장의 재고를 자동 RT 규칙 · 자동 RT 순서로 짝지었습니다. 받는 수량 = 창고 부족 − 이미 들어올 지시 · 요청.</div>
+        {loading && <div className="stock-loading"><Loader2 size={16} className="spin" /> 보낼 매장을 찾는 중… {sec}초</div>}
+        {error && <div className="alert error">{error}</div>}
+        {d && s && !loading && (
+          <>
+            <div className="summary-pills">
+              <div className="pill"><span>창고 부족</span><b>{fmtNum(s.shortRows)}건 · {fmtNum(s.shortQty)}장</b></div>
+              <div className="pill strong"><span>RT 로 채움</span><b>{fmtNum(s.recRows)}건 · {fmtNum(s.recQty)}장</b><span className="muted">{pct(s.filledReceivers, s.receivers)}</span></div>
+              <div className="pill"><span>보내는 매장</span><b>{fmtNum(s.senders)}곳</b></div>
+              <div className="pill"><span>못 채움</span><b>{fmtNum(s.unfilled)}건</b></div>
+              {s.skipped.incoming > 0 && <div className="pill"><span>이미 지시 · 요청 들어옴</span><b>{fmtNum(s.skipped.incoming)}건</b></div>}
+              <div className="pill hint-pill">{d.brandNm} · 배분 {d.allocAsOf} · RT {d.asOf} 기준 · {d.timing.total}초</div>
+            </div>
+            {done && <div className="alert info"><CheckCircle2 size={14} /> <span>{done}</span></div>}
+            <div className="stock-subbar flat">
+              <div className="seg" role="tablist" aria-label="채우기 결과 보기">
+                <button className={tab === 'rows' ? 'on' : ''} onClick={() => setTab('rows')}>RT 추천 ({fmtNum(s.recRows)})</button>
+                <button className={tab === 'unfilled' ? 'on' : ''} onClick={() => setTab('unfilled')}>못 채움 ({fmtNum(s.unfilled)})</button>
+              </div>
+              <button className="btn ghost sm" onClick={() => load(true)}><RefreshCw size={14} /> 새로 계산</button>
+              {canWrite && tab === 'rows' && (
+                <div className="stock-write-bar">
+                  <button className="btn primary sm" disabled={!selRows.length} onClick={() => setReg(true)}>
+                    <Send size={14} /> 본사지시 RT 지시{selRows.length ? ` (${fmtNum(selRows.length)}건 · ${fmtNum(selRows.reduce((a, r) => a + r.qty, 0))}장)` : ''}
+                  </button>
+                </div>
+              )}
+            </div>
+            {tab === 'rows' && <RtTable rows={d.rows} select={canWrite ? { sel, flip, setMany } : undefined} />}
+            {tab === 'unfilled' && <UnfilledTable data={{ ...d, summary: { ...d.summary, skipped: { ...d.summary.skipped } } } as unknown as RtResult} rows={d.unfilled} />}
+          </>
+        )}
+        {reg && (
+          <RtRegisterModal source={src} keys={selKeys} today={today} onClose={() => setReg(false)}
+            onDone={(m) => { setReg(false); setDone(m); load(true) }} />
+        )}
       </div>
     </div>
   )

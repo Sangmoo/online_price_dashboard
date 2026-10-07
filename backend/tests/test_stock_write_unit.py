@@ -107,6 +107,12 @@ def test_writer_is_admin_only(monkeypatch):
     assert e.value.status_code == 403
     monkeypatch.setattr(main, "stock_page", lambda req: ME)
     assert main.stock_writer(None) is ME
+    from types import SimpleNamespace
+
+    with pytest.raises(HTTPException) as e:          # 사용자 화면 미리보기 중 (관리자>대상) → 대상 사번으로 들어가므로 막음
+        main.stock_writer(SimpleNamespace(state=SimpleNamespace(usr_id="ADM1>U2")))
+    assert "미리보기" in e.value.detail["message"]
+    assert main.stock_writer(SimpleNamespace(state=SimpleNamespace(usr_id="ADM1"))) is ME
 
 
 def test_rt_plan_rechecks_live_stock_and_incoming(rt_env):
@@ -205,3 +211,61 @@ def test_alloc_delete_only_web_unconfirmed(monkeypatch):
     assert r["deleted"] == 2
     dele = [s for s, _ in conn.log if s.startswith("DELETE")][0]
     assert "ATTR1 = :m" in dele and "NVL(CNFM_YN, 'N') = 'N'" in dele and "DELV_INDC_SEQ IS NULL" in dele
+
+
+def test_fill_shortage_and_setting_check(monkeypatch):
+    """창고 부족 → RT 채우기 · 자동 RT 설정 점검 (DB 없이)"""
+    from app import stock_rt as rt
+    from app import wh_alloc
+
+    shops = {sid: {"shopId": sid, "shopNm": sid, "team": "C62010", "normal": True, "attr2": None, "type": "C0041", "moBrd": "S",
+                   "rt": {"grp": "G1", "reqAble": None, "reqAbleYn": "Y", "asign": 0 if sid == "S1" else 2, "minRetain": 0, "fDays": 0, "lDays": 0}}
+             for sid in ("R1", "S1", "S2")}
+    monkeypatch.setattr(sc, "shops", lambda: shops)
+    monkeypatch.setattr(sc, "base_grade_group", lambda b: "GG")
+    monkeypatch.setattr(sc, "grade_shops", lambda g: {s: {} for s in shops})
+    monkeypatch.setattr(sc, "controls", lambda b, d=None: sc.Controls())
+    monkeypatch.setattr(sc, "style_info", lambda p: {x: {"styleNm": "자켓"} for x in p})
+    monkeypatch.setattr(sc, "team_names", lambda: {"C62010": "쉬즈1팀"})
+    short = {"shopId": "R1", "prdtCd": "P1", "colorCd": "BK", "sizeCd": "55", "fq": 1, "sq": 1, "ask": 0, "need": 2, "short": 2, "ctl": False}
+    monkeypatch.setattr(wh_alloc, "recommend", lambda **k: {"brand": "S", "asOf": "x", "wh": "IN", "from": "a", "to": "b", "shortRows": [short]})
+    monkeypatch.setattr(rt, "_stock", lambda pcs, ym: [("S1", "P1", "BK", "55", 3), ("S2", "P1", "BK", "55", 1)])
+    res = {"moving": {}, "pending": {}, "asigned": {}, "asignedSku": set(), "shopReq": {}, "requested": {}, "instrOut": {}, "instrIn": {}}
+    monkeypatch.setattr(rt, "_reserved", lambda b, td: res)
+    monkeypatch.setattr(rt, "_prdt_base", lambda b, keys: {k: ("20250101", None, "20260901", 5, 0, 0, 2, 0) for k in keys})
+    d = rt.fill_shortage({"brand": "S"}, refresh=True)
+    assert d["summary"]["recQty"] == 2 and all(r["why"] == "창고 부족" and r["toShopId"] == "R1" for r in d["rows"])
+    res["instrIn"] = {("R1", "P1", "BK", "55"): 2}          # 이미 2장 들어올 예정이면 채울 게 없음
+    d = rt.fill_shortage({"brand": "S"}, refresh=True)
+    assert d["rows"] == [] and d["summary"]["skipped"]["incoming"] == 1
+
+    from app import db
+
+    rows = [{"no": 1, "fromShopId": "S1", "toShopId": "R1", "qty": 2, "toFailCnt": 1}, {"no": 2, "fromShopId": "S2", "toShopId": "R2", "qty": 1, "toFailCnt": 0}]
+    monkeypatch.setattr(rt, "recommend", lambda **k: {"brand": "S", "brandNm": "쉬즈미스", "from": "2026-10-01", "to": "2026-10-07", "asOf": "x",
+                                                      "rows": rows, "summary": {"recQty": 3, "failRequests": 1, "failFilled": 1}})
+    monkeypatch.setattr(db, "query", lambda sql, b=None, arraysize=0: ([], [("S2", 7)]))
+    c = rt.setting_check({"brand": "S", "limits": True})
+    by = {r["shopId"]: r for r in c["rows"]}
+    assert by["S1"]["blocked"] and by["S1"]["suggest"] == 1 and by["S2"]["suggest"] == 2 and by["S2"]["status"] == "적정"
+    assert c["rows"][0]["shopId"] == "S1" and c["summary"]["blockedShops"] == 1 and c["summary"]["blockedQty"] == 2 and c["days"] == 7
+
+
+def test_open_screen_tool_makes_card_not_navigation(monkeypatch):
+    from app import chat_tools_stock as ts
+
+    monkeypatch.setattr(sc, "code_names", lambda p: {"C0074": "겨울"})
+    monkeypatch.setattr(sc, "team_names", lambda: {"C62030": "리스트3팀"})
+    out = ts.run("open_stock_rt_screen", {"brand": "리스트", "seasons": ["겨울"], "date_from": TODAY, "date_to": TODAY, "prdt_cd": "twk",
+                                          "teams": ["리스트3팀"], "view": "unfilled"}, allowed=None)
+    a = out["action"]
+    assert a["actionKind"] == "open_stock" and out["result"]["opened"] is False
+    p = a["items"][0]
+    assert p["tab"] == "rt" and p["brand"] == "T" and p["view"] == "unfilled"
+    assert p["cond"] == {"dateFrom": f"{TODAY[:4]}-{TODAY[4:6]}-{TODAY[6:]}", "dateTo": f"{TODAY[:4]}-{TODAY[4:6]}-{TODAY[6:]}",
+                         "seasons": ["C0074"], "teams": ["C62030"], "prdt": "TWK"}
+    assert any("겨울" in x for x in a["lines"])
+    with pytest.raises(ts.StockToolError):
+        ts.run("open_stock_rt_screen", {"tab": "alloc", "view": "unfilled"}, allowed=None)     # 배분 탭에 없는 보기
+    with pytest.raises(ts.StockToolError):
+        ts.run("open_stock_rt_screen", {"brand": "쉬즈미스"}, allowed=["리스트"])                # 브랜드 권한

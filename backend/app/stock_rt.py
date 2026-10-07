@@ -294,64 +294,9 @@ def recommend(brand: str | None = None, frm: str | None = None, to: str | None =
     return _compute(b, f, t, yy, ss, tm, pp, per, bool(limits), order, sender_max)
 
 
-def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> dict:
-    started = time.perf_counter()
-    td = sc.today()
-    ym = td[:6]
-    now = date.today()
-    shops = sc.shops()
-    grp_id = sc.base_grade_group(brand)
-    graded = sc.grade_shops(grp_id) if grp_id else {}
-    ctl = sc.controls(brand, td)
-    where, b = _style_cond(brand, yy, ss, pp)
-    timing: dict[str, float] = {}
-
-    def lap(name, t0):
-        timing[name] = round(time.perf_counter() - t0, 2)
-
-    t0 = time.perf_counter()
-    n_styles = len(_styles(where, b))
-    sales_rows = _sales(f, t, where, b, n_styles > MANY_STYLES) if n_styles else []
-    failed_rows = _failed(f, t, where, b) if n_styles else []
-    lap("sales", t0)
-    sales = {tuple(r[:4]): int(r[4] or 0) for r in sales_rows}
-    last_sale = {tuple(r[:4]): r[5] for r in sales_rows}
-    failed = {tuple(r[:4]): (int(r[4]), r[5]) for r in failed_rows}
-    sold = {k for k, q in sales.items() if q > 0}
-    pcs = {(k[1], k[2]) for k in sold} | {(k[1], k[2]) for k in failed}
-    t0 = time.perf_counter()
-    stock = {tuple(r[:4]): int(r[4]) for r in _stock(list(pcs), ym)} if pcs else {}
-    lap("stock", t0)
-
-    t0 = time.perf_counter()
-    res = _reserved(brand, td)
-    lap("reserved", t0)
-    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
-    recv: list[dict] = []
-    for k in sorted(sold | set(failed)):
-        st = stock.get(k, 0)
-        if st > 0:
-            continue
-        sid, p, c, s = k
-        sh = shops.get(sid)
-        if not sh or not sh["rt"] or not sh["normal"]:
-            skipped["noGroup"] += 1
-            continue
-        if tm and sh["team"] not in tm:
-            skipped["team"] += 1
-            continue
-        if ctl.controlled_id(sid, p, c, "36"):
-            skipped["recvCtl"] += 1
-            continue
-        incoming = res["instrIn"].get(k, 0)
-        need = per + max(0, -st) - incoming                        # 이미 지시 · 요청받아 들어올 수량은 뺀다
-        if need <= 0:
-            skipped["incoming"] += 1
-            continue
-        fc, fd = failed.get(k, (0, None))
-        recv.append({"shopId": sid, "prdtCd": p, "colorCd": c, "sizeCd": s, "sales": max(sales.get(k, 0), 0), "lastSale": last_sale.get(k),
-                     "failCnt": fc, "failLast": fd, "stock": st, "need": need, "incoming": incoming, "grp": sh["rt"]["grp"],
-                     "moOk": _mo_brands(sid, sh["moBrd"])})
+def _match_senders(brand, recv, stock, sales, res, shops, graded, ctl, limits, order, sender_max, now, timing):
+    """받는 매장 × 상품(recv)에 같은 RT 그룹의 보내는 매장을 ERP 자동 RT 규칙으로 짝짓는다 (RT 추천 · 창고 부족 채우기 공용).
+    stock: (매장, 상품) → 현재고, sales: (매장, 상품) → 기간 판매(보내는 순서용). 돌려줌: (스타일, 짝, 못 채움, 제외 이유, 읽은 기준, 회차)"""
     want = {((r["prdtCd"], r["colorCd"], r["sizeCd"]), r["grp"]) for r in recv}
     styles = sc.style_info(sorted({r["prdtCd"] for r in recv}))
 
@@ -450,10 +395,10 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
             break
     timing["prdtBase"] = round(t_base, 2)
     timing["match"] = round(t_match, 2)
-    unfilled_by = {k: 0 for k in REASONS}
-    for u in unfilled:
-        unfilled_by[u["reason"]] += 1
+    return styles, pairs, unfilled, excluded, base, rounds
 
+
+def _result_rows(pairs: list[dict], unfilled: list[dict], styles: dict, shops: dict) -> tuple[list[dict], list[dict]]:
     names = {sid: sh["shopNm"] for sid, sh in shops.items()}
     teams = sc.team_names()
     rows = []
@@ -472,6 +417,75 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
                       "sizeCd": u["sizeCd"], "stock": u["stock"], "sales": u["sales"], "failCnt": u["failCnt"], "left": u["left"],
                       "reason": u["reason"], "reasonNm": REASONS[u["reason"]]} for u in unfilled]
     unfilled_rows.sort(key=lambda u: (-u["failCnt"], -u["sales"], u["shopId"], u["prdtCd"]))
+    return rows, unfilled_rows
+
+
+def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> dict:
+    started = time.perf_counter()
+    td = sc.today()
+    ym = td[:6]
+    now = date.today()
+    shops = sc.shops()
+    grp_id = sc.base_grade_group(brand)
+    graded = sc.grade_shops(grp_id) if grp_id else {}
+    ctl = sc.controls(brand, td)
+    where, b = _style_cond(brand, yy, ss, pp)
+    timing: dict[str, float] = {}
+
+    def lap(name, t0):
+        timing[name] = round(time.perf_counter() - t0, 2)
+
+    t0 = time.perf_counter()
+    n_styles = len(_styles(where, b))
+    sales_rows = _sales(f, t, where, b, n_styles > MANY_STYLES) if n_styles else []
+    failed_rows = _failed(f, t, where, b) if n_styles else []
+    lap("sales", t0)
+    sales = {tuple(r[:4]): int(r[4] or 0) for r in sales_rows}
+    last_sale = {tuple(r[:4]): r[5] for r in sales_rows}
+    failed = {tuple(r[:4]): (int(r[4]), r[5]) for r in failed_rows}
+    sold = {k for k, q in sales.items() if q > 0}
+    pcs = {(k[1], k[2]) for k in sold} | {(k[1], k[2]) for k in failed}
+    t0 = time.perf_counter()
+    stock = {tuple(r[:4]): int(r[4]) for r in _stock(list(pcs), ym)} if pcs else {}
+    lap("stock", t0)
+
+    t0 = time.perf_counter()
+    res = _reserved(brand, td)
+    lap("reserved", t0)
+    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
+    recv: list[dict] = []
+    for k in sorted(sold | set(failed)):
+        st = stock.get(k, 0)
+        if st > 0:
+            continue
+        sid, p, c, s = k
+        sh = shops.get(sid)
+        if not sh or not sh["rt"] or not sh["normal"]:
+            skipped["noGroup"] += 1
+            continue
+        if tm and sh["team"] not in tm:
+            skipped["team"] += 1
+            continue
+        if ctl.controlled_id(sid, p, c, "36"):
+            skipped["recvCtl"] += 1
+            continue
+        incoming = res["instrIn"].get(k, 0)
+        need = per + max(0, -st) - incoming                        # 이미 지시 · 요청받아 들어올 수량은 뺀다
+        if need <= 0:
+            skipped["incoming"] += 1
+            continue
+        fc, fd = failed.get(k, (0, None))
+        recv.append({"shopId": sid, "prdtCd": p, "colorCd": c, "sizeCd": s, "sales": max(sales.get(k, 0), 0), "lastSale": last_sale.get(k),
+                     "failCnt": fc, "failLast": fd, "stock": st, "need": need, "incoming": incoming, "grp": sh["rt"]["grp"],
+                     "moOk": _mo_brands(sid, sh["moBrd"])})
+    styles, pairs, unfilled, excluded, base, rounds = _match_senders(brand, recv, stock, sales, res, shops, graded, ctl, limits, order,
+                                                                    sender_max, now, timing)
+    unfilled_by = {k: 0 for k in REASONS}
+    for u in unfilled:
+        unfilled_by[u["reason"]] += 1
+
+    names = {sid: sh["shopNm"] for sid, sh in shops.items()}
+    rows, unfilled_rows = _result_rows(pairs, unfilled, styles, shops)
 
     by_from: dict[str, int] = {}
     by_to: dict[str, int] = {}
@@ -501,6 +515,136 @@ def _compute(brand, f, t, yy, ss, tm, pp, per, limits, order, sender_max=0) -> d
         "reasonNames": REASONS, "ruleNames": RULES, "rows": rows, "unfilled": unfilled_rows,
         "topSenders": top(by_from), "topReceivers": top(by_to), "timing": timing,
     }
+
+
+# ---------------------------------------------------------------- 창고 부족 → 매장 간 RT 로 채우기
+SHORT_TTL = 10 * 60
+
+
+def fill_shortage(alloc_args: dict, allowed: list[str] | None = None, refresh: bool = False) -> dict:
+    """창고 → 매장 배분에서 창고 수량이 모자라 못 받은 매장(창고 부족 행)을 같은 RT 그룹 매장 재고로 채우는 매장 간 RT 추천.
+    받는 수량 = 창고 부족 수량 − 이미 지시 · 요청받아 들어올 수량. 보내는 매장 규칙 · 순서는 자동 RT(자동 RT 순서)와 같다."""
+    import json
+
+    from . import wh_alloc
+
+    d = wh_alloc.recommend(**alloc_args, allowed=allowed)
+    key = ("rt", "short", d["brand"], json.dumps(alloc_args, sort_keys=True, default=str), d["asOf"])
+    return sc.cached(key, SHORT_TTL, lambda: _fill_shortage(d), force=refresh)
+
+
+def _fill_shortage(d: dict) -> dict:
+    started = time.perf_counter()
+    brand, td = d["brand"], sc.today()
+    now = date.today()
+    shops = sc.shops()
+    grp_id = sc.base_grade_group(brand)
+    graded = sc.grade_shops(grp_id) if grp_id else {}
+    ctl = sc.controls(brand, td)
+    timing: dict[str, float] = {}
+    short = [r for r in d["shortRows"] if not r["ctl"] and r["short"] > 0]
+    pcs = sorted({(r["prdtCd"], r["colorCd"]) for r in short})
+    t0 = time.perf_counter()
+    stock = {tuple(r[:4]): int(r[4]) for r in _stock(pcs, td[:6])} if pcs else {}
+    res = _reserved(brand, td)
+    timing["stock"] = round(time.perf_counter() - t0, 2)
+    skipped = {"noGroup": 0, "recvCtl": 0, "team": 0, "incoming": 0}
+    recv: list[dict] = []
+    for r in short:
+        sid, p, c, s = r["shopId"], r["prdtCd"], r["colorCd"], r["sizeCd"]
+        k = (sid, p, c, s)
+        sh = shops.get(sid)
+        if not sh or not sh["rt"] or not sh["normal"]:
+            skipped["noGroup"] += 1
+            continue
+        if ctl.controlled_id(sid, p, c, "36"):
+            skipped["recvCtl"] += 1
+            continue
+        incoming = res["instrIn"].get(k, 0)
+        need = r["short"] - incoming
+        if need <= 0:
+            skipped["incoming"] += 1
+            continue
+        recv.append({"shopId": sid, "prdtCd": p, "colorCd": c, "sizeCd": s, "sales": r["fq"] + r["sq"], "lastSale": None, "failCnt": 0,
+                     "failLast": None, "stock": stock.get(k, 0), "need": need, "incoming": incoming, "grp": sh["rt"]["grp"],
+                     "moOk": _mo_brands(sid, sh["moBrd"])})
+    styles, pairs, unfilled, excluded, base, rounds = _match_senders(brand, recv, stock, {}, res, shops, graded, ctl, False, "auto", 0,
+                                                                    now, timing)
+    rows, unfilled_rows = _result_rows(pairs, unfilled, styles, shops)
+    for r in rows:
+        r["why"] = "창고 부족"
+    unfilled_by = {k: 0 for k in REASONS}
+    for u in unfilled:
+        unfilled_by[u["reason"]] += 1
+    filled = {(m["receiver"]["shopId"], m["receiver"]["prdtCd"], m["receiver"]["colorCd"], m["receiver"]["sizeCd"]) for m in pairs}
+    timing["total"] = round(time.perf_counter() - started, 2)
+    return {
+        "brand": brand, "brandNm": sc.BRAND_CODES[brand], "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"), "allocAsOf": d["asOf"],
+        "wh": d["wh"], "from": d["from"], "to": d["to"], "order": "auto", "orderNm": ORDERS["auto"],
+        "summary": {"shortRows": len(short), "shortQty": sum(r["short"] for r in short), "receivers": len(recv),
+                    "needQty": sum(r["need"] for r in recv), "filledReceivers": len(filled), "recRows": len(rows),
+                    "recQty": sum(r["qty"] for r in rows), "senders": len({r["fromShopId"] for r in rows}),
+                    "receivingShops": len({r["toShopId"] for r in rows}), "unfilled": len(unfilled), "unfilledBy": unfilled_by,
+                    "skipped": skipped, "senderExcluded": excluded, "checked": len(base), "rounds": rounds},
+        "reasonNames": REASONS, "ruleNames": RULES, "rows": rows, "unfilled": unfilled_rows, "timing": timing,
+    }
+
+
+# ---------------------------------------------------------------- 자동 RT 설정 점검 (지정가능수)
+def setting_check(rt_args: dict, allowed: list[str] | None = None) -> dict:
+    """자동 RT '지시가능매장없음' 의 근본 원인 점검: 매장 간 RT 추천(하루 한도 없이)에서 보낼 수 있는 매장의
+    자동 RT 지정가능수(ASIGN_ABLE_QTY) · 기간 중 실제 지정 수를 비교해, 지정가능수 0 이거나 모자란 매장과 권장값을 보여 준다.
+    권장 지정가능수(하루) = 올림((기간 중 실제 지정 수 + 이번 추천에서 자동 RT 취소 요청을 채운 수량) ÷ 기간 일수), 현재값보다 작으면 현재값."""
+    import math
+
+    d = recommend(**{**rt_args, "limits": False}, allowed=allowed)
+    brand = d["brand"]
+    f, t = d["from"].replace("-", ""), d["to"].replace("-", "")
+    days = (datetime.strptime(t, "%Y%m%d") - datetime.strptime(f, "%Y%m%d")).days + 1
+    shops = sc.shops()
+    teams = sc.team_names()
+    assigned = {sid: int(n) for sid, n in db.query(
+        f"""SELECT T.DELV_REQ_SHOP_ID, COUNT(*) FROM T_AUTO_RT A, T_AUTO_RT_TARGET T
+             WHERE A.REQ_DAY BETWEEN :f || '000000' AND :t || '999999' AND A.COMPY_CD = '{sc.COMPY_CD}'
+               AND T.AUTO_RT_ID = A.AUTO_RT_ID AND T.RSLT_CD <> 'C6877' AND T.DEL_DAY IS NULL
+             GROUP BY T.DELV_REQ_SHOP_ID""", {"f": f, "t": t})[1]}
+    by: dict[str, dict] = {}
+    for r in d["rows"]:
+        g = by.setdefault(r["fromShopId"], {"recRows": 0, "recQty": 0, "failQty": 0, "receivers": set()})
+        g["recRows"] += 1
+        g["recQty"] += r["qty"]
+        g["failQty"] += r["qty"] if r["toFailCnt"] else 0
+        g["receivers"].add(r["toShopId"])
+    out = []
+    for sid, g in by.items():
+        sh = shops.get(sid) or {}
+        rt = sh.get("rt") or {}
+        asign = int(rt.get("asign") or 0)
+        done = assigned.get(sid, 0)
+        suggest = max(asign, math.ceil((done + g["failQty"]) / days)) if (done + g["failQty"]) else asign
+        out.append({"shopId": sid, "shopNm": sh.get("shopNm"), "team": teams.get(sh.get("team")), "rtGrp": rt.get("grp"), "asign": asign,
+                    "reqAble": rt.get("reqAble"), "minRetain": rt.get("minRetain"), "assigned": done,
+                    "assignedPerDay": round(done / days, 1), "recRows": g["recRows"], "recQty": g["recQty"], "failQty": g["failQty"],
+                    "receivers": len(g["receivers"]), "suggest": suggest, "blocked": asign <= 0,
+                    "status": "지정가능수 0 — 자동 RT 에서 보내는 매장으로 지정되지 않음" if asign <= 0
+                    else ("지정가능수 부족" if suggest > asign else "적정")})
+    out.sort(key=lambda x: (not x["blocked"], -(x["suggest"] - x["asign"]), -x["failQty"], -x["recQty"], x["shopId"]))
+    blocked = [x for x in out if x["blocked"]]
+    low = [x for x in out if not x["blocked"] and x["suggest"] > x["asign"]]
+    s = d["summary"]
+    return {
+        "brand": brand, "brandNm": d["brandNm"], "from": d["from"], "to": d["to"], "days": days, "asOf": d["asOf"],
+        "summary": {"senders": len(out), "blockedShops": len(blocked), "lowShops": len(low),
+                    "recQty": s["recQty"], "blockedQty": sum(x["recQty"] for x in blocked),
+                    "failRequests": s["failRequests"], "failFilled": s["failFilled"],
+                    "blockedFailQty": sum(x["failQty"] for x in blocked), "lowFailQty": sum(x["failQty"] for x in low)},
+        "rows": out,
+    }
+
+
+CHECK_COLS = [("shopId", "매장", 10), ("shopNm", "매장명", 18), ("team", "팀", 10), ("rtGrp", "RT 그룹", 9), ("asign", "지정가능수(하루)", 11),
+              ("suggest", "권장 지정가능수", 11), ("assigned", "기간 실제 지정", 10), ("assignedPerDay", "하루 평균 지정", 10),
+              ("recQty", "추천 보낼 수량", 10), ("failQty", "자동RT 취소 채움", 11), ("receivers", "받는 매장 수", 9), ("status", "판단", 30)]
 
 
 # ---------------------------------------------------------------- 자동 RT 현황

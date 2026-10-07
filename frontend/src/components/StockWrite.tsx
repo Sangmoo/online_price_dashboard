@@ -4,7 +4,7 @@ import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
   stockApi,
-  type AllocCond, type AllocRegistered, type AskSeqns, type RtCond, type RtRegistered, type Skipped, type WritePreview,
+  type AllocCond, type AllocRegistered, type AskSeqns, type RtRegistered, type RtWriteSource, type Skipped, type WritePreview,
 } from '../stockApi'
 
 // 재고 재배치 추천 > ERP 등록 · 삭제 (관리자). 본사지시 RT 는 지시(미확정)만, 배분은 출고의뢰(미확정)만 넣는다.
@@ -45,19 +45,19 @@ function SkippedList({ list, label }: { list: Skipped[]; label: (k: string[]) =>
 }
 
 // ---------------------------------------------------------------- 매장 간 RT → 본사지시 RT 지시
-export function RtRegisterModal({ cond, keys, today, onClose, onDone }: {
-  cond: RtCond; keys: string[][]; today: string; onClose: () => void; onDone: (msg: string) => void
+export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
+  source: RtWriteSource; keys: string[][]; today: string; onClose: () => void; onDone: (msg: string) => void
 }) {
   const [pv, setPv] = useState<WritePreview | null>(null)
   const [indcDt, setIndcDt] = useState(iso(today))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { stockApi.rtPreview(cond, keys).then(setPv).catch((e) => setError(errText(e))) }, [cond, keys])
+  useEffect(() => { source.preview(keys).then(setPv).catch((e) => setError(errText(e))) }, [source, keys])
   const submit = async () => {
     setBusy(true)
     setError('')
     try {
-      const r = await stockApi.rtRegister(cond, keys, indcDt)
+      const r = await source.register(keys, indcDt)
       onDone(`본사지시 RT ${fmtNum(r.qty)}장(${fmtNum(r.count)}건)을 지시했습니다 · 지시번호 ${r.firstId} ~ ${r.lastId}${r.skipped.length ? ` · 제외 ${r.skipped.length}건` : ''} — ERP 에서 매장이 확정합니다.`)
     } catch (e) { setError(errText(e)) } finally { setBusy(false) }
   }

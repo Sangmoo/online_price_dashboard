@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   Download,
+  ExternalLink,
   History,
   Loader2,
   Maximize2,
@@ -41,6 +42,7 @@ import {
   type User,
 } from '../api'
 import { compact, fmtNum } from '../format'
+import { requestStockOpen, type StockOpenRequest } from '../stockNav'
 
 type Part =
   | { kind: 'text'; text: string }
@@ -58,6 +60,7 @@ type Part =
   | { kind: 'notice'; text: string; error?: boolean }
   // AI 가 만든 변경안: 사용자가 [적용]을 눌러야 저장 (예: 판매처 매장 연결)
   | { kind: 'action'; id: string; actionKind: 'mall_shop_save'; title: string; items: MallShopSaveItem[]; lines: string[]; warnings: string[] }
+  | { kind: 'action'; id: string; actionKind: 'open_stock'; title: string; items: Omit<StockOpenRequest, 'nonce'>[]; lines: string[]; warnings: string[] }
 
 type Message = { role: 'user'; text: string } | { role: 'assistant'; parts: Part[]; streaming?: boolean }
 
@@ -181,7 +184,7 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
         updateLast((p) => [...p, { kind: 'notice', text: e.message }])
         break
       case 'action':
-        updateLast((p) => [...p, { kind: 'action', id: e.id, actionKind: e.actionKind, title: e.title, items: e.items, lines: e.lines, warnings: e.warnings ?? [] }])
+        updateLast((p) => [...p, { ...e, kind: 'action', warnings: e.warnings ?? [] } as Part])
         break
       case 'error':
         updateLast((p) => [...p, { kind: 'notice', text: e.message, error: true }])
@@ -433,12 +436,31 @@ function PartView({ part }: { part: Part }) {
     ) : null
   if (part.kind === 'tool') return <ToolChip part={part} />
   if (part.kind === 'notice') return <div className={`notice ${part.error ? 'error' : ''}`}>{part.text}</div>
-  if (part.kind === 'action') return <ActionCard part={part} />
+  if (part.kind === 'action') return part.actionKind === 'open_stock' ? <OpenScreenCard part={part} /> : <ActionCard part={part} />
   return <TableCard part={part} />
 }
 
+/** AI 가 정리한 조건으로 화면 열기 카드: 누르면 그 메뉴를 그 조건으로 열고 계산한다 (저장 · 등록은 하지 않음) */
+function OpenScreenCard({ part }: { part: Extract<Part, { kind: 'action'; actionKind: 'open_stock' }> }) {
+  const [opened, setOpened] = useState(false)
+  const open = () => {
+    if (part.items[0]) requestStockOpen(part.items[0])
+    setOpened(true)
+  }
+  return (
+    <div className={`action-card ${opened ? 'done' : 'idle'}`}>
+      <div className="action-head"><b>{part.title}</b><span className="muted small">누르면 이 조건으로 화면을 열고 계산합니다</span></div>
+      <ul>{part.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      <div className="action-foot">
+        {opened && <span className="small"><CheckCircle2 size={13} /> 화면을 열었습니다</span>}
+        <button className="btn primary small" onClick={open}><ExternalLink size={14} /> {opened ? '다시 열기' : '화면에서 열기'}</button>
+      </div>
+    </div>
+  )
+}
+
 /** AI 변경안 카드: 사용자가 내용을 보고 [적용]을 눌러야 화면과 같은 저장 경로(같은 권한·검증·변경 이력)로 저장된다. */
-function ActionCard({ part }: { part: Extract<Part, { kind: 'action' }> }) {
+function ActionCard({ part }: { part: Extract<Part, { kind: 'action'; actionKind: 'mall_shop_save' }> }) {
   const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
   const [msg, setMsg] = useState<string | null>(null)
   const apply = async () => {

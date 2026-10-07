@@ -78,15 +78,16 @@ def _sender_live(keys: set[tuple], td: str, brand: str) -> tuple[dict[tuple, int
     return out, res["instrIn"]
 
 
-def rt_preview(args: dict, keys_raw, allowed: list[str] | None) -> dict:
-    return _rt_plan(args, keys_raw, allowed)
+def rt_preview(args: dict, keys_raw, allowed: list[str] | None, source: str = "rt") -> dict:
+    return _rt_plan(args, keys_raw, allowed, source)
 
 
-def _rt_plan(args: dict, keys_raw, allowed: list[str] | None) -> dict:
+def _rt_plan(args: dict, keys_raw, allowed: list[str] | None, source: str = "rt") -> dict:
+    """source: rt = 매장 간 RT 추천(args = RT 조건), short = 창고 부족 채우기(args = 창고 배분 조건)"""
     from . import stock_rt
 
     keys = _keys(keys_raw, 5, "RT 추천 행")          # (품번, 칼라, 사이즈, 보내는 매장, 받는 매장)
-    d = stock_rt.recommend(**args, allowed=allowed)
+    d = stock_rt.recommend(**args, allowed=allowed) if source == "rt" else stock_rt.fill_shortage(args, allowed)
     brand = d["brand"]
     by_key = {(r["prdtCd"], r["colorCd"], r["sizeCd"], r["fromShopId"], r["toShopId"]): r for r in d["rows"]}
     td = sc.today()
@@ -115,12 +116,13 @@ def _rt_plan(args: dict, keys_raw, allowed: list[str] | None) -> dict:
             "count": len(ok), "qty": pieces, "senders": len({r["fromShopId"] for r in ok}), "receivers": len({r["toShopId"] for r in ok})}
 
 
-def rt_register(me: dict, args: dict, keys_raw, indc_dt: str | None, allowed: list[str] | None, commit: bool = True) -> dict:
+def rt_register(me: dict, args: dict, keys_raw, indc_dt: str | None, allowed: list[str] | None, commit: bool = True,
+                source: str = "rt") -> dict:
     td = sc.today()
     dt = _ymd(indc_dt, "지시일자", td)
     if dt < td or dt > (date.today() + timedelta(days=7)).strftime("%Y%m%d"):
         sc.bad("지시일자는 오늘부터 7일 안에서 고르세요.")
-    plan = _rt_plan(args, keys_raw, allowed)
+    plan = _rt_plan(args, keys_raw, allowed, source)
     if not plan["rows"]:
         sc.bad("지시할 수 있는 행이 없습니다. " + "; ".join(sorted({s["reason"] for s in plan["skipped"]}))[:300])
     now = _now14()
@@ -160,7 +162,7 @@ def rt_register(me: dict, args: dict, keys_raw, indc_dt: str | None, allowed: li
             db.get_pool().release(conn)
     if commit:
         sc.drop_cache("rt")
-        audit.record(me, "STOCK_RT_INDC", f"{plan['brandNm']} {dt}",
+        audit.record(me, "STOCK_RT_INDC", f"{plan['brandNm']} {dt}{' (창고 부족 채우기)' if source == 'short' else ''}",
                      summary=f"본사지시 RT {len(ids):,}장 ({plan['count']:,}건 · 보내는 매장 {plan['senders']} · 받는 매장 {plan['receivers']}) "
                              f"지시번호 {ids[0]} ~ {ids[-1]} · 제외 {len(plan['skipped'])}건",
                      after={"indcDt": dt, "ids": [ids[0], ids[-1]], "rows": [[r["prdtCd"], r["colorCd"], r["sizeCd"], r["fromShopId"],
