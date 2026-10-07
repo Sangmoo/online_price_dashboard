@@ -247,7 +247,8 @@ test('메뉴를 열면 이용 기록을 보내고, 관리자는 메뉴 이용 �
   await page.getByRole('button', { name: '메뉴 이용' }).click()
   await expect(page.getByRole('row', { name: /판매 현황 42/ })).toContainText('75%') // 이용자 3 / 권한 4
   await expect(page.getByRole('row', { name: /홍길동/ })).toContainText('미사용')
-  expect(api.find('POST', '/api/usage/menu').map((c) => (c.body as { page: string }).page)).toEqual(['sale_dashboard', 'admin'])
+  // 이용 기록은 화면과 따로 보내지므로 도착을 기다린다 (바쁠 때 늦게 올 수 있음)
+  await expect.poll(() => api.find('POST', '/api/usage/menu').map((c) => (c.body as { page: string }).page)).toEqual(['sale_dashboard', 'admin'])
   expect(api.find('GET', '/api/admin/menu-usage')[0].query.get('days')).toBe('30')
 })
 

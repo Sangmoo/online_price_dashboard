@@ -46,5 +46,33 @@ def test_trace_records_by_caller(fake_oracle):
 
     page = sql_catalog.page("admin")
     item = next(i for f in page["features"] for i in f["items"] if i["fn"] == "roles._rows")
-    assert item["recent"] and item["recent"][0]["filled"]
+    assert item["runs"] and item["runs"][0]["filled"]
     assert sql_catalog.page("nope")["features"] == []
+
+
+def test_runs_are_my_latest_request_with_values(fake_oracle):
+    """관리자가 화면에서 조회한 1회분(같은 요청)의 실제 쿼리를 값이 채워진 채로, 내 기록 우선"""
+    sql_trace.clear()
+
+    def request(usr, uid):
+        tok = sql_trace.begin()
+        sql_trace.set_user(usr)
+        try:
+            roles._get(uid) if uid else None
+        except Exception:  # noqa: BLE001 - 없는 묶음이면 예외지만 SQL 은 실행됨
+            pass
+        roles._members()
+        sql_trace.end(tok)
+
+    request("ADM", "R1")
+    request("OTHER", "R2")      # 다른 사용자의 더 최근 조회
+    request("ADM", "R3")        # 내 최근 조회
+
+    get = sql_catalog._item("roles._get", "ADM")
+    assert get["mine"] and len(get["runs"]) == 1
+    run = get["runs"][0]
+    assert ":r" not in run["filled"].split("WHERE", 1)[1] and "'R3'" in run["filled"]     # 실제 값이 들어간 쿼리
+    assert get["older"] == []                     # 같은 SQL 은 마지막 값으로 갱신 (R1 기록은 R3 로 바뀜)
+    assert sql_trace.recent("roles._get")[0]["count"] == 2 and len(sql_trace.recent("roles._get")) == 2   # ADM 2회 · OTHER 1회
+    # 내 기록이 없으면 다른 사용자의 최근 조회를 보여준다
+    assert "'R3'" in sql_catalog._item("roles._get", "NOBODY")["runs"][0]["filled"]

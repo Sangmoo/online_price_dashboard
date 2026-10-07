@@ -2,7 +2,8 @@
 
 - 코드 기준: 각 기능 함수의 소스에서 SQL 문자열을 뽑는다(코드가 바뀌면 자동으로 따라감).
   { } 로 남는 부분은 조회 조건에 따라 코드가 채우는 부분, :이름 은 바인드 변수.
-- 최근 실행: sql_trace 가 메모리에 남긴 실제 SQL 과 바인드 값 (서버 재시작 후 그 기능을 한 번 실행해야 보임).
+- 실제 실행: sql_trace 가 메모리에 남긴 SQL 에 바인드 값을 채운 실제 쿼리. 요청한 관리자가 가장 최근에 조회한 1회분을 먼저
+  (서버 재시작 후 화면에서 그 기능을 한 번 조회해야 보임).
 기능 목록(CATALOG)의 함수 이름은 tests/test_sql_catalog_unit.py 가 존재 여부를 확인한다.
 """
 from __future__ import annotations
@@ -44,6 +45,7 @@ CATALOG: dict[str, list[tuple[str, str, list]]] = {
         ("저장된 매장 연결", "T_SELECT_ONLINE_MALL_SHOP 매핑", ["mall_shop._maps"]),
         ("매장 선택 목록", "영업 중 매장 · 브랜드", ["shop_info.all_rows"]),
         ("매핑 저장 · 해제", "MERGE 로 저장, 매장코드를 비우면 삭제", ["mall_shop.save"]),
+        ("엑셀 업로드", "기존 연결과 비교(미리보기) 후 매핑 저장과 같은 MERGE", ["mall_shop._maps", "sale_monthly.shop_names", "mall_shop.save"]),
         ("매장코드 채우기", "최근 7일 수집 행 SHOP_ID 채우기 프로시저", [
             {"title": "프로시저 직접 실행 (SQL*Plus · SQL Developer)", "sql":
              "VARIABLE n NUMBER\nEXEC P_FILL_ONLINE_SHOP_ID(TO_CHAR(SYSDATE - 6, 'YYYYMMDD'), TO_CHAR(SYSDATE, 'YYYYMMDD'), :n)\nPRINT n"},
@@ -78,6 +80,8 @@ CATALOG: dict[str, list[tuple[str, str, list]]] = {
         ("매장 상세", "매장 정보 · 직전 실사 · 재고 수량 · 실사 등급 · 올해 매출", ["invt_plan.shop_detail", "invt_plan.invt_rank", "invt_plan._sales_ytd"]),
         ("매장 매니저", "현재 · 과거 매니저와 연락처", ["invt_plan.shop_managers"]),
         ("매장 판매 추이", "", ["sale_monthly.shop_trend"]),
+        ("엑셀 업로드", "매장 확인 · 기존 계획 수 (미리보기), 한 번에 등록 (매장 정보 자동 입력은 '매장 상세' 쿼리)",
+         ["uploads._invt_rows", "uploads.invt_apply"]),
     ],
     "notice": [
         ("공지 목록", "게시판 · 로그인 팝업 (첨부 · 댓글 수 · 내 읽음)", ["notices._all", "notices._file_meta", "notices._comment_counts", "notices._my_reads"]),
@@ -277,25 +281,42 @@ def _json(v):
     return v
 
 
-def _item(src) -> dict:
+def _run(r: dict) -> dict:
+    sql = tidy(r["sql"])
+    return {"sql": sql, "raw": r["sql"], "filled": fill_binds(sql, r["binds"]), "binds": {k: _json(v) for k, v in r["binds"].items()},
+            "at": r["at"], "ms": r["ms"], "count": r["count"], "usr": r.get("usr")}
+
+
+def _item(src, usr: str | None = None) -> dict:
+    """runs: 가장 최근 조회 1회(같은 요청)에서 실행된 SQL — 값이 채워진 실제 쿼리, 실행 순서대로.
+    내가 실행한 기록이 있으면 내 것, 없으면 다른 사용자의 최근 조회. older: 그 이전 실행."""
     if isinstance(src, dict):
-        return {"fn": None, "title": src["title"], "file": None, "line": None, "sqls": [tidy(src["sql"])], "recent": []}
+        return {"fn": None, "title": src["title"], "file": None, "line": None, "sqls": [tidy(src["sql"])], "runs": [], "older": []}
     try:
         t = templates(src)
     except Exception as ex:  # noqa: BLE001 - 한 함수가 실패해도 나머지는 보여준다
         t = {"error": f"소스를 읽지 못했습니다: {ex}", "sqls": []}
-    recent = [{"sql": tidy(r["sql"]), "filled": fill_binds(tidy(r["sql"]), r["binds"]),
-               "binds": {k: _json(v) for k, v in r["binds"].items()}, "at": r["at"], "ms": r["ms"], "count": r["count"]}
-              for r in sql_trace.recent(src)]
+    all_runs = sql_trace.recent(src)                       # 최근 순
+    mine = [r for r in all_runs if usr and r.get("usr") == usr]
+    pool = mine or all_runs
+    runs, older = [], []
+    if pool:
+        last = pool[0].get("req")
+        runs = [_run(r) for r in reversed(pool) if r.get("req") == last]
+        older = [_run(r) for r in pool if r.get("req") != last]
     return {"fn": src, "title": None, "file": t.get("file"), "line": t.get("line"), "sqls": t["sqls"],
-            "error": t.get("error"), "recent": recent}
+            "error": t.get("error"), "runs": runs, "older": older, "mine": bool(mine)}
 
 
-def page(key: str) -> dict:
+def page_label(key: str) -> str:
     from . import auth
 
+    return {"notice": "공지사항", "mypage": "마이페이지", "admin": "관리자"}.get(key) or auth.PAGE_LABELS.get(key, key)
+
+
+def page(key: str, usr: str | None = None) -> dict:
     if key not in CATALOG:
         return {"page": key, "features": [], "since": sql_trace.started}
-    label = {"notice": "공지사항", "mypage": "마이페이지", "admin": "관리자"}.get(key) or auth.PAGE_LABELS.get(key, key)
-    features = [{"title": t, "desc": d, "items": [_item(s) for s in srcs]} for t, d, srcs in CATALOG[key]]
+    label = page_label(key)
+    features = [{"title": t, "desc": d, "items": [_item(s, usr) for s in srcs]} for t, d, srcs in CATALOG[key]]
     return {"page": key, "label": label, "features": features, "since": sql_trace.started}

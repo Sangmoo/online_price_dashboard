@@ -10,6 +10,7 @@ import {
   Layers,
   UserX,
   CalendarClock,
+  Gauge,
   Check,
   Download,
   Home,
@@ -61,10 +62,11 @@ import CleanupTab from './admin/CleanupTab'
 import { opsApi } from '../opsApi'
 import { startViewAs } from '../viewAs'
 import JobsTab from './admin/JobsTab'
+import PerfTab from './admin/PerfTab'
 import DownloadsTab from './admin/DownloadsTab'
 import NoticeTab from './admin/NoticeTab'
 
-export type Tab = 'home' | 'roles' | 'cleanup' | 'jobs' | 'downloads' | 'notices' | 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
+export type Tab = 'home' | 'roles' | 'cleanup' | 'jobs' | 'perf' | 'downloads' | 'notices' | 'users' | 'menus' | 'ai' | 'aitools' | 'usage' | 'menuusage' | 'feedback' | 'logins' | 'sessions' | 'audit' | 'backup' | 'status' | 'serverlogs'
 
 const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'home', label: '홈', icon: Home },
@@ -84,6 +86,7 @@ const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
   { key: 'downloads', label: '다운로드 이력', icon: Download },
   { key: 'backup', label: '설정 백업', icon: Archive },
   { key: 'jobs', label: '스케줄 · 배치', icon: CalendarClock },
+  { key: 'perf', label: '쿼리 성능', icon: Gauge },
   { key: 'status', label: '서버 상태', icon: Server },
   { key: 'serverlogs', label: '서버 로그', icon: ScrollText },
 ]
@@ -116,6 +119,7 @@ export default function AdminView({ me, initialTab, feedbackOpen = 0, onFeedback
       </div>
       {tab === 'home' && <HomeTab notify={notify} go={setTab} />}
       {tab === 'jobs' && <JobsTab notify={notify} />}
+      {tab === 'perf' && <PerfTab notify={notify} />}
       {tab === 'downloads' && <DownloadsTab notify={notify} />}
       {tab === 'notices' && <NoticeTab notify={notify} onChange={onOpsChange} />}
       {tab === 'users' && <UsersTab me={me} notify={notify} />}

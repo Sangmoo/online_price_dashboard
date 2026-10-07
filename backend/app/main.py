@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import logs
+from . import logs, sql_trace
 
 logs.setup()  # 다른 모듈보다 먼저: import 중 발생하는 로그도 파일에 남도록
 
@@ -78,12 +78,15 @@ app.add_middleware(
 async def session_header(request: Request, call_next):
     """인증된 요청이면 연장된 세션 만료시각을 헤더로 알려준다 (프론트 세션 타이머 동기화). API 요청은 1줄씩 로그."""
     start = time.perf_counter()
+    trace = sql_trace.begin()   # 관리자 '사용 쿼리': 이 요청에서 실행된 SQL 을 사용자 · 요청 단위로 묶는다
     try:
         response = await call_next(request)
     except Exception:
+        sql_trace.end(trace)
         _log.exception("처리 실패 user=%s %s %s", getattr(request.state, "usr_id", "-"), request.method, request.url.path)
         return JSONResponse(status_code=500, content={"detail": {"message": "서버 오류가 발생했습니다. 잠시 후 다시 시도하세요.",
                                                                   "code": "SERVER_ERROR"}})
+    sql_trace.end(trace)
     exp = getattr(request.state, "session_expires", None)
     if exp:
         response.headers["X-Session-Expires"] = str(exp)
@@ -702,11 +705,11 @@ def admin_view_as(usr_id: str, resume: bool = False, me: dict = Depends(require_
 
 
 @app.get("/api/admin/queries")
-def admin_queries(page: str, _: dict = Depends(require_admin)):
-    """사용 쿼리: 메뉴의 기능별 SQL (코드 기준 + 최근 실행 SQL · 바인드 값)"""
+def admin_queries(page: str, me: dict = Depends(require_admin)):
+    """사용 쿼리: 메뉴의 기능별 SQL — 내가 최근 조회할 때 실제 실행된 쿼리(값 채움) + 코드 기준"""
     from . import sql_catalog
 
-    return sql_catalog.page(page)
+    return sql_catalog.page(page, me["id"])
 
 
 # ---- 마이페이지 ----
@@ -1182,6 +1185,76 @@ class DeleteIds(BaseModel):
 @app.post("/api/invt-plans/delete")
 def invt_delete(body: DeleteIds, user: dict = Depends(invt_page)):
     return {"deleted": invt_plan.delete_plans(user["id"], body.ids)}
+
+
+# ----------------------------------------------------------------------------
+# 엑셀 업로드로 한 번에 등록 (실사계획 · 판매처 매장 연결): 양식 → 미리보기 → 저장
+# ----------------------------------------------------------------------------
+@app.get("/api/invt-plans/upload-template")
+def invt_upload_template(_: dict = Depends(invt_page)):
+    from . import uploads
+
+    return _xlsx_response(uploads.invt_template(), "실사계획_업로드_양식.xlsx")
+
+
+@app.post("/api/invt-plans/upload/preview")
+def invt_upload_preview(body: dict, _: dict = Depends(invt_page)):
+    from . import uploads
+
+    return uploads.invt_preview(body)
+
+
+@app.post("/api/invt-plans/upload/apply")
+def invt_upload_apply(body: dict, user: dict = Depends(invt_page)):
+    from . import uploads
+
+    return uploads.invt_apply(user, body)
+
+
+@app.get("/api/mall-shops/upload-template")
+def mall_upload_template(_: dict = Depends(mall_page)):
+    from . import uploads
+
+    return _xlsx_response(uploads.mall_template(), "판매처매장연결_업로드_양식.xlsx")
+
+
+@app.post("/api/mall-shops/upload/preview")
+def mall_upload_preview(body: dict, _: dict = Depends(mall_page)):
+    from . import uploads
+
+    return uploads.mall_preview(body)
+
+
+@app.post("/api/mall-shops/upload/apply")
+def mall_upload_apply(body: dict, me: dict = Depends(mall_page)):
+    from . import uploads
+
+    return uploads.mall_apply(me, body)
+
+
+# ----------------------------------------------------------------------------
+# 관리자 > 쿼리 성능 · 실행 계획
+# ----------------------------------------------------------------------------
+@app.get("/api/admin/perf")
+def admin_perf(days: int = 7, _: dict = Depends(require_admin)):
+    from . import sql_perf
+
+    return sql_perf.report(days)
+
+
+@app.post("/api/admin/perf/clear")
+def admin_perf_clear(_: dict = Depends(require_admin)):
+    from . import sql_perf
+
+    return sql_perf.clear()
+
+
+@app.post("/api/admin/sql/explain")
+def admin_sql_explain(body: dict, _: dict = Depends(require_admin)):
+    """실행 계획 (쿼리는 실행하지 않음): 실제 계획(커서 캐시) + 예상 계획(EXPLAIN PLAN)"""
+    from . import sql_perf
+
+    return sql_perf.explain(str(body.get("sql") or ""))
 
 
 # 프론트 빌드 결과(frontend/dist)가 있으면 같은 포트에서 함께 서비스 (로컬 배포용)

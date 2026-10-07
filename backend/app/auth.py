@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from . import appdb, config, db, logs, userdb
+from . import appdb, config, db, logs, sql_trace, userdb
 
 _log = logs.get("auth")
 
@@ -268,6 +268,7 @@ def current_user(request: Request) -> dict:
     else:
         expires = sess["expires_at"]
     request.state.usr_id = me["id"]
+    sql_trace.set_user(me["id"])   # 사용 쿼리: 미리보기 중이어도 실제로 조회한 관리자 기준
     _check_maintenance(me)
     request.state.session_expires = int(expires)
     me["ip"] = request.client.host if getattr(request, "client", None) else None  # 관리자 변경 이력용

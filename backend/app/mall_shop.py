@@ -237,29 +237,34 @@ def listing(days: int = 7) -> dict:
     }
 
 
+def clean_item(it: dict) -> tuple:
+    """항목 1개 정리 · 형식 검증 (매장 존재 확인은 validate 가 모아서). (사이트, 판매자, 브랜드, 매장, 사용, 비고)"""
+    if not isinstance(it, dict):
+        _bad("항목 형식이 올바르지 않습니다.")
+    mall = str(it.get("mallNm") or "").strip()
+    sell = str(it.get("sellNo") or "").strip() or NO_SELLER
+    brd = str(it.get("brdCd") or ALL_BRANDS).strip().upper()
+    if brd not in BRD_CODES:
+        _bad(f"브랜드는 {', '.join(sorted(BRD_CODES))} 중 하나입니다.")
+    shop = str(it.get("shopId") or "").strip().upper()
+    use = "N" if it.get("useYn") == "N" else "Y"
+    rmk = (str(it.get("rmk") or "").strip() or None)
+    if not mall:
+        _bad("사이트명이 없습니다.")
+    if len(mall.encode("utf-8")) > 300 or len(sell) > 50:
+        _bad("사이트명·판매자번호가 너무 깁니다.")
+    if shop and not re.match(r"^[A-Z0-9]{1,6}$", shop):
+        _bad(f"매장코드 '{shop}' 형식이 올바르지 않습니다 (6자리 이내).")
+    if rmk and len(rmk.encode("utf-8")) > 500:
+        _bad("비고가 너무 깁니다.")
+    return mall, sell, brd, shop, use, rmk
+
+
 def validate(items: list[dict]) -> tuple[list[tuple], dict[str, str]]:
     """저장 전 검증 (화면 저장 · AI 변경안 공용). (정리된 항목 [(사이트, 판매자, 브랜드, 매장, 사용, 비고)], 매장명) 을 돌려준다."""
     if not isinstance(items, list) or not items or len(items) > 500:
         _bad("저장할 항목(최대 500개)이 필요합니다.")
-    clean = []
-    for it in items:
-        if not isinstance(it, dict):
-            _bad("항목 형식이 올바르지 않습니다.")
-        mall = str(it.get("mallNm") or "").strip()
-        sell = str(it.get("sellNo") or "").strip() or NO_SELLER
-        brd = str(it.get("brdCd") or ALL_BRANDS).strip().upper()
-        if brd not in BRD_CODES:
-            _bad(f"브랜드는 {', '.join(sorted(BRD_CODES))} 중 하나입니다.")
-        shop = str(it.get("shopId") or "").strip().upper()
-        use = "N" if it.get("useYn") == "N" else "Y"
-        rmk = (str(it.get("rmk") or "").strip() or None)
-        if not mall or len(mall.encode("utf-8")) > 300 or len(sell) > 50:
-            _bad("사이트명·판매자번호가 올바르지 않습니다.")
-        if shop and not re.match(r"^[A-Z0-9]{1,6}$", shop):
-            _bad(f"매장코드 '{shop}' 형식이 올바르지 않습니다 (6자리 이내).")
-        if rmk and len(rmk.encode("utf-8")) > 500:
-            _bad("비고가 너무 깁니다.")
-        clean.append((mall, sell, brd, shop, use, rmk))
+    clean = [clean_item(it) for it in items]
     ids = sorted({c[3] for c in clean if c[3]})
     names = _shop_names(ids)
     missing = [i for i in ids if i not in names]

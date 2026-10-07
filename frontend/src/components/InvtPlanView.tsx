@@ -7,6 +7,7 @@ import {
   Check,
   ClipboardList,
   Download,
+  Upload,
   Loader2,
   Pencil,
   Plus,
@@ -19,6 +20,7 @@ import { invtApi, isoToYmd, ymdToIso, type InvtOptions, type InvtPlan } from '..
 import { fmtNum } from '../format'
 import ShopTrendModal from './ShopTrendModal'
 import InvtPlanEditor from './InvtPlanEditor'
+import UploadModal, { type UploadCol } from './UploadModal'
 
 type Col = {
   key: keyof InvtPlan
@@ -78,6 +80,8 @@ const defaultCond = (): Cond => {
 const sameCond = (a: Cond, b: Cond) =>
   a.q.trim() === b.q.trim() && a.lastFrom === b.lastFrom && a.lastTo === b.lastTo && a.planFilter === b.planFilter && a.twiceOnly === b.twiceOnly
 
+const INVT_UPLOAD_COLS: UploadCol[] = [{ key: 'shopId', label: '매장코드' }, { key: 'shopNm', label: '매장명' }, { key: 'brdNm', label: '브랜드' }, { key: 'shopFormNm', label: '유통' }, { key: 'invtPlanDt', label: '실사예정일', fmt: 'date' }, { key: 'invtPlanNote', label: '실사예정' }, { key: 'expectAmt', label: '실사예상액', fmt: 'num' }, { key: 'stlmTeam', label: '정산팀' }, { key: 'shopRankNm', label: '관리등급' }, { key: 'lastInvtDt', label: '최종실사일', fmt: 'date' }]
+
 export default function InvtPlanView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
   const [plans, setPlans] = useState<InvtPlan[]>([])
   const [options, setOptions] = useState<InvtOptions | null>(null)
@@ -99,6 +103,7 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
   const [datePop, setDatePop] = useState<{ plan: InvtPlan; x: number; y: number } | null>(null)
   const [trend, setTrend] = useState<InvtPlan | null>(null)
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   const notify = useCallback((text: string, isError = false) => {
@@ -313,6 +318,9 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
           <button className="btn success" onClick={exportXlsx} disabled={exporting || rows.length === 0}>
             {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} 엑셀 ({fmtNum(rows.length)}건)
           </button>
+          <button className="btn ghost" onClick={() => setUploadOpen(true)} title="엑셀 양식으로 여러 매장 실사계획을 한 번에 등록">
+            <Upload size={15} /> 엑셀 업로드
+          </button>
           <button className="btn primary" onClick={() => setEditor({ plan: null })}>
             <Plus size={15} /> 신규 등록
           </button>
@@ -439,6 +447,11 @@ export default function InvtPlanView({ onContextChange }: { onContextChange?: (c
         />
       )}
 
+      {uploadOpen && (
+        <UploadModal kind="invt" title="실사계획 엑셀 업로드" cols={INVT_UPLOAD_COLS} onClose={() => setUploadOpen(false)}
+          onSaved={(msg) => { notify(msg); load() }}
+          guide={<>매장코드만 적으면 화면에서 매장을 고를 때처럼 <b>브랜드 · 유통 · 매장명 · 매출 · 최종실사 · 재고 · 관리등급 · 매장번호</b>를 자동으로 채웁니다. 실사예정일 · 실사예정 · 기본료 · 실사예상액 · 정산팀 · 매니저 · 비고는 엑셀에 적은 값으로 등록합니다.</>} />
+      )}
       {toast && (
         <div className={`toast ${toast.error ? 'error' : ''}`}>
           {toast.error ? <X size={15} /> : <Check size={15} />} {toast.text}

@@ -633,7 +633,7 @@ function Shell({ user, theme, onTheme, onLogout }: ShellProps) {
         )}
         {queryOpen && view && (
           <Suspense fallback={null}>
-            <QueryModal page={view} onClose={closeQuery} />
+            <QueryModal page={view} me={user.id} onClose={closeQuery} />
           </Suspense>
         )}
         {feedbackOpen && (

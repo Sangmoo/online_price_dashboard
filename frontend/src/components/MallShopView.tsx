@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Loader2, Save, Search, Wand2 } from 'lucide-react'
+import { AlertTriangle, Loader2, Save, Search, Upload, Wand2 } from 'lucide-react'
+import UploadModal, { type UploadCol } from './UploadModal'
 import { api, type MallShopList, type MallShopRow } from '../api'
 import { fmtNum } from '../format'
 
@@ -12,6 +13,9 @@ const keyOf = (r: { mallNm: string; sellNo: string; brdCd: string }) => `${r.mal
 const d8 = (v: string | null) => (v ? `${v.slice(4, 6)}-${v.slice(6, 8)}` : '-')
 
 /** 온라인 가격 > 판매처 매장 연결: 사이트·판매자번호·브랜드별 매장코드 매핑 (수집 프로그램이 T_SELECT_ONLINE_MNG_R.SHOP_ID 를 채운다) */
+const MALL_UPLOAD_COLS: UploadCol[] = [{ key: 'mallNm', label: '사이트' }, { key: 'sellNo', label: '판매자번호' }, { key: 'brand', label: '브랜드' },
+  { key: 'shopId', label: '매장코드' }, { key: 'shopNm', label: '매장명' }, { key: 'useYn', label: '사용' }, { key: 'rmk', label: '비고' }]
+
 export default function MallShopView() {
   // 조회 조건: 화면에서 고르는 값(draft)과 [조회]로 적용한 값(applied)을 나눈다 — 메뉴를 열면 최근 7일로 한 번 조회
   const [draft, setDraft] = useState<Cond>(DEFAULT_COND)
@@ -23,6 +27,7 @@ export default function MallShopView() {
   const [error, setError] = useState<string | null>(null)
   const [edits, setEdits] = useState<Record<string, Edit>>({})
   const [saving, setSaving] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
   const load = useCallback(() => {
@@ -145,6 +150,9 @@ export default function MallShopView() {
             <Wand2 size={15} /> 후보 {suggestible}건 채우기
           </button>
         )}
+        <button className="btn ghost" disabled={!data?.ready} onClick={() => setUploadOpen(true)} title="엑셀 양식으로 여러 판매처 연결을 한 번에 등록 · 수정 · 해제">
+          <Upload size={15} /> 엑셀 업로드
+        </button>
         <button className="btn primary" disabled={!pending.length || saving || badCodes.length > 0 || !data?.ready} onClick={save}>
           {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} 변경 {pending.length}건 저장
         </button>
@@ -158,6 +166,11 @@ export default function MallShopView() {
       )}
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert ok-inline">{notice}</div>}
+      {uploadOpen && (
+        <UploadModal kind="mall" title="판매처 매장 연결 엑셀 업로드" cols={MALL_UPLOAD_COLS} onClose={() => setUploadOpen(false)}
+          onSaved={(msg) => { setNotice(msg); load() }}
+          guide={<>사이트 · 판매자번호 · 브랜드마다 매장코드를 적습니다. <b>매장코드를 비우면 연결 해제</b>, 사용 · 비고를 비우면 기존 값을 그대로 둡니다. 미리보기에서 신규 · 변경 · 해제 · 같음을 확인하세요. 변경 이력에 남습니다.</>} />
+      )}
       {badCodes.length > 0 && <div className="alert error">매장 목록에 없는 매장코드: {badCodes.map((r) => current(r).shopId).join(', ')}</div>}
 
       {sm && (

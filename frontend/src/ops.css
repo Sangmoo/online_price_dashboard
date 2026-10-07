@@ -235,7 +235,9 @@
 }
 
 /* 관리자 '사용 쿼리' 팝업: 왼쪽 기능 목록 · 오른쪽 SQL */
-.query-btn { color: var(--primary); }
+/* [사용 쿼리] 는 [도움말] 바로 왼쪽에 붙여서 (도움말의 margin-left:auto 를 대신 가짐) */
+.query-btn { color: var(--primary); margin-left: auto; }
+.query-btn + .help-btn { margin-left: -8px; }
 .query-modal { max-width: 1180px; width: calc(100vw - 40px); height: calc(100vh - 40px); }
 .q-head-actions { display: flex; align-items: center; gap: 6px; }
 .q-hint { line-height: 1.6; }
@@ -270,3 +272,57 @@
 .q-code-bar.float { position: absolute; top: 6px; right: 8px; z-index: 1; }
 .q-code-bar.float .copy-btn { background: var(--surface); }
 .q-code-bar.float + .sql-code { padding-right: 110px; }
+.q-badge { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.q-badge.ok { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
+.q-item.ran { border-color: rgba(var(--accent-rgb), .35); }
+.q-run-meta { text-align: right; }
+.q-more { display: flex; gap: 14px; flex-wrap: wrap; }
+.q-more .btn-link { display: inline-flex; align-items: center; gap: 3px; }
+.q-nav-item .small { color: var(--muted); }
+.q-nav-item.ran { font-weight: 600; }
+.q-nav-item.ran .small { color: var(--primary); }
+@media (max-width: 640px) { .query-btn span { display: none; } }
+
+/* 실행 계획 팝업 (사용 쿼리 팝업 위에 뜰 수 있게 한 단계 위) */
+.plan-backdrop { z-index: 1100; }
+.plan-modal { max-width: 1100px; width: calc(100vw - 40px); height: calc(100vh - 40px); }
+.plan-modal > .modal-head { flex: none; }
+.plan-scroll { overflow-y: auto; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+.plan-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plan-hot-label { color: var(--bad, #dc2626); }
+.plan-code { max-height: none; }
+.plan-code .plan-hot { color: var(--bad, #dc2626); font-weight: 700; }
+.plan-sql summary { cursor: pointer; }
+.plan-sql .sql-code { margin-top: 6px; max-height: 260px; }
+.plan-section { display: flex; flex-direction: column; gap: 6px; }
+.plan-section h4 { margin: 0; font-size: 14px; }
+.plan-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--primary-soft); }
+
+/* 쿼리 성능 */
+.perf-table th.sortable { cursor: pointer; user-select: none; }
+.perf-table th.sortable.on { color: var(--primary); }
+.perf-sql { max-width: 640px; }
+.perf-sql code { font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12px; white-space: normal; word-break: break-all; }
+
+/* 엑셀 업로드 팝업 */
+.upload-modal { max-width: 1240px; width: calc(100vw - 40px); max-height: calc(100vh - 40px); padding-bottom: 0; }
+.upload-modal > * { flex: none; }
+.upload-steps { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.upload-steps li { display: flex; align-items: center; gap: 8px; }
+.upload-guide { line-height: 1.6; }
+.drop-zone { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 18px; border: 2px dashed var(--border); border-radius: 12px;
+  color: var(--muted); cursor: pointer; text-align: center; font-size: 13.5px; }
+.drop-zone:hover, .drop-zone.on { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.upload-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.upload-modal > .upload-table { flex: 1 1 auto; min-height: 120px; overflow: auto; }
+.upload-table td { font-size: 12.5px; }
+.upload-table tr.upload-error td { background: rgba(239, 68, 68, .06); }
+.upload-table tr.upload-warn td { background: rgba(245, 158, 11, .07); }
+.up-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+.up-badge.ok { color: var(--success, #059669); background: rgba(16, 185, 129, .12); }
+.up-badge.warn { color: #b45309; background: rgba(245, 158, 11, .15); }
+.up-badge.error { color: var(--bad, #dc2626); background: rgba(239, 68, 68, .12); }
+.up-msg { min-width: 220px; }
+.auto-cell { color: var(--primary); }
+.auto-cell.legend { font-weight: 600; }
+.upload-modal .modal-foot { margin: 0 -20px; position: sticky; bottom: 0; }

@@ -7,6 +7,9 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 const send = <T,>(method: string, url: string, body?: unknown) =>
   json<T>(url, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 
+const UPLOAD_BASE = { invt: '/api/invt-plans', mall: '/api/mall-shops' } as const
+export const uploadTemplateUrl = (kind: 'invt' | 'mall') => `${UPLOAD_BASE[kind]}/upload-template`
+
 type CardError = { error?: string }
 /** 운영 테이블 상태: 없으면 db/create_erp_web_admin_ops.sql 실행 안내 */
 export type TableStatus = { ready: boolean; missing: string[]; ddl: string }
@@ -118,13 +121,40 @@ export type MyOverview = {
   downloads: { total: number; rows: DownloadRow[] } | null
 }
 
-/** 관리자 '사용 쿼리': 메뉴의 기능별 SQL (코드 기준 + 최근 실행) */
-export type QueryRun = { sql: string; filled: string; binds: Record<string, unknown>; at: string; ms: number; count: number }
-export type QueryItem = { fn: string | null; title: string | null; file: string | null; line: number | null; sqls: string[]; error?: string | null; recent: QueryRun[] }
+/** 관리자 '사용 쿼리': 메뉴의 기능별 실제 실행 쿼리(값 채움, 내 최근 조회 1회분) + 코드 기준 SQL */
+export type QueryRun = { sql: string; raw?: string; filled: string; binds: Record<string, unknown>; at: string; ms: number; count: number; usr: string | null }
+export type QueryItem = { fn: string | null; title: string | null; file: string | null; line: number | null; sqls: string[]; error?: string | null
+  runs: QueryRun[]; older: QueryRun[]; mine?: boolean }
 export type QueryFeature = { title: string; desc: string; items: QueryItem[] }
 export type PageQueries = { page: string; label?: string; features: QueryFeature[]; since: string }
 
+/** 관리자 > 쿼리 성능 */
+export type PerfWhere = { menu: string; feature: string }
+export type PerfFunc = { fn: string; where: PerfWhere[]; count: number; totalMs: number; avgMs: number; maxMs: number; slow: number; sqls: number; lastAt: string | null }
+export type PerfSql = { sql: string; raw: string; filled: string; fn: string; where: PerfWhere[]; count: number; avgMs: number; maxMs: number
+  maxAt: string | null; maxUsr: string | null; slow: number; lastAt: string | null }
+export type PerfRequest = { method: string; path: string; menu: string; count: number; avgMs: number; p95Ms: number; maxMs: number; slow: number; lastAt: string | null }
+export type PerfDay = { day: string; requests: number; slow: number; p95Ms: number; avgMs: number }
+export type PerfLogSql = { sql: string; count: number; maxMs: number; avgMs: number; binds: string; lastAt: string | null; truncated: boolean }
+export type PerfReport = { since: string; serverStarted: string; slowSqlSec: number; slowRequestSec: number; days: number
+  funcs: PerfFunc[]; slowSql: PerfSql[]; requests: PerfRequest[]; daily: PerfDay[]; logSlowSql: PerfLogSql[] }
+export type PlanActual = { sqlId: string; planHash: number; children: number; executions: number; avgMs: number | null; bufferGets: number | null
+  diskReads: number | null; rows: number | null; lastActive: string | null; plan: string; error?: undefined } | { error: string }
+export type ExplainResult = { sqlId: string; actual: PlanActual | null; estimate: { plan?: string; error?: string }; at: string }
+
+/** 엑셀 업로드 미리보기 */
+export type UploadRow = { row: number; status: 'ok' | 'warn' | 'error'; messages: string[]; values: Record<string, unknown>
+  display?: Record<string, unknown>; change?: string | null; auto?: string[] }
+export type UploadPreview = { rows: UploadRow[]; summary: { total: number; ok: number; warn: number; error: number; changes?: Record<string, number> } }
+
 export const opsApi = {
+  perf: (days: number) => json<PerfReport>(`/api/admin/perf?${qs({ days })}`),
+  perfClear: () => send<{ since: string }>('POST', '/api/admin/perf/clear'),
+  explain: (sql: string) => send<ExplainResult>('POST', '/api/admin/sql/explain', { sql }),
+  uploadPreview: (kind: 'invt' | 'mall', file: string) => send<UploadPreview>('POST', `${UPLOAD_BASE[kind]}/upload/preview`, { file }),
+  uploadApply: (kind: 'invt' | 'mall', rows: UploadRow[]) =>
+    send<{ saved: number; skipped: number; deleted?: number; changed?: number }>('POST', `${UPLOAD_BASE[kind]}/upload/apply`,
+      { rows: rows.map((r) => ({ row: r.row, values: r.values })) }),
   queries: (page: string) => json<PageQueries>(`/api/admin/queries?${qs({ page })}`),
   home: (fresh = false) => json<AdminHome>(`/api/admin/home?${qs({ fresh: fresh ? 'true' : undefined })}`),
   jobs: (days: number, fresh = false) => json<JobsOverview>(`/api/admin/jobs?${qs({ days, fresh: fresh ? 'true' : undefined })}`),
