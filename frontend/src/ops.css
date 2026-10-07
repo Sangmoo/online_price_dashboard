@@ -468,6 +468,8 @@
 .stock-short-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: rgba(245, 158, 11, 0.5); vertical-align: -1px; }
 .stock-short-note, .stock-done { margin: 10px 12px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .stock-subbar.flat { padding: 0; border-bottom: 0; }
+.stock-ai-pick .check-label { margin-left: auto; }
+.stock-perf > .seg { align-self: flex-start; }
 .stock-short-note .btn { margin-left: auto; }
 .stock-write-bar { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .stock-write-modal { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 10px; overflow: auto; }

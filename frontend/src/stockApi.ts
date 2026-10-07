@@ -240,12 +240,12 @@ export type Skipped = { key: string[]; reason: string }
 export type WritePreview = { brand: string; brandNm: string; asOf: string; count: number; qty: number; skipped: Skipped[] } & Record<string, unknown>
 export type RtRegResult = { ok: boolean; indcDt: string; count: number; qty: number; firstId: string; lastId: string; senders: number; receivers: number; skipped: Skipped[] }
 export type AllocRegResult = { ok: boolean; askDt: string; askSeqn: number; count: number; qty: number; shops: number; skipped: Skipped[] }
-export type DeleteResult = { ok: boolean; deleted: number; requested: number; notDeleted: number }
+export type DeleteResult = { ok: boolean; deleted: number; requested: number; notDeleted: number; canceled?: number; removed?: number }
 export type RtRegistered = {
   brand: string; brandNm: string; from: string; to: string; total: number; deletable: number
   byStatus: { code: string; name: string; qty: number }[]
   rows: { id: string; indcDt: string; prdtCd: string; colorCd: string; sizeCd: string; qty: number; fromShopId: string; fromShopNm: string | null
-    toShopId: string; toShopNm: string | null; status: string; statusNm: string; insDay: string; insUser: string; deletable: boolean }[]
+    toShopId: string; toShopNm: string | null; status: string; statusNm: string; insDay: string; insUser: string; cnfmUser?: string | null; resn?: string | null; deletable: boolean }[]
 }
 export type AllocRegistered = {
   brand: string; brandNm: string; from: string; to: string; total: number; deletable: number
@@ -275,6 +275,15 @@ export type ShortRt = {
 export type RtWriteSource = {
   preview: (keys: string[][]) => Promise<WritePreview>
   register: (keys: string[][], indcDt: string) => Promise<RtRegResult>
+}
+export type PerfShop = { shopId: string; shopNm: string | null; team: string | null; total: number; accepted: number; denied: number; autoDenied: number
+  pending: number; canceled: number; acceptRate: number | null; avgHours: number | null; sold: number; soldRate: number | null }
+export type RtPerformance = {
+  brand: string; brandNm: string; from: string; to: string; scope: 'web' | 'all'; asOf: string; soldDays: number
+  summary: { total: number; byStatus: { code: string; name: string; qty: number }[]; accepted: number; denied: number; autoDenied: number; pending: number
+    canceled: number; acceptRate: number | null; avgHours: number | null; sold: number; soldRate: number | null; maturedAccepted: number; maturedSold: number }
+  senders: PerfShop[]; receivers: PerfShop[]; reasons: { reason: string; qty: number }[]
+  days: { day: string; total: number; accepted: number; denied: number; pending: number }[]
 }
 export type AskSeqns = { brand: string; askDt: string; next: number; used: { seqn: number; brand: string; brandNm: string; clsby: string; rows: number; confirmed: boolean; web: boolean }[] }
 
@@ -317,6 +326,10 @@ export const stockApi = {
   allocRegistered: (brand: string, dateFrom: string, dateTo: string) => json<AllocRegistered>(`/api/stock-rt/alloc/registered?${qs({ brand, dateFrom, dateTo })}`),
   allocDelete: (brand: string, keys: (string | number)[][]) => post<DeleteResult>('/api/stock-rt/alloc/delete', { brand, keys }),
 
+  rtPerformance: (brand: string, dateFrom: string, dateTo: string, scope: string, refresh = false) =>
+    json<RtPerformance>(`/api/stock-rt/rt/performance?${qs({ brand, dateFrom, dateTo, scope, refresh: refresh ? 'true' : undefined })}`),
+  rtPerformanceExport: (brand: string, dateFrom: string, dateTo: string, scope: string) =>
+    downloadFile(`/api/stock-rt/rt/performance/export?${qs({ brand, dateFrom, dateTo, scope })}`, undefined, 'RT성과.xlsx'),
   // ---- 자동 RT 설정 점검 · 창고 부족 → 매장 간 RT
   settingCheck: (c: RtCond) => json<SettingCheck>(`/api/stock-rt/rt/setting-check?${rtQuery(c)}`),
   settingExport: (c: RtCond) => downloadFile(`/api/stock-rt/rt/setting-check/export?${rtQuery(c)}`, undefined, '자동RT설정점검.xlsx'),

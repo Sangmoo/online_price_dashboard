@@ -9,6 +9,8 @@ export type StockOpenRequest = {
   view?: string | null
   run?: boolean
   cond: Record<string, unknown>
+  /** AI 가 고른 추천 행 (품번 · 칼라 · 사이즈 · 보내는 매장 · 받는 매장) — 계산 뒤 화면에서 체크 */
+  select?: { keys: string[][]; label: string }
   nonce: number
 }
 

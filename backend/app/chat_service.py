@@ -72,12 +72,15 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
   대화창에 [적용] 버튼이 있는 카드가 나가고 사용자가 눌러야 저장되므로, '아래 [적용]을 누르면 저장됩니다'라고 안내하고 저장했다고 말하지 않습니다.
   사이트명이 모호하거나 판매자번호가 여러 개면 먼저 search_mall_shop_mappings 로 확인하고, 경고(브랜드가 다른 매장 등)가 있으면 함께 알립니다.
 
-[G] 재고 재배치 추천 (메뉴: 데이터 관리 > 재고 재배치 추천) — 도구: recommend_store_rt, recommend_wh_allocation, get_auto_rt_stats, check_auto_rt_settings, open_stock_rt_screen
+[G] 재고 재배치 추천 (메뉴: 데이터 관리 > 재고 재배치 추천) — 도구: recommend_store_rt, recommend_wh_allocation, get_auto_rt_stats, check_auto_rt_settings, pick_store_rt_rows, get_rt_performance, open_stock_rt_screen
 - 매장 간 RT 추천(판매 후 품절 매장 ← 같은 RT 그룹의 안 팔리는 재고 매장)과 창고 → 매장 배분 추천(판매분 자동보충 규칙)을
   ERP 자동 RT · 판매분 자동보충과 같은 규칙으로 계산합니다. AI 는 조회 · 추천만 하며 ERP 에 RT · 배분의뢰를 등록하지 않는다고 밝힙니다 (등록은 화면에서 관리자가 [본사지시 RT 지시] · [배분의뢰 등록]으로).
 - 기간은 최대 31일입니다. 매장 간 RT 는 기본 최근 7일 · 안 팔리는 매장 우선, 창고 배분은 기본 어제 하루 · 최근 자동보충 실행 조건입니다.
 - 자동 RT 가 왜 실패하는지('지시가능매장없음')는 get_auto_rt_stats 와 recommend_store_rt 의 senderExcludedByRule 로 설명합니다.
   지정가능수 설정을 어느 매장에서 얼마나 바꿔야 하는지는 check_auto_rt_settings 로 답합니다 (설정 변경은 ERP 에서).
+- '…인 것만 골라줘 · 선택해줘'처럼 추천 중 일부를 고르라고 하면 pick_store_rt_rows 로 [화면에서 열고 선택] 카드를 띄웁니다. 선택 · 등록했다고 말하지 말고,
+  카드를 누르면 화면에서 체크되고 관리자가 [본사지시 RT 지시]를 눌러야 ERP 에 들어간다고 안내합니다.
+- 지시한 RT 가 수락 · 거부됐는지, 팔렸는지는 get_rt_performance 로 답합니다 (기본은 이 화면에서 지시한 것, 본사지시 전체는 scope=all).
 - 사용자가 '화면으로 보여줘 · 화면 열어줘'처럼 화면을 원하면 open_stock_rt_screen 으로 [화면에서 열기] 카드를 띄우고, 카드를 누르라고 안내합니다 (열었다고 말하지 않음).
 - 계산에 10~40초 걸릴 수 있어, 같은 질문에서 조건을 바꿔 여러 번 부르지 말고 view · shop_id 로 필요한 부분만 봅니다.
 
@@ -474,9 +477,9 @@ def _table_title(name: str, inp: dict) -> str:
     if name == "find_online_discount_alerts":
         ym = inp.get("ym") or "최근 마감 월"
         return f"온라인 할인 주의 상품 · 매장 {inp['ym_from'] + '~' if inp.get('ym_from') else ''}{ym}{' · ' + inp['brand'] if inp.get('brand') else ''}"
-    if name in ("recommend_store_rt", "recommend_wh_allocation", "get_auto_rt_stats", "check_auto_rt_settings"):
+    if name in ("recommend_store_rt", "recommend_wh_allocation", "get_auto_rt_stats", "check_auto_rt_settings", "pick_store_rt_rows", "get_rt_performance"):
         title = {"recommend_store_rt": "매장 간 RT 추천", "recommend_wh_allocation": "창고 → 매장 배분 추천", "get_auto_rt_stats": "자동 RT 현황",
-                 "check_auto_rt_settings": "자동 RT 설정 점검"}[name]
+                 "check_auto_rt_settings": "자동 RT 설정 점검", "pick_store_rt_rows": "RT 추천 골라 선택", "get_rt_performance": "RT 성과"}[name]
         cond = [f"{k}={','.join(map(str, v)) if isinstance(v, list) else v}" for k, v in inp.items() if k not in ("limit",) and v not in (None, "", [])]
         return title + (f" · {', '.join(cond)}" if cond else "")
     if name == "get_product_insight":

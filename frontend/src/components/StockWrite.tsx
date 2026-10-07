@@ -58,14 +58,14 @@ export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
     setError('')
     try {
       const r = await source.register(keys, indcDt)
-      onDone(`본사지시 RT ${fmtNum(r.qty)}장(${fmtNum(r.count)}건)을 지시했습니다 · 지시번호 ${r.firstId} ~ ${r.lastId}${r.skipped.length ? ` · 제외 ${r.skipped.length}건` : ''} — ERP 에서 매장이 확정합니다.`)
+      onDone(`본사지시 RT ${fmtNum(r.qty)}장(${fmtNum(r.count)}건)을 지시 · 확정했습니다 · 지시번호 ${r.firstId} ~ ${r.lastId}${r.skipped.length ? ` · 제외 ${r.skipped.length}건` : ''} — 매장이 수락 · 거부합니다.`)
     } catch (e) { setError(errText(e)) } finally { setBusy(false) }
   }
   return (
     <Modal title="본사지시 RT 지시 등록" icon={<Send size={17} />} onClose={onClose}>
       <div className="alert info">
-        <span>ERP <b>본사지시 RT</b> 에 <b>지시(미확정)</b>만 넣습니다 (T_INDC_RT, 1장에 1행). 확정 · 이동요청은 ERP 에서 매장이 합니다.
-        보내는 매장 재고는 지금 기준으로 다시 확인해 모자라면 뺍니다.</span>
+        <span>ERP <b>본사지시 RT</b> 를 지시하고 <b>로그인한 사번으로 확정</b>합니다 (T_INDC_RT 1장에 1행 → 매장 이동요청 T_SHOP_REQ <b>매장 미처리</b>).
+        매장이 수락 · 거부합니다. 보내는 매장 재고는 지금 기준으로 다시 확인해 모자라면 뺍니다.</span>
       </div>
       {!pv && !error && <div className="stock-loading"><Loader2 size={16} className="spin" /> 지금 재고로 확인하는 중…</div>}
       {pv && (
@@ -203,7 +203,9 @@ export function RegisteredModal({ kind, brand, brandNm, today, onClose, onChange
     try {
       const keys = [...sel]
       const r = kind === 'rt' ? await stockApi.rtDelete(brand, keys) : await stockApi.allocDelete(brand, keys.map((k) => k.split('|')))
-      setMsg(`${fmtNum(r.deleted)}건을 삭제했습니다${r.notDeleted ? ` · ${r.notDeleted}건은 그사이 확정 · 처리돼 삭제하지 않았습니다` : ''}.`)
+      setMsg(kind === 'rt'
+        ? `${fmtNum(r.deleted)}건을 취소했습니다${r.notDeleted ? ` · ${r.notDeleted}건은 그사이 매장이 처리해 취소하지 않았습니다` : ''}.`
+        : `${fmtNum(r.deleted)}건을 삭제했습니다${r.notDeleted ? ` · ${r.notDeleted}건은 그사이 확정 · 처리돼 삭제하지 않았습니다` : ''}.`)
       setAsk(false)
       onChanged()
       load()
@@ -219,8 +221,8 @@ export function RegisteredModal({ kind, brand, brandNm, today, onClose, onChange
           <span className="muted">~</span>
           <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} aria-label="등록 내역 끝" />
         </div>
-        <span className="muted small">이 화면에서 등록한 것만 보입니다 · {kind === 'rt' ? '매장이 확정하기 전 지시' : '확정 · 출고지시 전 의뢰'}만 삭제할 수 있습니다</span>
-        <button className="btn danger" disabled={!sel.size || busy} onClick={() => setAsk(true)}><Trash2 size={15} /> 선택 삭제 ({fmtNum(sel.size)})</button>
+        <span className="muted small">이 화면에서 등록한 것만 보입니다 · {kind === 'rt' ? '매장이 아직 처리(수락 · 거부)하지 않은 지시' : '확정 · 출고지시 전 의뢰'}만 {kind === 'rt' ? '취소' : '삭제'}할 수 있습니다</span>
+        <button className="btn danger" disabled={!sel.size || busy} onClick={() => setAsk(true)}><Trash2 size={15} /> 선택 {kind === 'rt' ? '취소' : '삭제'} ({fmtNum(sel.size)})</button>
       </div>
       {kind === 'rt' && rt && (
         <div className="summary-pills">
@@ -241,9 +243,11 @@ export function RegisteredModal({ kind, brand, brandNm, today, onClose, onChange
       {error && <div className="alert error">{error}</div>}
       {ask && (
         <div className="alert warn stock-confirm">
-          <AlertTriangle size={15} /> <span>선택한 {fmtNum(sel.size)}건을 ERP 에서 삭제합니다. 되돌릴 수 없습니다 (관리자 변경 이력에는 남습니다).</span>
-          <button className="btn danger sm" disabled={busy} onClick={remove}>{busy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} 삭제</button>
-          <button className="btn ghost sm" onClick={() => setAsk(false)}>취소</button>
+          <AlertTriangle size={15} /> <span>{kind === 'rt'
+            ? `선택한 ${fmtNum(sel.size)}건의 매장 이동요청을 ERP 본사지시 취소와 같이 취소합니다(본사지시취소 · 삭제일 표시). 되돌릴 수 없습니다.`
+            : `선택한 ${fmtNum(sel.size)}건을 ERP 에서 삭제합니다. 되돌릴 수 없습니다.`} (관리자 변경 이력에는 남습니다)</span>
+          <button className="btn danger sm" disabled={busy} onClick={remove}>{busy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} {kind === 'rt' ? '취소' : '삭제'}</button>
+          <button className="btn ghost sm" onClick={() => setAsk(false)}>그만두기</button>
         </div>
       )}
       {loading && <div className="stock-loading"><Loader2 size={16} className="spin" /> 불러오는 중…</div>}
@@ -267,8 +271,9 @@ export function RegisteredModal({ kind, brand, brandNm, today, onClose, onChange
                   <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span></td>
                   <td><span className="mono">{r.fromShopId}</span> {r.fromShopNm}</td>
                   <td><span className="mono">{r.toShopId}</span> {r.toShopNm}</td>
-                  <td><span className={`tag ${r.status === 'N' ? 'warn' : r.status === 'C2951' ? 'auto' : r.status === 'C2952' ? 'miss' : ''}`}>{r.statusNm}</span></td>
-                  <td className="muted small">{fmt14(r.insDay)} · {r.insUser}</td>
+                  <td><span className={`tag ${r.status === 'C2954' || r.status === 'N' ? 'warn' : r.status === 'C2951' ? 'auto' : r.status === 'C2952' ? 'miss' : ''}`}>{r.statusNm}</span>
+                    {r.resn && <div className="muted small">{r.resn}</div>}</td>
+                  <td className="muted small">{fmt14(r.insDay)} · {r.insUser}{r.cnfmUser ? ` · 확정 ${r.cnfmUser}` : ''}</td>
                 </tr>
               ))}
               {kind === 'alloc' && (al?.rows ?? []).map((r) => {

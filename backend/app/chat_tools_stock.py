@@ -4,6 +4,8 @@
 - recommend_wh_allocation: 창고 → 매장 배분 추천 (wh_alloc.recommend — 판매분 자동보충 규칙)
 - get_auto_rt_stats: 자동 RT 요청 결과 현황 (완료 · 취소 · '지시가능매장없음')
 - check_auto_rt_settings: 자동 RT 설정 점검 (보낼 수 있는데 지정가능수 0 · 부족한 매장과 권장값)
+- pick_store_rt_rows: 매장 간 RT 추천에서 조건에 맞는 행을 골라 [화면에서 열고 선택] 카드 (관리자는 화면에서 확인 후 직접 지시)
+- get_rt_performance: RT 성과 (본사지시 RT 수락 · 거부 · 미처리, 거부 사유, 받은 매장 7일 내 판매 전환)
 - open_stock_rt_screen: 대화로 화면 열기 — 조건을 정리해 대화창에 [화면에서 열기] 카드를 띄운다 (누르면 그 조건으로 화면을 열고 계산)
 결과는 화면과 같은 캐시를 써서, 화면에서 본 조건이면 바로 돌려준다. 브랜드 데이터 권한(allowed)을 그대로 적용한다.
 """
@@ -151,8 +153,62 @@ TOOLS: list[dict[str, Any]] = [
         "eager_input_streaming": True,
     },
 ]
+TOOLS += [
+    {
+        "name": "pick_store_rt_rows",
+        "description": (
+            "매장 간 RT 추천(recommend_store_rt 와 같은 계산) 중 사용자가 말한 기준에 맞는 행만 골라, 대화창에 [화면에서 열고 선택] 카드를 띄웁니다. "
+            "'자동RT 취소 2회 이상, 판매 3장 이상인 것만 골라줘', '완불 대기만 골라줘', '쉬즈1팀 받는 매장만 골라줘' 같은 요청에 씁니다. "
+            "카드를 누르면 화면이 같은 조건으로 열리고 그 행들이 선택(체크)됩니다. ERP 등록은 관리자가 화면에서 [본사지시 RT 지시]를 직접 눌러야 합니다 — "
+            "등록했다고 말하지 말고, 고른 건수 · 수량과 기준을 알려 주세요. 기준: min_fail_cnt=받는 매장 자동RT 취소 횟수 이상, "
+            "min_receiver_sales=받는 매장 기간 판매 이상, max_sender_sales=보내는 매장 기간 판매 이하, why=사유(자동RT 취소 · 완불 대기 · 판매 후 품절), "
+            "from_shop_ids · to_shop_ids=매장코드, min_qty=행 수량 이상."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "date_from": _FROM, "date_to": _TO,
+                "plan_yy": {"type": "array", "items": {"type": "string"}, "description": "기획년도 YYYY (생략 시 전체)"},
+                "seasons": _SEASONS, "prdt_cd": {"type": "string", "description": "품번 (앞부분만 넣어도 됨)"},
+                "teams": {**_TEAMS, "description": "받는 매장 팀 이름 (계산 조건)"},
+                "per": {"type": "integer", "minimum": 1, "maximum": 3}, "order": {"type": "string", "enum": list(stock_rt.ORDERS)},
+                "apply_auto_rt_limits": {"type": "boolean"},
+                "min_fail_cnt": {"type": "integer", "minimum": 0, "description": "받는 매장 자동RT 취소 횟수 이상"},
+                "min_receiver_sales": {"type": "integer", "minimum": 0, "description": "받는 매장 기간 판매 수량 이상"},
+                "max_sender_sales": {"type": "integer", "minimum": 0, "description": "보내는 매장 기간 판매 수량 이하"},
+                "why": {"type": "array", "items": {"type": "string", "enum": ["자동RT 취소", "완불 대기", "판매 후 품절"]}, "description": "추천 사유"},
+                "from_shop_ids": {"type": "array", "items": {"type": "string"}, "description": "보내는 매장코드"},
+                "to_shop_ids": {"type": "array", "items": {"type": "string"}, "description": "받는 매장코드"},
+                "min_qty": {"type": "integer", "minimum": 1, "description": "행 수량 이상"},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
+        "name": "get_rt_performance",
+        "description": (
+            "RT 성과: 지시일 기간(기본 최근 14일, 최대 31일)의 본사지시 RT 가 매장에서 어떻게 처리됐는지 — 수락 · 거부 · 3일 무응답 자동거부 · 미처리 · 취소 수량, "
+            "수락률, 평균 처리 시간(확정→매장 처리), 거부 사유, 받은 매장이 수락 후 7일 안에 그 상품을 판매한 비율(판매 전환). "
+            "scope=web(이 화면에서 지시한 것, 기본) · all(본사지시 전체). view=senders(보내는 매장별) · receivers(받는 매장별) · reasons(거부 사유) · days(일별). "
+            "'지난주 RT 성과 어땠어?', '어느 매장이 RT 거부를 많이 해?', 'RT 보낸 거 팔렸어?' 같은 질문에 씁니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "brand": _BRAND, "date_from": {"type": "string", "description": "지시일 시작 YYYYMMDD"}, "date_to": {"type": "string", "description": "지시일 끝 YYYYMMDD"},
+                "scope": {"type": "string", "enum": ["web", "all"]},
+                "view": {"type": "string", "enum": ["summary", "senders", "receivers", "reasons", "days"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+]
 TOOL_LABELS = {"recommend_store_rt": "매장 간 RT 추천", "recommend_wh_allocation": "창고 → 매장 배분 추천", "get_auto_rt_stats": "자동 RT 현황",
-               "check_auto_rt_settings": "자동 RT 설정 점검", "open_stock_rt_screen": "재고 재배치 화면 열기"}
+               "check_auto_rt_settings": "자동 RT 설정 점검", "open_stock_rt_screen": "재고 재배치 화면 열기",
+               "pick_store_rt_rows": "RT 추천 골라 선택", "get_rt_performance": "RT 성과"}
 TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
@@ -243,6 +299,10 @@ def run(name: str, inp: dict, *, allowed: list[str] | None) -> dict:
             return _check(inp, allowed)
         if name == "open_stock_rt_screen":
             return _open(inp, allowed)
+        if name == "pick_store_rt_rows":
+            return _pick(inp, allowed)
+        if name == "get_rt_performance":
+            return _perf(inp, allowed)
     except HTTPException as ex:
         raise _http(ex)
     raise StockToolError(f"알 수 없는 도구: {name}")
@@ -430,3 +490,87 @@ def _open(inp: dict, allowed: list[str] | None) -> dict:
         "action": {"actionKind": "open_stock", "title": f"재고 재배치 추천 화면 · {sc.BRAND_CODES[brand]} {label}", "items": [payload],
                    "lines": lines, "warnings": []},
     }
+
+
+PICK_MAX = 2000      # 화면에 보이는 추천 행 수와 같음 (그보다 뒤 행은 화면에서 고를 수 없음)
+
+
+def _pick(inp: dict, allowed: list[str] | None) -> dict:
+    d = stock_rt.recommend(_str(inp, "brand"), _str(inp, "date_from"), _str(inp, "date_to"), _list(inp, "plan_yy"),
+                           _seasons(_list(inp, "seasons")), _str(inp, "prdt_cd"), _teams(_list(inp, "teams")),
+                           _int(inp, "per", 1, 1, 3), _bool(inp, "apply_auto_rt_limits", False), _str(inp, "order") or "slow", 0, allowed=allowed)
+    fail = _int(inp, "min_fail_cnt", 0, 0, 1000)
+    rsales = _int(inp, "min_receiver_sales", 0, 0, 100000)
+    ssales = inp.get("max_sender_sales")
+    if ssales is not None:
+        ssales = _int(inp, "max_sender_sales", 0, 0, 100000)
+    whys = _list(inp, "why")
+    if any(w not in ("자동RT 취소", "완불 대기", "판매 후 품절") for w in whys):
+        raise StockToolError("why 는 자동RT 취소 · 완불 대기 · 판매 후 품절 중에서 고르세요.")
+    froms = {x.upper() for x in _list(inp, "from_shop_ids")}
+    tos = {x.upper() for x in _list(inp, "to_shop_ids")}
+    min_qty = _int(inp, "min_qty", 1, 1, 1000)
+    visible = d["rows"][:PICK_MAX]
+    rows = [r for r in visible if r["toFailCnt"] >= fail and r["toSales"] >= rsales and (ssales is None or r["fromSales"] <= ssales)
+            and (not whys or r["why"] in whys) and (not froms or r["fromShopId"] in froms) and (not tos or r["toShopId"] in tos) and r["qty"] >= min_qty]
+    crit = []
+    if fail:
+        crit.append(f"자동RT 취소 {fail}회 이상")
+    if rsales:
+        crit.append(f"받는 매장 판매 {rsales}장 이상")
+    if ssales is not None:
+        crit.append(f"보내는 매장 판매 {ssales}장 이하")
+    if whys:
+        crit.append("사유 " + "·".join(whys))
+    if froms:
+        crit.append("보내는 매장 " + ",".join(sorted(froms)))
+    if tos:
+        crit.append("받는 매장 " + ",".join(sorted(tos)))
+    if min_qty > 1:
+        crit.append(f"수량 {min_qty}장 이상")
+    label = " · ".join(crit) or "전체"
+    qty = sum(r["qty"] for r in rows)
+    c = d["cond"]
+    cond = {"dateFrom": d["from"], "dateTo": d["to"], "planYy": c["planYy"], "seasons": c["seasons"], "teams": c["teams"], "prdt": c["prdt"] or "",
+            "per": d["per"], "order": d["order"], "senderMax": d["senderMax"], "limits": d["limits"]}
+    result: dict[str, Any] = {
+        "condition": stock_rt.cond_text(d), "criteria": label, "picked": len(rows), "pickedQty": qty, "recommendedRows": len(d["rows"]),
+        "note": "아직 선택 · 등록하지 않았습니다. 대화창 카드의 [화면에서 열고 선택]을 누르면 화면에서 이 행들이 체크되고, 관리자가 확인 후 [본사지시 RT 지시]를 눌러야 ERP 에 들어갑니다.",
+        "rows": rows[:10],
+    }
+    if len(d["rows"]) > PICK_MAX:
+        result["warning"] = f"추천이 {len(d['rows']):,}행이라 화면에 보이는 앞쪽 {PICK_MAX:,}행 안에서만 골랐습니다."
+    out: dict = {"result": result, "table": _table(stock_rt.RT_COLS, rows[:30])}
+    if rows:
+        lines = [f"계산 조건: {stock_rt.cond_text(d)}", f"고른 기준: {label}", f"선택: {len(rows):,}건 · {qty:,}장 (추천 {len(d['rows']):,}건 중)"]
+        out["action"] = {"actionKind": "open_stock", "title": f"매장 간 RT 추천 골라 선택 · {d['brandNm']} {len(rows):,}건",
+                         "items": [{"tab": "rt", "brand": d["brand"], "view": "rows", "run": True, "cond": cond,
+                                    "select": {"keys": [[r["prdtCd"], r["colorCd"], r["sizeCd"], r["fromShopId"], r["toShopId"]] for r in rows],
+                                               "label": label}}],
+                         "lines": lines, "warnings": [result["warning"]] if result.get("warning") else []}
+    return out
+
+
+def _perf(inp: dict, allowed: list[str] | None) -> dict:
+    from . import stock_perf
+
+    view = _str(inp, "view") or "summary"
+    if view not in ("summary", "senders", "receivers", "reasons", "days"):
+        raise StockToolError("view 는 summary, senders, receivers, reasons, days 중 하나입니다.")
+    limit = _int(inp, "limit", 20, 1, 200)
+    d = stock_perf.performance(_str(inp, "brand"), _str(inp, "date_from"), _str(inp, "date_to"), _str(inp, "scope") or "web", allowed)
+    result: dict[str, Any] = {"brand": d["brandNm"], "period": f"{d['from']} ~ {d['to']}", "scope": "이 화면에서 지시" if d["scope"] == "web" else "본사지시 전체",
+                              **d["summary"], "soldDays": d["soldDays"],
+                              "soldRateNote": "판매 전환은 수락 건 중 받은 매장이 수락일부터 7일 안에 같은 상품을 판매한 비율. maturedSold/maturedAccepted 는 7일이 지난 건만",
+                              "topReasons": d["reasons"][:8]}
+    if d["summary"]["total"] == 0 and d["scope"] == "web":
+        result["hint"] = "이 화면에서 지시한 RT 가 없습니다. 본사지시 전체를 보려면 scope=all."
+    if view == "reasons":
+        return {"result": result, "table": {"columns": [{"key": "reason", "label": "거부 사유"}, {"key": "qty", "label": "수량"}], "rows": d["reasons"][:limit]}}
+    if view == "days":
+        return {"result": result, "table": {"columns": [{"key": k, "label": v} for k, v in (("day", "지시일"), ("total", "지시"), ("accepted", "수락"),
+                                                                                             ("denied", "거부"), ("pending", "미처리"))], "rows": d["days"]}}
+    rows = d["receivers" if view == "receivers" else "senders"][:limit]
+    from .stock_perf import PERF_COLS
+
+    return {"result": {**result, "rows": rows[:10]}, "table": _table(PERF_COLS, rows)}

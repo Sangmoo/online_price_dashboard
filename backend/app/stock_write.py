@@ -1,7 +1,9 @@
 """재고 재배치 추천 > ERP 등록 · 삭제 (관리자만).
 
-- 매장 간 RT → 본사지시 RT 지시(T_INDC_RT)만 넣는다. CNFM_YN = 'N' 으로 넣고 확정(T_SHOP_REQ 이동요청 생성)은 하지 않는다 —
-  확정은 ERP 에서 매장이 한다. ERP 본사지시RT 등록(SP_INDC_RT_REORDER_SAVE · indcRtNew)처럼 1장에 1행, 지시번호 = 지시일 + 5자리 순번.
+- 매장 간 RT → 본사지시 RT 지시(T_INDC_RT)를 넣고 로그인한 사번으로 바로 확정한다 — ERP 본사지시 확정과 같은 데이터:
+  지시 CNFM_YN 'Y' · CNFM__DT · CNFM_USERID · 요청 연결(SHOP_REQ_MAKE_DT · SEQ), 매장 이동요청 T_SHOP_REQ(본사지시 C6811 · 미처리 C2954,
+  MAKE_DT = 지시일, INS · PRCS 사번 = 확정자). 매장은 그 요청을 수락 · 거부한다. ERP 등록(indcRtNew)처럼 1장에 1행, 지시번호 = 지시일 + 5자리 순번.
+- 지시 취소는 ERP(SP_SHOP_INDC_UPDATE 취소)와 같이 매장이 아직 처리하지 않은 요청만 RESN '본사지시취소' · DEL_DAY 로 지운다.
 - 창고 → 매장 배분 → 출고의뢰(T_DELV_ASK)를 판매분 자동보충(SP_AUTO_DVID)과 같은 값으로 넣는다 (ASK_CLSBY C0633, CNFM_YN 'N').
   의뢰 확정 · 출고지시는 ERP 에서 한다.
 - 이 화면에서 넣은 행은 ATTR1 = WEB_MARK 로 표시하고, 그 표시가 있고 아직 확정되지 않은 행만 삭제한다 (ERP 화면에서 넣은 행은 건드리지 않음).
@@ -20,7 +22,8 @@ MARK = sc.WEB_MARK
 MAX_KEYS = 3000            # 한 번에 등록할 수 있는 추천 행
 MAX_PIECES = 5000          # 본사지시 RT 는 1장에 1행
 LIST_DAYS = 31
-RT_STATUS = {"N": "미확정 (매장 확정 전)", "C2954": "확정 · 매장 미처리", "C2951": "수락", "C2952": "거부", "C2953": "기처리", "C2959": "요청취소"}
+RT_STATUS = {"N": "미확정", "C2954": "확정 · 매장 미처리", "C2951": "매장 수락", "C2952": "매장 거부", "C2953": "기처리", "C2959": "요청취소",
+             "DEL": "지시 취소"}
 
 
 def _now14() -> str:
@@ -134,18 +137,34 @@ def rt_register(me: dict, args: dict, keys_raw, indc_dt: str | None, allowed: li
                 cur.execute("SELECT NVL(MAX(INDC_SEQ), 0), MAX(INDC_ID) FROM T_INDC_RT WHERE INDC_ID LIKE :d || '%'", {"d": dt})
                 mseq, mid = cur.fetchone()
                 seq = max(int(mseq or 0), int(mid[8:]) if mid and mid[8:].isdigit() else 0)
+                pieces = sum(r["qty"] for r in plan["rows"])
+                # 매장 이동요청 순번 (SP_AUTO_RT_SAVE · ERP 확정과 같은 시퀀스)
+                cur.execute("SELECT S_SHOP_REQ_SEQ.NEXTVAL FROM DUAL CONNECT BY LEVEL <= :n", {"n": pieces})
+                req_seqs = [int(x[0]) for x in cur.fetchall()]
+                if len(req_seqs) != pieces:
+                    raise RuntimeError("이동요청 순번을 받지 못했습니다.")
                 rows, ids = [], []
                 for r in plan["rows"]:
                     for _ in range(r["qty"]):
                         seq += 1
                         iid = f"{dt}{seq:05d}"
-                        ids.append(iid)
                         rows.append({"id": iid, "seq": seq, "dl": r["fromShopId"], "st": r["toShopId"], "p": r["prdtCd"], "c": r["colorCd"],
                                      "s": r["sizeCd"], "dt": dt, "b": plan["brand"], "now": now, "u": me["id"], "m": MARK,
-                                     "cp": sc.COMPY_CD})
+                                     "cp": sc.COMPY_CD, "td": td, "rs": req_seqs[len(ids)]})
+                        ids.append(iid)
+                # 1) 지시 (확정 상태로 — ERP 는 등록 뒤 확정에서 UPDATE 하지만 최종 값은 같다)
                 cur.executemany("""INSERT INTO T_INDC_RT (INDC_ID, INDC_SEQ, DELV_MOVE_SHOP_ID, STOR_MOVE_SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD,
-                                                          INDC_QTY, INDC_DT, CNFM_YN, INDC_CLSBY, WH_CD, COMPY_CD, BRD_CD, INS_DAY, INS_USERID, ATTR1)
-                                   VALUES (:id, :seq, :dl, :st, :p, :c, :s, 1, :dt, 'N', 'C6811', 'IN', :cp, :b, :now, :u, :m)""", rows)
+                                                          INDC_QTY, INDC_DT, CNFM_YN, CNFM__DT, CNFM_USERID, INDC_CLSBY, SHOP_REQ_MAKE_DT, SHOP_REQ_SEQ,
+                                                          WH_CD, COMPY_CD, BRD_CD, INS_DAY, INS_USERID, UPT_DAY, UPT_USERID, ATTR1)
+                                   VALUES (:id, :seq, :dl, :st, :p, :c, :s, 1, :dt, 'Y', :td, :u, 'C6811', :dt, :rs,
+                                           'IN', :cp, :b, :now, :u, :now, :u, :m)""", rows)
+                # 2) 매장 이동요청 (본사지시 · 미처리) — 매장이 수락 · 거부한다
+                cur.executemany("""INSERT INTO T_SHOP_REQ (MAKE_DT, SEQ, DELV_REQ_SHOP_ID, STOR_REQ_SHOP_ID, INS_DAY, INS_USERID, BRD_CD,
+                                                           PRDT_CD, COLOR_CD, SIZE_CD, REQ_QTY, PRCS_CLSBY, CUST_SEND_YN, COMPY_CD, MOVE_TYPE,
+                                                           INDC_ID, INDC_DT, INDC_QTY, ASIGN_SEQN, PRCS_DAY, PRCS_USERID, INDC_CNFM_YN)
+                                   VALUES (:dt, :rs, :dl, :st, :now, :u, :b, :p, :c, :s, 1, 'C2954', 'N', :cp, 'C6811',
+                                           :id, :dt, 1, 0, :now, :u, 'N')""",
+                                [{k: x[k] for k in ("dt", "rs", "dl", "st", "now", "u", "b", "p", "c", "s", "cp", "id")} for x in rows])
             if commit:
                 conn.commit()
             else:
@@ -163,7 +182,7 @@ def rt_register(me: dict, args: dict, keys_raw, indc_dt: str | None, allowed: li
     if commit:
         sc.drop_cache("rt")
         audit.record(me, "STOCK_RT_INDC", f"{plan['brandNm']} {dt}{' (창고 부족 채우기)' if source == 'short' else ''}",
-                     summary=f"본사지시 RT {len(ids):,}장 ({plan['count']:,}건 · 보내는 매장 {plan['senders']} · 받는 매장 {plan['receivers']}) "
+                     summary=f"본사지시 RT 지시 · 확정 {len(ids):,}장 ({plan['count']:,}건 · 보내는 매장 {plan['senders']} · 받는 매장 {plan['receivers']}) "
                              f"지시번호 {ids[0]} ~ {ids[-1]} · 제외 {len(plan['skipped'])}건",
                      after={"indcDt": dt, "ids": [ids[0], ids[-1]], "rows": [[r["prdtCd"], r["colorCd"], r["sizeCd"], r["fromShopId"],
                                                                                r["toShopId"], r["qty"]] for r in plan["rows"]][:2000]})
@@ -176,19 +195,21 @@ def rt_list(brand: str | None, frm: str | None, to: str | None, allowed: list[st
     f, t = _period(frm, to)
     shops = sc.shops()
     rows = []
-    for (iid, dl, st, p, c, s, q, dt, cnfm, ins_day, ins_user, prcs, req_dt, req_seq, mark) in db.query(
+    for (iid, dl, st, p, c, s, q, dt, cnfm, ins_day, ins_user, prcs, req_dt, req_seq, mark, rdel, rmove, resn, cnfm_user) in db.query(
             f"""SELECT /*+ INDEX(I T_INDC_RT_IDX01) */ I.INDC_ID, I.DELV_MOVE_SHOP_ID, I.STOR_MOVE_SHOP_ID, I.PRDT_CD, I.COLOR_CD, I.SIZE_CD, I.INDC_QTY, I.INDC_DT,
-                       NVL(I.CNFM_YN, 'N'), I.INS_DAY, I.INS_USERID, R.PRCS_CLSBY, I.SHOP_REQ_MAKE_DT, I.SHOP_REQ_SEQ, I.ATTR1
+                       NVL(I.CNFM_YN, 'N'), I.INS_DAY, I.INS_USERID, R.PRCS_CLSBY, I.SHOP_REQ_MAKE_DT, I.SHOP_REQ_SEQ, I.ATTR1,
+                       R.DEL_DAY, R.SHOP_MOVE_SEQ, R.RESN, I.CNFM_USERID
                   FROM T_INDC_RT I, T_SHOP_REQ R
                  WHERE I.INDC_DT BETWEEN :f AND :t AND I.BRD_CD = :b AND I.DEL_DAY IS NULL {"AND I.ATTR1 = :m" if mine_only else ""}
                    AND R.MAKE_DT(+) = I.SHOP_REQ_MAKE_DT AND R.SEQ(+) = I.SHOP_REQ_SEQ
                  ORDER BY I.INDC_ID""", {"f": f, "t": t, "b": b, **({"m": MARK} if mine_only else {})})[1]:
-        status = "N" if cnfm == "N" else (prcs or "C2954")
+        status = "N" if cnfm == "N" else ("DEL" if rdel else (prcs or "C2954"))
         rows.append({"id": iid, "indcDt": sc.ymd_label(dt), "prdtCd": p, "colorCd": c, "sizeCd": s, "qty": int(q or 0),
                      "fromShopId": dl, "fromShopNm": (shops.get(dl) or {}).get("shopNm"), "toShopId": st,
                      "toShopNm": (shops.get(st) or {}).get("shopNm"), "status": status, "statusNm": RT_STATUS.get(status, status),
-                     "insDay": ins_day, "insUser": ins_user, "web": mark == MARK,
-                     "deletable": mark == MARK and cnfm == "N" and not req_seq})
+                     "insDay": ins_day, "insUser": ins_user, "cnfmUser": cnfm_user, "resn": (resn or "").strip() or None, "web": mark == MARK,
+                     # 미확정 지시, 또는 확정됐지만 매장이 아직 처리하지 않은 요청 (ERP 본사지시 취소와 같은 조건)
+                     "deletable": mark == MARK and (cnfm == "N" and not req_seq or status == "C2954" and not rmove)})
     by = {}
     for r in rows:
         by[r["status"]] = by.get(r["status"], 0) + r["qty"]
@@ -198,36 +219,54 @@ def rt_list(brand: str | None, frm: str | None, to: str | None, allowed: list[st
 
 
 def rt_delete(me: dict, brand: str | None, ids_raw, allowed: list[str] | None) -> dict:
+    """이 화면에서 넣은 지시 취소: 미확정 지시는 삭제, 확정됐지만 매장이 아직 처리하지 않은(C2954) 요청은
+    ERP 본사지시 취소(SP_SHOP_INDC_UPDATE)처럼 RESN '본사지시취소' · DEL_DAY · DEL_USERID 로 지운다. 매장이 처리한 건 건드리지 않는다."""
     b = sc.brand_code(brand, allowed)
     if not isinstance(ids_raw, list) or not ids_raw or len(ids_raw) > MAX_PIECES:
-        sc.bad("삭제할 지시를 고르세요.")
+        sc.bad("취소할 지시를 고르세요.")
     ids = [x for x in dict.fromkeys(ids_raw) if isinstance(x, str) and x.isdigit() and len(x) == 13]
     if len(ids) != len(set(ids_raw)):
         sc.bad("지시번호가 올바르지 않습니다.")
-    deleted, before = 0, []
+    now = _now14()
+    deleted, canceled, before = 0, 0, []
     with db.get_pool().acquire() as conn:
         try:
             with conn.cursor() as cur:
                 for part in sc.chunks(ids, 500):
                     ph, bb = sc.binds(part, "i")
+                    base = {**bb, "b": b, "m": MARK}
+                    # 1) 미확정 지시 → 삭제
                     cond = f"""INDC_ID IN ({ph}) AND BRD_CD = :b AND ATTR1 = :m AND NVL(CNFM_YN, 'N') = 'N'
                                AND SHOP_REQ_SEQ IS NULL AND DEL_DAY IS NULL"""
                     cur.execute(f"""SELECT INDC_ID, DELV_MOVE_SHOP_ID, STOR_MOVE_SHOP_ID, PRDT_CD, COLOR_CD, SIZE_CD, INDC_QTY, INDC_DT, INS_USERID
-                                      FROM T_INDC_RT WHERE {cond} FOR UPDATE NOWAIT""", {**bb, "b": b, "m": MARK})
-                    before += [list(r) for r in cur.fetchall()]
-                    cur.execute(f"DELETE FROM T_INDC_RT WHERE {cond}", {**bb, "b": b, "m": MARK})
+                                      FROM T_INDC_RT WHERE {cond} FOR UPDATE NOWAIT""", base)
+                    before += [["delete"] + list(r) for r in cur.fetchall()]
+                    cur.execute(f"DELETE FROM T_INDC_RT WHERE {cond}", base)
                     deleted += cur.rowcount
+                    # 2) 확정 · 매장 미처리 요청 → ERP 본사지시 취소와 같은 소프트 삭제
+                    req_cond = f"""(R.MAKE_DT, R.SEQ) IN (SELECT I.SHOP_REQ_MAKE_DT, I.SHOP_REQ_SEQ FROM T_INDC_RT I
+                                                           WHERE I.INDC_ID IN ({ph}) AND I.BRD_CD = :b AND I.ATTR1 = :m AND I.CNFM_YN = 'Y')
+                                   AND R.MOVE_TYPE = 'C6811' AND R.PRCS_CLSBY = 'C2954' AND R.DEL_DAY IS NULL AND R.SHOP_MOVE_SEQ IS NULL"""
+                    cur.execute(f"""SELECT R.INDC_ID, R.MAKE_DT, R.SEQ, R.DELV_REQ_SHOP_ID, R.STOR_REQ_SHOP_ID, R.PRDT_CD, R.COLOR_CD, R.SIZE_CD
+                                      FROM T_SHOP_REQ R WHERE {req_cond} FOR UPDATE NOWAIT""", base)
+                    before += [["cancel"] + list(r) for r in cur.fetchall()]
+                    cur.execute(f"""UPDATE T_SHOP_REQ R
+                                       SET UPT_DAY = :now, UPT_USERID = :u, RESN = '본사지시취소 ' || RESN, DEL_DAY = :now, DEL_USERID = :u
+                                     WHERE {req_cond}""", {**base, "now": now, "u": me["id"]})
+                    canceled += cur.rowcount
             conn.commit()
         except oracledb.DatabaseError as ex:
             conn.rollback()
             if "ORA-00054" in str(ex):
-                sc.bad("다른 사용자가 처리 중인 지시가 있습니다. 잠시 후 다시 시도하세요.", 409)
+                sc.bad("매장에서 처리 중인 지시가 있습니다. 잠시 후 다시 시도하세요.", 409)
             raise
-    if deleted:
+    n = deleted + canceled
+    if n:
         sc.drop_cache("rt")
         audit.record(me, "STOCK_RT_DEL", f"{sc.BRAND_CODES[b]}",
-                     summary=f"본사지시 RT 미확정 지시 {deleted:,}건 삭제 (요청 {len(ids):,}건)", before={"rows": before[:3000]})
-    return {"ok": True, "deleted": deleted, "requested": len(ids), "notDeleted": len(ids) - deleted}
+                     summary=f"본사지시 RT 취소 {n:,}건 (매장 미처리 요청 취소 {canceled:,} · 미확정 지시 삭제 {deleted:,}, 요청 {len(ids):,}건)",
+                     before={"rows": before[:3000]})
+    return {"ok": True, "deleted": n, "canceled": canceled, "removed": deleted, "requested": len(ids), "notDeleted": len(ids) - n}
 
 
 # ================================================================ 창고 → 매장 배분 → 출고의뢰

@@ -133,14 +133,18 @@ def test_rt_plan_rechecks_live_stock_and_incoming(rt_env):
 def test_rt_register_inserts_unconfirmed_instructions_only(rt_env, monkeypatch, audit_capture):
     from app import db
 
-    conn = FakeConn({"FROM T_INDC_RT WHERE INDC_ID LIKE": [(41, f"{TODAY}00041")]})
+    conn = FakeConn({"FROM T_INDC_RT WHERE INDC_ID LIKE": [(41, f"{TODAY}00041")], "S_SHOP_REQ_SEQ.NEXTVAL": [(901,), (902,), (903,)]})
     monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
     r = w.rt_register(ME, {}, [["P1", "BK", "55", "S1", "R1"], ["P2", "WH", "66", "S2", "R3"]], None, None)
     assert conn.committed and r["qty"] == 3 and r["firstId"] == f"{TODAY}00042" and r["lastId"] == f"{TODAY}00044"
-    (sql, rows), = conn.many
-    assert "INSERT INTO T_INDC_RT" in sql and "'N', 'C6811'" in sql and ", 1, :dt" in sql      # 미확정 · 본사지시 · 1장에 1행
-    assert not any("T_SHOP_REQ" in s for s, _ in conn.log + conn.many)                         # 이동요청(확정)은 만들지 않음
-    assert [x["st"] for x in rows] == ["R1", "R3", "R3"] and all(x["m"] == sc.WEB_MARK and x["u"] == "ADM1" for x in rows)
+    (sql, rows), (req_sql, reqs) = conn.many
+    # 지시: 1장에 1행, 로그인 사번으로 확정 (CNFM_YN Y · CNFM_USERID · 요청 연결)
+    assert "INSERT INTO T_INDC_RT" in sql and "1, :dt, 'Y', :td, :u, 'C6811', :dt, :rs" in sql
+    assert [x["st"] for x in rows] == ["R1", "R3", "R3"] and [x["rs"] for x in rows] == [901, 902, 903]
+    assert all(x["m"] == sc.WEB_MARK and x["u"] == "ADM1" for x in rows)
+    # 매장 이동요청: 본사지시 · 미처리, 요청일 = 지시일, 같은 순번
+    assert "INSERT INTO T_SHOP_REQ" in req_sql and "'C2954', 'N', :cp, 'C6811'" in req_sql
+    assert [(x["rs"], x["id"], x["u"]) for x in reqs] == [(901, f"{TODAY}00042", "ADM1"), (902, f"{TODAY}00043", "ADM1"), (903, f"{TODAY}00044", "ADM1")]
     assert audit_capture[-1]["action"] == "STOCK_RT_INDC"
     with pytest.raises(HTTPException):
         w.rt_register(ME, {}, [["P1", "BK", "55", "S1", "R1"]], "2020-01-01", None)          # 지난 날짜
@@ -152,9 +156,12 @@ def test_rt_delete_only_web_unconfirmed(monkeypatch, audit_capture):
     conn = FakeConn({"SELECT INDC_ID": [("x",)]}, rowcount=1)
     monkeypatch.setattr(db, "get_pool", lambda: FakePool(conn))
     r = w.rt_delete(ME, "S", [f"{TODAY}00042", f"{TODAY}00043"], None)
-    assert r == {"ok": True, "deleted": 1, "requested": 2, "notDeleted": 1}
+    assert r["deleted"] == 1 and r["removed"] == 1 and r["canceled"] == 0 and r["notDeleted"] == 1
     dele = [s for s, _ in conn.log if s.startswith("DELETE")][0]
     assert "ATTR1 = :m" in dele and "NVL(CNFM_YN, 'N') = 'N'" in dele and "SHOP_REQ_SEQ IS NULL" in dele
+    # 확정된 지시는 매장 미처리 요청만 ERP 본사지시 취소처럼 소프트 삭제
+    upd = [s for s, _ in conn.log if s.startswith("UPDATE T_SHOP_REQ")][0]
+    assert "RESN = '본사지시취소 ' || RESN" in upd and "DEL_DAY = :now" in upd and "PRCS_CLSBY = 'C2954'" in upd and "SHOP_MOVE_SEQ IS NULL" in upd
     with pytest.raises(HTTPException):
         w.rt_delete(ME, "S", ["abc"], None)
 

@@ -176,7 +176,7 @@ test('창고 → 매장 배분 추천: 최근 자동보충 조건으로 계산�
   await shot(page, 'stock-alloc-cand')
 })
 
-test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시(미확정) 등록 · 등록 내역에서 삭제', async ({ page, mockApi }) => {
+test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시 · 확정(로그인 사번) 등록 · 등록 내역에서 매장 미처리 지시 취소', async ({ page, mockApi }) => {
   const api = await mockApi(makeUser('ADMIN'))
   api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
   api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
@@ -188,7 +188,7 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시(미확정
     byStatus: [{ code: 'N', name: '미확정 (매장 확정 전)', qty: 1 }, { code: 'C2951', name: '수락', qty: 1 }],
     rows: [
       { id: `${ymd(now)}00042`, indcDt: isoDay(now), prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', qty: 1, fromShopId: 'S32017', fromShopNm: 'NC수원터미널',
-        toShopId: 'S11016', toShopNm: '롯데영등포', status: 'N', statusNm: '미확정 (매장 확정 전)', insDay: '20261007161000', insUser: 'admin', deletable: true },
+        toShopId: 'S11016', toShopNm: '롯데영등포', status: 'C2954', statusNm: '확정 · 매장 미처리', insDay: '20261007161000', insUser: 'admin', cnfmUser: 'admin', deletable: true },
       { id: `${ymd(now)}00043`, indcDt: isoDay(now), prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', qty: 1, fromShopId: 'S32017', fromShopNm: 'NC수원터미널',
         toShopId: 'S11016', toShopNm: '롯데영등포', status: 'C2951', statusNm: '수락', insDay: '20261007161000', insUser: 'admin', deletable: false },
     ] }
@@ -207,7 +207,7 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시(미확정
   await page.getByRole('button', { name: /본사지시 RT 지시 \(1건 · 2장\)/ }).click()
 
   const dlg = page.getByRole('dialog', { name: '본사지시 RT 지시 등록' })
-  await expect(dlg).toContainText('지시(미확정)')
+  await expect(dlg).toContainText('로그인한 사번으로 확정')
   await expect(dlg).toContainText('제외 1건')
   expect(api.find('POST', '/api/stock-rt/rt/preview')[0].body).toEqual({ keys: [['SWWJKQ42010', 'BK', '55', 'S32017', 'S11016']] })
   await shot(page, 'stock-rt-register')
@@ -224,11 +224,11 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시(미확정
   await expect(list.getByRole('row')).toHaveCount(3)
   await expect(list.getByLabel(`${ymd(now)}00043 선택`)).toBeDisabled()          // 매장이 수락한 지시는 삭제 불가
   await list.getByLabel('삭제 가능한 행 모두 선택').check()
-  await list.getByRole('button', { name: /선택 삭제 \(1\)/ }).click()
-  await expect(list).toContainText('되돌릴 수 없습니다')
+  await list.getByRole('button', { name: /선택 취소 \(1\)/ }).click()
+  await expect(list).toContainText('본사지시 취소와 같이 취소')
   await shot(page, 'stock-rt-registered')
-  await list.getByRole('button', { name: '삭제', exact: true }).click()
-  await expect(list).toContainText('1건을 삭제했습니다')
+  await list.getByRole('button', { name: '취소', exact: true }).click()
+  await expect(list).toContainText('1건을 취소했습니다')
   expect(api.find('POST', '/api/stock-rt/rt/delete')[0].body).toEqual({ brand: 'S', ids: [`${ymd(now)}00042`] })
 })
 
@@ -378,4 +378,69 @@ test('AI 대화 [화면에서 열기]: 다른 메뉴에서 눌러도 재고 재�
   await expect(page.getByRole('table', { name: '못 채운 수요' })).toBeVisible()
   await expect(page.getByRole('button', { name: '리스트', exact: true })).toHaveClass(/active/)
   await expect(page.getByLabel('품번', { exact: true })).toHaveValue('TWK')
+})
+
+test('AI 가 고른 RT 추천: [화면에서 열고 선택]을 누르면 같은 조건으로 계산하고 그 행만 체크 (등록은 관리자가 직접)', async ({ page, mockApi }) => {
+  const user = makeUser('ADMIN')
+  user.ai = { ...user.ai, enabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2 }
+  const api = await mockApi(user)
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
+  const cond = { dateFrom: RT.from, dateTo: RT.to, planYy: [], seasons: [], teams: [], prdt: '', per: 1, order: 'slow', senderMax: 0, limits: false }
+  const events = [
+    { type: 'conversation', id: 'c1', title: 'RT 고르기' },
+    { type: 'tool', id: 't1', name: 'pick_store_rt_rows', label: 'RT 추천 골라 선택', input: { min_fail_cnt: 2 } },
+    { type: 'action', id: 't1', actionKind: 'open_stock', title: '매장 간 RT 추천 골라 선택 · 쉬즈미스 1건',
+      items: [{ tab: 'rt', brand: 'S', view: 'rows', run: true, cond, select: { keys: [['SWWSLQ42230', 'LG', '44', 'S11003', 'S21018']], label: '자동RT 취소 2회 이상' } }],
+      lines: ['고른 기준: 자동RT 취소 2회 이상', '선택: 1건 · 1장 (추천 2건 중)'], warnings: [] },
+    { type: 'tool_done', id: 't1', ok: true }, { type: 'text_start' }, { type: 'text', text: '카드를 누르세요.' }, { type: 'done' },
+  ]
+  api.on('GET', '/api/chat/usage', () => ({ json: { questions: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, questionLimit: 10, costLimitUsd: 2, enabled: true } }))
+  api.on('POST', '/api/chat', () => ({ body: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), headers: { 'Content-Type': 'text/event-stream' } }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('button', { name: 'AI 데이터 어시스턴트' }).click()
+  await page.getByPlaceholder(/데이터에 대해 질문하세요/).fill('자동RT 취소 2회 이상만 골라줘')
+  await page.keyboard.press('Enter')
+  const card = page.locator('.action-card')
+  await card.getByRole('button', { name: '화면에서 열고 선택' }).click()
+  await expect.poll(() => api.find('GET', '/api/stock-rt/rt').length).toBe(1)
+  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/rt')[0].query)).toMatchObject({ brand: 'S', dateFrom: RT.from, dateTo: RT.to, order: 'slow' })
+  await expect(page.locator('.stock-ai-pick')).toContainText('자동RT 취소 2회 이상 · 1건 · 1장')
+  const table = page.getByRole('table', { name: '매장 간 RT 추천 목록' })
+  await expect(table.getByRole('row')).toHaveCount(2)                                  // 고른 것만 보기
+  await expect(table.getByLabel('SWWSLQ42230 S11003→S21018 선택')).toBeChecked()
+  await expect(page.getByRole('button', { name: /본사지시 RT 지시 \(1건 · 1장\)/ })).toBeEnabled()
+  expect(api.find('POST', '/api/stock-rt/rt/register')).toHaveLength(0)              // 등록은 하지 않음
+  await shot(page, 'stock-ai-pick')
+  await page.getByLabel('고른 것만 보기').uncheck()
+  await expect(table.getByRole('row')).toHaveCount(3)
+})
+
+test('RT 성과: 이 화면 지시 · 본사지시 전체, 수락률 · 판매 전환 · 거부 사유 (추천 계산 없이도)', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['stock_rt']))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S') }))
+  const shop = (shopId: string, shopNm: string, accepted: number, denied: number) => ({ shopId, shopNm, team: '쉬즈1팀', total: accepted + denied, accepted,
+    denied, autoDenied: 0, pending: 0, canceled: 0, acceptRate: Math.round((accepted / (accepted + denied)) * 1000) / 10, avgHours: 12.5, sold: 3, soldRate: 20 })
+  const empty = { total: 0, byStatus: [], accepted: 0, denied: 0, autoDenied: 0, pending: 0, canceled: 0, acceptRate: null, avgHours: null, sold: 0, soldRate: null,
+    maturedAccepted: 0, maturedSold: 0 }
+  const full = { total: 100, byStatus: [], accepted: 70, denied: 20, autoDenied: 5, pending: 5, canceled: 0, acceptRate: 73.7, avgHours: 12.2, sold: 14, soldRate: 20,
+    maturedAccepted: 40, maturedSold: 10 }
+  api.on('GET', '/api/stock-rt/rt/performance', (_, url) => {
+    const all = url.searchParams.get('scope') === 'all'
+    return { json: { brand: 'S', brandNm: '쉬즈미스', from: '', to: '', scope: all ? 'all' : 'web', asOf: 'x', soldDays: 7, summary: all ? full : empty,
+      senders: all ? [shop('S11003', '롯데잠실', 2, 8), shop('S11016', '롯데영등포', 60, 10)] : [], receivers: [],
+      reasons: [{ reason: '판매', qty: 12 }, { reason: '자동거부 (3일 무응답)', qty: 5 }], days: [] } }
+  })
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('button', { name: 'RT 성과 보기' }).click()
+  await expect(page.locator('.stock-perf')).toContainText('이 화면에서 지시한 RT 가 없습니다')
+  await page.getByRole('button', { name: '본사지시 전체' }).click()
+  await expect(page.locator('.stock-perf .summary-pills')).toContainText('73.7%')
+  await expect(page.locator('.stock-perf .summary-pills')).toContainText('7일 지난 건 25%')
+  const t = page.getByRole('table', { name: 'RT 성과 보내는 매장' })
+  await expect(t.getByRole('row').nth(1)).toHaveClass(/row-short/)                     // 수락률 50% 미만
+  await shot(page, 'stock-rt-perf')
+  await page.getByRole('button', { name: '거부 사유' }).click()
+  await expect(page.locator('.stock-perf')).toContainText('자동거부 (3일 무응답)')
+  expect(api.find('GET', '/api/stock-rt/rt/performance').map((r) => r.query.get('scope'))).toEqual(['web', 'all'])
 })

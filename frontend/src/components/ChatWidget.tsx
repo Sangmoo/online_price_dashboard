@@ -95,6 +95,11 @@ const RAW_KEYS = new Set(['ONLINE_ID', 'DT', 'INS_DAY', 'PLAN_ID', 'MAKE_YYMM', 
 
 export default function ChatWidget({ user, context }: { user: User; context: Record<string, string> }) {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const close = () => setOpen(false)
+    window.addEventListener('erp:chat-close', close)
+    return () => window.removeEventListener('erp:chat-close', close)
+  }, [])
   const [wide, setWide] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [convId, setConvId] = useState<string | null>(null)
@@ -440,20 +445,24 @@ function PartView({ part }: { part: Part }) {
   return <TableCard part={part} />
 }
 
+const CHAT_CLOSE_EVENT = 'erp:chat-close'
+
 /** AI 가 정리한 조건으로 화면 열기 카드: 누르면 그 메뉴를 그 조건으로 열고 계산한다 (저장 · 등록은 하지 않음) */
 function OpenScreenCard({ part }: { part: Extract<Part, { kind: 'action'; actionKind: 'open_stock' }> }) {
   const [opened, setOpened] = useState(false)
   const open = () => {
     if (part.items[0]) requestStockOpen(part.items[0])
     setOpened(true)
+    window.dispatchEvent(new CustomEvent(CHAT_CLOSE_EVENT))     // 열린 화면이 보이게 대화창은 닫는다 (대화는 그대로)
   }
   return (
     <div className={`action-card ${opened ? 'done' : 'idle'}`}>
-      <div className="action-head"><b>{part.title}</b><span className="muted small">누르면 이 조건으로 화면을 열고 계산합니다</span></div>
+      <div className="action-head"><b>{part.title}</b><span className="muted small">{part.items[0]?.select ? '누르면 화면에서 이 행들을 체크합니다 · 등록은 화면에서 직접' : '누르면 이 조건으로 화면을 열고 계산합니다'}</span></div>
+      {part.warnings.length > 0 && <div className="action-warn">{part.warnings.map((w, i) => <div key={i}><AlertCircle size={12} /> {w}</div>)}</div>}
       <ul>{part.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
       <div className="action-foot">
         {opened && <span className="small"><CheckCircle2 size={13} /> 화면을 열었습니다</span>}
-        <button className="btn primary small" onClick={open}><ExternalLink size={14} /> {opened ? '다시 열기' : '화면에서 열기'}</button>
+        <button className="btn primary small" onClick={open}><ExternalLink size={14} /> {opened ? '다시 열기' : part.items[0]?.select ? '화면에서 열고 선택' : '화면에서 열기'}</button>
       </div>
     </div>
   )

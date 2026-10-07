@@ -1319,6 +1319,27 @@ def stock_rt_setting_export(args: dict = Depends(_rt_args), me: dict = Depends(s
     return _xlsx_response(content, f"자동RT설정점검_{d['brandNm']}_{d['to']}.xlsx")
 
 
+@app.get("/api/stock-rt/rt/performance")
+def stock_rt_performance(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, scope: str = "web",  # noqa: N803
+                         refresh: bool = False, me: dict = Depends(stock_page)):
+    """RT 성과: 본사지시 RT 의 매장 수락 · 거부 · 미처리, 거부 사유, 받은 매장 7일 내 판매 전환"""
+    from . import stock_perf
+
+    return stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me), refresh=refresh)
+
+
+@app.get("/api/stock-rt/rt/performance/export")
+def stock_rt_performance_export(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, scope: str = "web",  # noqa: N803
+                                me: dict = Depends(stock_page)):
+    from . import stock_perf
+
+    d = stock_perf.performance(brand, dateFrom, dateTo, scope, brand_scope.brands_of(me))
+    content = stock_perf.export_xlsx(d)
+    downloads.record(me, "stock_rt", "RT성과", {"brand": d["brand"], "from": d["from"], "to": d["to"], "scope": scope},
+                     rows=len(d["senders"]), size=len(content))
+    return _xlsx_response(content, f"RT성과_{d['brandNm']}_{d['to']}.xlsx")
+
+
 @app.get("/api/stock-rt/alloc/short-rt")
 def stock_alloc_short_rt(args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
     """창고 부족 → 매장 간 RT 로 채우기 추천 (같은 창고 배분 조건의 창고 부족 행)"""

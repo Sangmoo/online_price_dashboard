@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Bot, CheckCircle2, ClipboardList, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Send, Settings2, Store, Warehouse, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
   stockApi,
-  type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtResult, type RtStats, type SettingCheck, type ShortRt,
+  type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtPerformance, type RtResult, type RtStats, type SettingCheck,
+  type ShortRt,
   type StockOptions,
 } from '../stockApi'
 import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWrite'
@@ -108,7 +109,7 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
           ))}
         </div>
         <span className="pill hint-pill"><Info size={13} /> {opts?.canWrite
-          ? '관리자: 고른 추천을 ERP 본사지시 RT 지시 · 배분의뢰(미확정)로 등록할 수 있습니다'
+          ? '관리자: 고른 추천을 ERP 본사지시 RT 지시 · 확정(로그인 사번) · 배분의뢰(미확정)로 등록할 수 있습니다'
           : '조회 · 추천만 합니다 — ERP 에 RT · 배분의뢰가 등록되지 않습니다'}</span>
       </section>
       {error && <div className="alert error">{error}</div>}
@@ -134,7 +135,12 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
   const [data, setData] = useState<RtResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats' | 'check'>('rows')
+  const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats' | 'check' | 'perf'>('rows')
+  const [perfOnly, setPerfOnly] = useState(false)          // 추천 계산 없이 RT 성과만 보기
+  // AI 대화에서 고른 행 (계산이 끝나면 화면에서 체크)
+  const pendingPick = useRef<{ keys: string[][]; label: string } | null>(null)
+  const [aiPick, setAiPick] = useState<{ label: string; keys: Set<string>; found: number; total: number; qty: number } | null>(null)
+  const [onlyPick, setOnlyPick] = useState(false)
   const [q, setQ] = useState('')
   const [exporting, setExporting] = useState(false)
   const [writing, setWriting] = useState<'register' | 'list' | null>(null)
@@ -158,6 +164,19 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
       setData(d)
       setApplied(c)
       clear()
+      const pick = pendingPick.current
+      pendingPick.current = null
+      if (pick) {
+        const want = new Set(pick.keys.map((k) => k.join('|')))
+        const hit = d.rows.filter((r) => want.has(rtKey(r).join('|')))
+        const keys = hit.map((r) => rtKey(r).join('|'))
+        setAiPick({ label: pick.label, keys: new Set(keys), found: hit.length, total: want.size, qty: hit.reduce((a, r) => a + r.qty, 0) })
+        setOnlyPick(true)
+        if (opts.canWrite) setMany(keys, true)
+      } else {
+        setAiPick(null)
+        setOnlyPick(false)
+      }
       onContext({ brand: d.brandNm, period: `${d.from}~${d.to}`, seasons: c.seasons.map((s) => seasonNm[s] ?? s).join(','), prdt: c.prdt })
     }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
   }
@@ -167,6 +186,7 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
     consumeStockOpen(request.nonce)
     const c = { ...init, ...request.cond } as RtCond
     setCond(c)
+    pendingPick.current = request.select ?? null
     if (request.view) setView(request.view as typeof view)
     if (request.run !== false) run(false, c)
   }, [request?.nonce]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -176,9 +196,10 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
   const rows = useMemo(() => {
     const k = q.trim().toUpperCase()
     if (!data) return []
-    if (!k) return data.rows
-    return data.rows.filter((r) => [r.prdtCd, r.fromShopId, r.toShopId, r.fromShopNm, r.toShopNm, r.styleNm].some((v) => v?.toUpperCase().includes(k)))
-  }, [data, q])
+    const base = onlyPick && aiPick ? data.rows.filter((r) => aiPick.keys.has(rtKey(r).join('|'))) : data.rows
+    if (!k) return base
+    return base.filter((r) => [r.prdtCd, r.fromShopId, r.toShopId, r.fromShopNm, r.toShopNm, r.styleNm].some((v) => v?.toUpperCase().includes(k)))
+  }, [data, q, onlyPick, aiPick])
   const unfilled = useMemo(() => {
     const k = q.trim().toUpperCase()
     if (!data) return []
@@ -270,8 +291,10 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
             <b>판매됐는데 재고가 없는 매장에, 같은 RT 그룹의 안 팔리는 재고를 짝지어 드립니다.</b>
             <div className="muted small">ERP 자동 RT 규칙(같은 RT 그룹 · 이동중/요청중 · 최소보유재고 · 출고 경과일 · 매장등급 · 수불제어)을 그대로 적용합니다. [추천 계산]을 누르세요.</div>
           </div>
+          <button className="btn ghost sm stock-write-bar" onClick={() => setPerfOnly((v) => !v)}><BarChart3 size={14} /> {perfOnly ? 'RT 성과 닫기' : 'RT 성과 보기'}</button>
         </section>
       )}
+      {!data && !loading && perfOnly && <section className="card grid-card"><RtPerformancePanel brand={opts.brand} today={opts.today} /></section>}
 
       {data && s && (
         <>
@@ -294,6 +317,7 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
                 <button className={view === 'shops' ? 'on' : ''} onClick={() => setView('shops')}>매장별 합계</button>
                 <button className={view === 'stats' ? 'on' : ''} onClick={() => setView('stats')}><BarChart3 size={13} /> 자동 RT 현황</button>
                 <button className={view === 'check' ? 'on' : ''} onClick={() => setView('check')} title="보낼 수 있는데 자동 RT 지정가능수가 0 · 부족한 매장"><Settings2 size={13} /> 자동 RT 설정 점검</button>
+                <button className={view === 'perf' ? 'on' : ''} onClick={() => setView('perf')} title="지시한 RT 의 매장 수락 · 거부 · 판매 전환"><BarChart3 size={13} /> RT 성과</button>
               </div>
               {(view === 'rows' || view === 'unfilled') && (
                 <div className="search sm">
@@ -316,11 +340,21 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
               )}
             </div>
             {done && <div className="alert info stock-done"><CheckCircle2 size={14} /> <span>{done}</span></div>}
+            {aiPick && view === 'rows' && (
+              <div className="alert info stock-done stock-ai-pick">
+                <Bot size={14} /> <span>AI 가 고른 행: <b>{aiPick.label}</b> · {fmtNum(aiPick.found)}건 · {fmtNum(aiPick.qty)}장
+                  {aiPick.found < aiPick.total ? ` (화면에 없는 ${fmtNum(aiPick.total - aiPick.found)}건 — 그사이 추천이 바뀜)` : ''}
+                  {opts.canWrite ? ' — 체크해 두었습니다. 확인 후 [본사지시 RT 지시]를 누르세요.' : ''}</span>
+                <label className="check-label"><input type="checkbox" checked={onlyPick} onChange={(e) => setOnlyPick(e.target.checked)} /> 고른 것만 보기</label>
+                <button className="btn ghost sm" onClick={() => { setAiPick(null); setOnlyPick(false) }}>닫기</button>
+              </div>
+            )}
             {view === 'rows' && <RtTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} />}
             {view === 'unfilled' && <UnfilledTable data={data} rows={unfilled} />}
             {view === 'shops' && <ShopTotals data={data} />}
             {view === 'stats' && applied && <RtStatsPanel brand={applied.brand} from={applied.dateFrom} to={applied.dateTo} data={data} />}
             {view === 'check' && applied && <SettingCheckPanel cond={applied} />}
+            {view === 'perf' && <RtPerformancePanel brand={opts.brand} today={opts.today} />}
           </section>
         </>
       )}
@@ -948,6 +982,121 @@ function ShortRtModal({ cond, canWrite, today, onClose }: { cond: AllocCond; can
             onDone={(m) => { setReg(false); setDone(m); load(true) }} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- RT 성과 (본사지시 RT 처리 · 판매 전환)
+function RtPerformancePanel({ brand, today }: { brand: string; today: string }) {
+  const t = iso(today)
+  const [from, setFrom] = useState(addDaysIso(t, -13))
+  const [to, setTo] = useState(t)
+  const [scope, setScope] = useState<'web' | 'all'>('web')
+  const [d, setD] = useState<RtPerformance | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [tab, setTab] = useState<'senders' | 'receivers' | 'reasons' | 'days'>('senders')
+  const [busy, setBusy] = useState(false)
+  const load = (refresh = false) => {
+    setLoading(true)
+    setError('')
+    stockApi.rtPerformance(brand, from, to, scope, refresh).then(setD).catch((e) => setError(errText(e))).finally(() => setLoading(false))
+  }
+  useEffect(() => load(), [brand, from, to, scope]) // eslint-disable-line react-hooks/exhaustive-deps
+  const s = d?.summary
+  const exportXlsx = async () => {
+    setBusy(true)
+    try { await stockApi.rtPerformanceExport(brand, from, to, scope) } catch (e) { setError(errText(e)) } finally { setBusy(false) }
+  }
+  const shopTable = (list: RtPerformance['senders'], label: string) => (
+    <div className="table-wrap tall">
+      <table className="table stock-table" aria-label={label}>
+        <thead><tr><th>매장</th><th className="num">지시</th><th className="num">수락</th><th className="num">거부</th><th className="num">자동거부</th><th className="num">미처리</th>
+          <th className="num">취소</th><th className="num">수락률</th><th className="num" title="확정 → 매장 수락 · 거부까지">평균 처리</th><th className="num" title={`수락 후 ${d?.soldDays ?? 7}일 안에 받은 매장에서 판매`}>판매 전환</th></tr></thead>
+        <tbody>
+          {list.map((r) => (
+            <tr key={r.shopId} className={r.acceptRate != null && r.acceptRate < 50 ? 'row-short' : ''}>
+              <td><span className="mono">{r.shopId}</span> {r.shopNm}<div className="muted small">{r.team}</div></td>
+              <td className="num"><b>{fmtNum(r.total)}</b></td><td className="num">{fmtNum(r.accepted)}</td><td className="num">{fmtNum(r.denied)}</td>
+              <td className="num">{fmtNum(r.autoDenied)}</td><td className="num">{fmtNum(r.pending)}</td><td className="num">{fmtNum(r.canceled)}</td>
+              <td className="num">{r.acceptRate != null ? `${r.acceptRate}%` : '-'}</td><td className="num">{r.avgHours != null ? `${r.avgHours}시간` : '-'}</td>
+              <td className="num">{r.soldRate != null ? `${r.soldRate}% (${fmtNum(r.sold)})` : '-'}</td>
+            </tr>
+          ))}
+          {!list.length && <tr><td colSpan={10} className="empty">이 기간에 지시한 RT 가 없습니다.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  )
+  return (
+    <div className="stock-stats stock-perf">
+      <div className="stock-write-fields">
+        <div className="date-range">
+          <span className="date-range-label">지시일</span>
+          <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="RT 성과 시작" />
+          <span className="muted">~</span>
+          <input type="date" value={to} min={from} max={t} onChange={(e) => setTo(e.target.value)} aria-label="RT 성과 끝" />
+        </div>
+        <div className="seg" role="group" aria-label="RT 성과 범위">
+          <button className={scope === 'web' ? 'on' : ''} onClick={() => setScope('web')}>이 화면에서 지시</button>
+          <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>본사지시 전체</button>
+        </div>
+        <button className="btn ghost sm" onClick={() => load(true)} disabled={loading}><RefreshCw size={14} /> 새로 계산</button>
+        <button className="btn success sm stock-write-bar" onClick={exportXlsx} disabled={busy || !d}>{busy ? <Loader2 size={14} className="spin" /> : <Download size={14} />} 엑셀</button>
+      </div>
+      {error && <div className="alert error">{error}</div>}
+      {loading && <div className="stock-loading"><Loader2 size={16} className="spin" /> RT 성과를 계산하는 중…</div>}
+      {d && s && !loading && (
+        <>
+          <div className="summary-pills">
+            <div className="pill strong"><span>지시</span><b>{fmtNum(s.total)}장</b></div>
+            <div className="pill"><span>수락률</span><b>{s.acceptRate != null ? `${s.acceptRate}%` : '-'}</b><span className="muted">수락 {fmtNum(s.accepted)} · 거부 {fmtNum(s.denied)} · 자동거부 {fmtNum(s.autoDenied)}</span></div>
+            <div className={`pill ${s.pending ? 'warn-pill' : ''}`}><span>매장 미처리</span><b>{fmtNum(s.pending)}장</b></div>
+            {s.canceled > 0 && <div className="pill"><span>지시 취소</span><b>{fmtNum(s.canceled)}장</b></div>}
+            <div className="pill"><span>평균 처리</span><b>{s.avgHours != null ? `${s.avgHours}시간` : '-'}</b></div>
+            <div className="pill" title={`수락 건 중 받은 매장이 ${d.soldDays}일 안에 같은 상품을 판매한 비율 (괄호는 ${d.soldDays}일이 지난 건만)`}>
+              <span>판매 전환 ({d.soldDays}일)</span><b>{s.soldRate != null ? `${s.soldRate}%` : '-'}</b>
+              <span className="muted">{s.maturedAccepted ? `${d.soldDays}일 지난 건 ${pct(s.maturedSold, s.maturedAccepted)}` : ''}</span></div>
+            <div className="pill hint-pill">{d.brandNm} · {d.scope === 'web' ? '이 화면에서 지시' : '본사지시 전체'} · {d.asOf} 기준</div>
+          </div>
+          {s.total === 0 && scope === 'web' && <div className="alert info"><Info size={14} /> <span>이 기간에 이 화면에서 지시한 RT 가 없습니다. [본사지시 전체]로 ERP 에서 지시한 것까지 볼 수 있습니다.</span></div>}
+          <div className="seg" role="tablist" aria-label="RT 성과 보기">
+            <button className={tab === 'senders' ? 'on' : ''} onClick={() => setTab('senders')}>보내는 매장</button>
+            <button className={tab === 'receivers' ? 'on' : ''} onClick={() => setTab('receivers')}>받는 매장</button>
+            <button className={tab === 'reasons' ? 'on' : ''} onClick={() => setTab('reasons')}>거부 사유</button>
+            <button className={tab === 'days' ? 'on' : ''} onClick={() => setTab('days')}>일별</button>
+          </div>
+          {tab === 'senders' && shopTable(d.senders, 'RT 성과 보내는 매장')}
+          {tab === 'receivers' && shopTable(d.receivers, 'RT 성과 받는 매장')}
+          {tab === 'reasons' && (
+            <div className="stock-bars">
+              {d.reasons.map((r) => {
+                const max = Math.max(1, ...d.reasons.map((x) => x.qty))
+                return <div key={r.reason} className="stock-bar-row"><span className="stock-bar-name">{r.reason}</span><span className="stock-bar"><i className="fail" style={{ width: `${(r.qty / max) * 100}%` }} /></span><b className="num">{fmtNum(r.qty)}장</b></div>
+              })}
+              {!d.reasons.length && <span className="muted">거부된 RT 가 없습니다.</span>}
+            </div>
+          )}
+          {tab === 'days' && (
+            <div className="stock-bars">
+              {d.days.map((x) => {
+                const max = Math.max(1, ...d.days.map((y) => y.total))
+                return (
+                  <div key={x.day} className="stock-bar-row">
+                    <span className="stock-bar-name">{x.day}</span>
+                    <span className="stock-bar stack3" title={`지시 ${x.total} · 수락 ${x.accepted} · 거부 ${x.denied} · 미처리 ${x.pending}`}>
+                      <i className="done" style={{ width: `${(x.accepted / max) * 100}%` }} /><i className="fail" style={{ width: `${(x.denied / max) * 100}%` }} />
+                      <i className="etc" style={{ width: `${(x.pending / max) * 100}%` }} />
+                    </span>
+                    <b className="num">{fmtNum(x.total)}</b>
+                  </div>
+                )
+              })}
+              <div className="stock-legend"><i className="done" /> 수락 <i className="fail" /> 거부 <i className="etc" /> 미처리</div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

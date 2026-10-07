@@ -98,6 +98,8 @@ CATALOG: dict[str, list[tuple[str, str, list]]] = {
         ("창고 배분 · 매장 재고 · 시점재고 · 최초판매일", "", ["wh_alloc._stock", "wh_alloc._moves", "wh_alloc._first_sale"]),
         ("창고 배분 · 창고 가용", "창고 재고 · 출고지시 미명세 · 미확정 배분의뢰 · 이 화면에서 넣은 의뢰", ["wh_alloc._wh_avail", "wh_alloc.web_asked"]),
         ("관리자 · 본사지시 RT 지시 등록 · 내역 · 삭제", "T_INDC_RT 미확정 지시만 (확정은 매장)", ["stock_write.rt_register", "stock_write.rt_list", "stock_write.rt_delete"]),
+        ("RT 성과", "본사지시 RT 처리 · 받은 매장 7일 판매", ["stock_perf._compute"]),
+        ("자동 RT 설정 점검", "기간 중 실제 자동 RT 지정 수", ["stock_rt.setting_check"]),
         ("관리자 · 배분의뢰 등록 · 차수 · 내역 · 삭제", "T_DELV_ASK 판매분의뢰(자동) 미확정",
          ["stock_write.alloc_register", "stock_write.alloc_seqns", "stock_write.alloc_list", "stock_write.alloc_delete"]),
     ],
