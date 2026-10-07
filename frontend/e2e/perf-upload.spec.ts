@@ -21,7 +21,8 @@ const PERF = {
 const PLAN = (s: string) => ({
   sqlId: 'abc', at: '2026-10-07 10:00:00',
   actual: s.includes(':m0') ? { sqlId: 'abc', planHash: 1, children: 1, executions: 12, avgMs: 4000, bufferGets: 120000, diskReads: 30, rows: 2,
-    lastActive: '2026-10-07 09:30:00', plan: '| 0 | SELECT STATEMENT |\n|* 1 |  TABLE ACCESS FULL | T_CLOSE_SALE_BASE |' } : null,
+    lastActive: '2026-10-07 09:30:00',
+    plan: '| 0 | SELECT STATEMENT |\n|* 1 |  TABLE ACCESS FULL | T_CLOSE_SALE_BASE |\n' + Array.from({ length: 80 }, (_, i) => `|  ${i + 2} | ROW ${i} |`).join('\n') } : null,
   estimate: { plan: '| 0 | SELECT STATEMENT |\n|* 1 |  INDEX RANGE SCAN | IDX_MAKE_YYMM |' },
 })
 
@@ -44,6 +45,11 @@ test('관리자 쿼리 성능: 요청 · 기능별 · 느린 쿼리 순위를 �
   await expect(dlg.locator('.plan-hot').first()).toContainText('TABLE ACCESS FULL')
   expect((api.find('POST', '/api/admin/sql/explain')[0].body as { sql: string }).sql).toBe(RAW)
   await shot(page, 'plan-modal')
+  // 계획 상자 위에서 마우스 휠로 팝업 본문이 스크롤된다
+  const box = (await dlg.locator('.plan-code').first().boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(box.height / 2, 200))
+  await page.mouse.wheel(0, 600)
+  await expect.poll(() => dlg.locator('.plan-scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(100)
   await dlg.getByRole('button', { name: '값 채운 쿼리' }).click()
   await expect(dlg.getByText(/커서 캐시에 없습니다|앱이 실제로 보낸 문장이 아니라/)).toBeVisible()
   expect((api.find('POST', '/api/admin/sql/explain')[1].body as { sql: string }).sql).toBe(FILLED)

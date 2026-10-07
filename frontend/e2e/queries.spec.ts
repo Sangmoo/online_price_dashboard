@@ -56,6 +56,9 @@ test('관리자: [사용 쿼리] 로 현재 메뉴의 기능별 SQL 을 보고 �
   const ran = dlg.locator('.q-item').first()
   await expect(ran.getByText('실제 실행 · 내 최근 조회')).toBeVisible()
   await expect(ran.locator('pre.sql-code')).toHaveText(FILLED)
+  // 복사 버튼은 SQL 위 막대에 있어 SQL 을 가리지 않는다
+  const [btnBox, preBox] = await Promise.all([ran.getByRole('button', { name: '복사', exact: true }).boundingBox(), ran.locator('pre.sql-code').boundingBox()])
+  expect(btnBox!.y + btnBox!.height).toBeLessThanOrEqual(preBox!.y)
   await ran.getByRole('button', { name: '복사', exact: true }).click()
   await expect(ran.getByRole('button', { name: '복사됨' })).toBeVisible()
   expect((await copied(page))[0]).toBe(`${FILLED};`)

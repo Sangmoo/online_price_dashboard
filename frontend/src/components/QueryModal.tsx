@@ -38,8 +38,10 @@ function CopyBtn({ text, label = '복사', title }: { text: string; label?: stri
 function RunCode({ r, n, onPlan, title }: { r: QueryRun; n?: number; onPlan: OnPlan; title: string }) {
   return (
     <div className="q-code">
-      <div className="q-code-bar float">
-        {n != null && <span className="muted small">#{n}</span>}
+      <div className="q-code-bar">
+        {n != null && <span className="q-num">#{n}</span>}
+        <span className="muted small mono">실행 {r.at} · {r.ms.toLocaleString()}ms{r.count > 1 ? ` · ${r.count.toLocaleString()}회` : ''}</span>
+        <div className="grow" />
         {/^\s*\(?\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE)\b/i.test(r.sql) && (
           <button className="btn ghost sm" title="실제 · 예상 실행 계획 (쿼리는 실행하지 않음)"
             onClick={() => onPlan({ sql: r.raw ?? r.sql, filled: r.filled, title })}><GitBranch size={12} /> 실행 계획</button>
@@ -47,9 +49,6 @@ function RunCode({ r, n, onPlan, title }: { r: QueryRun; n?: number; onPlan: OnP
         <CopyBtn text={withSemi(r.filled)} />
       </div>
       <pre className="sql-code">{r.filled}</pre>
-      <div className="muted small mono q-run-meta">
-        실행 {r.at} · {r.ms.toLocaleString()}ms{r.count > 1 ? ` · ${r.count.toLocaleString()}회` : ''}
-      </div>
     </div>
   )
 }
@@ -57,8 +56,10 @@ function RunCode({ r, n, onPlan, title }: { r: QueryRun; n?: number; onPlan: OnP
 function CodeBlock({ sql, n }: { sql: string; n?: number }) {
   return (
     <div className="q-code">
-      <div className="q-code-bar float">
-        {n != null && <span className="muted small">#{n}</span>}
+      <div className="q-code-bar">
+        {n != null && <span className="q-num">#{n}</span>}
+        <span className="muted small">코드 기준</span>
+        <div className="grow" />
         <CopyBtn text={withSemi(sql)} />
       </div>
       <pre className="sql-code">{sql}</pre>

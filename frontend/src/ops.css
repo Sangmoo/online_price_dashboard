@@ -238,7 +238,7 @@
 /* [사용 쿼리] 는 [도움말] 바로 왼쪽에 붙여서 (도움말의 margin-left:auto 를 대신 가짐) */
 .query-btn { color: var(--primary); margin-left: auto; }
 .query-btn + .help-btn { margin-left: -8px; }
-.query-modal { max-width: 1180px; width: calc(100vw - 40px); height: calc(100vh - 40px); }
+.query-modal { max-width: 1440px; width: calc(100vw - 40px); height: calc(100vh - 40px); }
 .q-head-actions { display: flex; align-items: center; gap: 6px; }
 .q-hint { line-height: 1.6; }
 .q-hint code, .q-feature code { font-family: var(--mono, ui-monospace, Consolas, monospace); background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
@@ -268,14 +268,9 @@
   .query-modal { width: calc(100vw - 16px); height: calc(100vh - 16px); }
 }
 .query-modal > .search, .query-modal > .q-hint, .query-modal > .modal-head { flex: none; }
-.q-code { position: relative; }
-.q-code-bar.float { position: absolute; top: 6px; right: 8px; z-index: 1; }
-.q-code-bar.float .copy-btn { background: var(--surface); }
-.q-code-bar.float + .sql-code { padding-right: 110px; }
 .q-badge { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 .q-badge.ok { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
 .q-item.ran { border-color: rgba(var(--accent-rgb), .35); }
-.q-run-meta { text-align: right; }
 .q-more { display: flex; gap: 14px; flex-wrap: wrap; }
 .q-more .btn-link { display: inline-flex; align-items: center; gap: 3px; }
 .q-nav-item .small { color: var(--muted); }
@@ -326,3 +321,12 @@
 .auto-cell { color: var(--primary); }
 .auto-cell.legend { font-weight: 600; }
 .upload-modal .modal-foot { margin: 0 -20px; position: sticky; bottom: 0; }
+
+/* 팝업 안 SQL · 계획 상자: 가로 스크롤 상자라도 세로 휠은 팝업 본문으로 넘긴다
+   (.modal-backdrop * 의 overscroll-behavior: contain 때문에 상자 위에서 휠이 먹히지 않던 문제) */
+.modal-backdrop .sql-code { overscroll-behavior: auto; }
+/* 사용 쿼리: 버튼은 SQL 위 막대에 (SQL 을 가리지 않게), SQL 상자는 크게 */
+.q-code { gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.q-code .q-code-bar { padding: 5px 8px 5px 12px; background: var(--surface); border-bottom: 1px solid var(--border); min-height: 36px; }
+.q-code .sql-code { border: 0; border-radius: 0; max-height: min(65vh, 720px); min-height: 60px; font-size: 13px; padding: 12px 14px; }
+.q-num { font-size: 12px; font-weight: 700; color: var(--primary); }
