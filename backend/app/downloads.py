@@ -26,6 +26,7 @@ KINDS: dict[str, str] = {
     "sale_report": "판매 현황 보고용 엑셀",
     "sale_monthly": "월별 매장별 판매 집계",
     "invt_plan": "매장 재고 실사계획",
+    "stock_rt": "재고 재배치 추천",
     "settings_backup": "설정 백업 파일",
     "manager_phone": "매장 매니저 연락처 조회",
 }

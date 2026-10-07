@@ -18,12 +18,12 @@ SESSION_TTL = 60 * 60          # 1시간 (사용 시마다 연장)
 MAX_FAILS = 5
 LOCK_SECONDS = 60
 
-PAGES = ["dashboard", "detail", "mall_shop", "sale_dashboard", "sale_monthly", "invt_plan"]   # 권한 부여 가능한 일반 페이지
+PAGES = ["dashboard", "detail", "mall_shop", "sale_dashboard", "sale_monthly", "invt_plan", "stock_rt"]   # 권한 부여 가능한 일반 페이지
 EMP_NO_RE = re.compile(r"^\d{6}$")             # 사번 형식 (6자리 숫자)
 PAGE_GROUPS = {"dashboard": "온라인 가격", "detail": "온라인 가격", "mall_shop": "온라인 가격", "sale_dashboard": "판매 분석", "sale_monthly": "판매 분석",
-               "invt_plan": "데이터 관리"}
+               "invt_plan": "데이터 관리", "stock_rt": "데이터 관리"}
 PAGE_LABELS = {"dashboard": "대시보드", "detail": "일자별 상세", "mall_shop": "판매처 매장 연결", "sale_dashboard": "판매 현황", "sale_monthly": "월별 매장별 판매 집계", "invt_plan": "매장 재고 실사계획",
-               "admin": "관리자"}
+               "stock_rt": "재고 재배치 추천", "admin": "관리자"}
 
 MSG_BAD_LOGIN = "아이디 또는 패스워드가 일치하지 않습니다."
 MSG_NOT_REGISTERED = "이 서비스에 등록되지 않은 사용자입니다. 관리자에게 사용자 등록을 요청하세요."

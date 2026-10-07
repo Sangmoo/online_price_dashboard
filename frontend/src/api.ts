@@ -4,7 +4,7 @@ export type Row = Record<string, string | number | null>
 
 export type DateInfo = { dt: string; count: number }
 
-export type PageKey = 'dashboard' | 'detail' | 'mall_shop' | 'sale_dashboard' | 'sale_monthly' | 'invt_plan' | 'admin'
+export type PageKey = 'dashboard' | 'detail' | 'mall_shop' | 'sale_dashboard' | 'sale_monthly' | 'invt_plan' | 'stock_rt' | 'admin'
 
 export type AiLimits = {
   enabled: boolean

@@ -416,3 +416,52 @@
     -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .view-seg button { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ---------------------------------------------------------------- 재고 재배치 추천 (매장 간 RT · 창고 → 매장 배분) */
+.stock-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.stock-head .seg.big button { display: inline-flex; gap: 6px; align-items: center; }
+.stock-head .hint-pill { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.seg button { white-space: nowrap; }
+.stock-subbar .seg button, .sale-filter .seg button { padding: 5px 11px; font-size: 12.5px; font-weight: 600; display: inline-flex; gap: 5px; align-items: center; }
+.stock-subbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.stock-subbar .search.sm { flex: 0 1 260px; height: 32px; }
+.input.sm { height: 32px; padding: 0 8px; font-size: 12.5px; border-radius: 8px; }
+.stock-prdt { width: 150px; }
+.stock-run { min-width: 0; max-width: min(640px, 100%); }
+.stock-base { max-width: 300px; }
+.stock-rate { width: 72px; }
+.danger-text { color: var(--danger); }
+.alert.warn { background: rgba(245, 158, 11, 0.09); border: 1px solid rgba(245, 158, 11, 0.35); color: #b45309; }
+.alert.info { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; background: var(--primary-soft); border: 1px solid var(--border); color: var(--text-2); font-size: 12.5px; }
+.tag.warn { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+:root[data-theme='dark'] .tag.warn, :root[data-theme='dark'] .alert.warn { color: #fbbf24; }
+.stock-computing, .stock-empty { display: flex; align-items: center; gap: 12px; padding: 16px 18px; }
+.stock-empty { color: var(--text-2); }
+.stock-empty > svg { color: var(--primary-2); flex: none; }
+.stock-loading { display: flex; align-items: center; gap: 8px; padding: 18px; color: var(--muted); }
+.stock-table td { vertical-align: top; }
+.stock-table td .small { font-size: 11.5px; }
+.stock-table th.num, .stock-table td.num { text-align: right; white-space: nowrap; }
+.stock-reasons { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; font-size: 12.5px; }
+.stock-reasons > div { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.stock-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; padding: 14px 16px; }
+.stock-bars { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; min-width: 0; }
+.stock-bar-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(60px, 1fr) auto; gap: 8px; align-items: center; }
+.stock-bar-row:has(> :nth-child(2):last-child) { grid-template-columns: minmax(0, 1fr) auto; }
+.stock-bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stock-bar { height: 10px; background: var(--surface-3); border-radius: 6px; overflow: hidden; display: flex; }
+.stock-bar i { display: block; height: 100%; background: var(--accent-a); }
+.stock-bar i.done, .stock-legend i.done { background: var(--success); }
+.stock-bar i.fail, .stock-legend i.fail { background: var(--danger); }
+.stock-bar i.etc, .stock-legend i.etc { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.stock-legend { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11.5px; }
+.stock-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-left: 6px; }
+.stock-gap { margin-top: 10px; }
+.stock-stats { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.stock-cand-modal { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 10px; }
+.stock-cand-modal .table-wrap { max-height: calc(100vh - 220px); }
+@media (max-width: 720px) {
+  .stock-head .hint-pill { margin-left: 0; }
+  .stock-two { grid-template-columns: 1fr; padding: 12px; }
+  .stock-subbar .search.sm { flex: 1 1 100%; }
+}

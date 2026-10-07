@@ -1122,6 +1122,100 @@ def invt_shop_detail(shop_id: str, _: dict = Depends(invt_page)):
     return invt_plan.shop_detail(shop_id)
 
 
+# ----------------------------------------------------------------------------
+# 데이터 관리 > 재고 재배치 추천 (매장 간 RT · 창고 → 매장 배분, 조회 · 추천만)
+# ----------------------------------------------------------------------------
+stock_page = require_page("stock_rt")
+
+
+def _rt_args(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, planYy: str | None = None,  # noqa: N803
+             seasons: str | None = None, prdt: str | None = None, teams: str | None = None, per: int = 1, limits: bool = False,
+             order: str = "slow", senderMax: int = 0) -> dict:  # noqa: N803
+    return {"brand": brand, "frm": dateFrom, "to": dateTo, "plan_yy": planYy, "seasons": seasons, "prdt": prdt, "teams": teams,
+            "per": per, "limits": limits, "order": order, "sender_max": senderMax}
+
+
+def _alloc_args(brand: str | None = None, wh: str | None = None, dateFrom: str | None = None, dateTo: str | None = None,  # noqa: N803
+                base: str | None = None, grdGrp: str | None = None, planYy: str | None = None, seasons: str | None = None,  # noqa: N803
+                prdtGrps: str | None = None, items: str | None = None, prdt: str | None = None, teams: str | None = None,  # noqa: N803
+                rate: float = 1) -> dict:
+    return {"brand": brand, "wh": wh, "frm": dateFrom, "to": dateTo, "base": base, "grd_grp": grdGrp, "plan_yy": planYy,
+            "seasons": seasons, "prdt_grps": prdtGrps, "items": items, "prdt": prdt, "teams": teams, "rate": rate}
+
+
+@app.get("/api/stock-rt/options")
+def stock_rt_options(brand: str | None = None, me: dict = Depends(stock_page)):
+    """조건 선택지: 브랜드(권한) · 시즌 · 팀 · 창고 · 판매보충기준 · 등급 그룹 · 최근 판매분 자동보충 실행 조건"""
+    from . import stock_ctl, wh_alloc
+
+    out = wh_alloc.options(brand, brand_scope.brands_of(me))
+    return {**out, "defaultSeasons": stock_ctl.default_seasons(), "defaultPlanYy": stock_ctl.default_plan_years(),
+            "today": stock_ctl.today(), "maxDays": stock_ctl.MAX_DAYS}
+
+
+@app.get("/api/stock-rt/rt")
+def stock_rt_recommend(args: dict = Depends(_rt_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """매장 간 RT 추천 (자동 RT 규칙, 최대 31일). 화면에는 앞쪽 2,000행 · 못 채운 수요 1,000행만, 엑셀은 전부"""
+    from . import stock_rt
+
+    d = stock_rt.recommend(**args, allowed=brand_scope.brands_of(me), refresh=refresh)
+    return {**d, "rows": d["rows"][:stock_rt.MAX_ROWS], "unfilled": d["unfilled"][:1000],
+            "rowsTotal": len(d["rows"]), "unfilledTotal": len(d["unfilled"])}
+
+
+@app.get("/api/stock-rt/rt/export")
+def stock_rt_export(args: dict = Depends(_rt_args), me: dict = Depends(stock_page)):
+    from . import stock_rt
+
+    d = stock_rt.recommend(**args, allowed=brand_scope.brands_of(me))
+    content = stock_rt.export_xlsx(d)
+    downloads.record(me, "stock_rt", "매장간RT추천", {k: v for k, v in args.items() if v not in (None, "", 0, False)},
+                     rows=len(d["rows"]), size=len(content))
+    return _xlsx_response(content, f"매장간RT추천_{d['brandNm']}_{d['to']}.xlsx")
+
+
+@app.get("/api/stock-rt/rt/stats")
+def stock_rt_stats(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None,  # noqa: N803
+                   me: dict = Depends(stock_page)):
+    """자동 RT 요청 결과 현황 (기간 · 브랜드)"""
+    from . import stock_rt
+
+    return stock_rt.auto_rt_stats(brand, dateFrom, dateTo, brand_scope.brands_of(me))
+
+
+@app.get("/api/stock-rt/alloc")
+def stock_alloc_recommend(args: dict = Depends(_alloc_args), refresh: bool = False, me: dict = Depends(stock_page)):
+    """창고 → 매장 배분 추천 (판매분 자동보충 규칙, 최대 31일). 화면에는 배분 행 · 상품별 앞쪽 3,000행"""
+    from . import wh_alloc
+
+    d = wh_alloc.recommend(**args, allowed=brand_scope.brands_of(me), refresh=refresh)
+    out = {k: v for k, v in d.items() if k != "allRows"}
+    return {**out, "rows": d["rows"][:wh_alloc.MAX_ROWS], "skus": d["skus"][:wh_alloc.MAX_ROWS],
+            "rowsTotal": len(d["rows"]), "skusTotal": len(d["skus"])}
+
+
+@app.get("/api/stock-rt/alloc/candidates")
+def stock_alloc_candidates(prdtCd: str, colorCd: str, sizeCd: str, args: dict = Depends(_alloc_args),  # noqa: N803
+                           me: dict = Depends(stock_page)):
+    """한 상품의 후보 매장 전체와 순서 (배분 안 된 매장 · 수불제어 매장 포함)"""
+    from . import wh_alloc
+
+    d = wh_alloc.recommend(**args, allowed=brand_scope.brands_of(me))
+    return {"rows": [r for r in d["allRows"] if (r["prdtCd"], r["colorCd"], r["sizeCd"]) == (prdtCd, colorCd, sizeCd)],
+            "sku": next((s for s in d["skus"] if (s["prdtCd"], s["colorCd"], s["sizeCd"]) == (prdtCd, colorCd, sizeCd)), None)}
+
+
+@app.get("/api/stock-rt/alloc/export")
+def stock_alloc_export(args: dict = Depends(_alloc_args), me: dict = Depends(stock_page)):
+    from . import wh_alloc
+
+    d = wh_alloc.recommend(**args, allowed=brand_scope.brands_of(me))
+    content = wh_alloc.export_xlsx(d)
+    downloads.record(me, "stock_rt", "창고배분추천", {k: v for k, v in args.items() if v not in (None, "", 0, False)},
+                     rows=len(d["rows"]), size=len(content))
+    return _xlsx_response(content, f"창고배분추천_{d['brandNm']}_{d['to']}.xlsx")
+
+
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")
 
 

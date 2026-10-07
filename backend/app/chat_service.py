@@ -72,12 +72,19 @@ SYSTEM_PROMPT = """당신은 사내 웹 서비스 'ERP 영업 관리'의 데이�
   대화창에 [적용] 버튼이 있는 카드가 나가고 사용자가 눌러야 저장되므로, '아래 [적용]을 누르면 저장됩니다'라고 안내하고 저장했다고 말하지 않습니다.
   사이트명이 모호하거나 판매자번호가 여러 개면 먼저 search_mall_shop_mappings 로 확인하고, 경고(브랜드가 다른 매장 등)가 있으면 함께 알립니다.
 
+[G] 재고 재배치 추천 (메뉴: 데이터 관리 > 재고 재배치 추천) — 도구: recommend_store_rt, recommend_wh_allocation, get_auto_rt_stats
+- 매장 간 RT 추천(판매 후 품절 매장 ← 같은 RT 그룹의 안 팔리는 재고 매장)과 창고 → 매장 배분 추천(판매분 자동보충 규칙)을
+  ERP 자동 RT · 판매분 자동보충과 같은 규칙으로 계산합니다. 조회 · 추천만 하며 ERP 에 RT · 배분의뢰를 등록하지 않는다고 밝힙니다.
+- 기간은 최대 31일입니다. 매장 간 RT 는 기본 최근 7일 · 안 팔리는 매장 우선, 창고 배분은 기본 어제 하루 · 최근 자동보충 실행 조건입니다.
+- 자동 RT 가 왜 실패하는지('지시가능매장없음')는 get_auto_rt_stats 와 recommend_store_rt 의 senderExcludedByRule 로 설명합니다.
+- 계산에 10~40초 걸릴 수 있어, 같은 질문에서 조건을 바꿔 여러 번 부르지 말고 view · shop_id 로 필요한 부분만 봅니다.
+
 [D] 관리자 정의 조회 도구 — 설명 끝에 '(관리자 정의 조회 도구 …)' 가 붙은 도구
 - 관리자가 이 서비스 데이터 조회용으로 추가한 도구입니다. 도구 설명에 적힌 범위의 질문에 사용하고, 결과 컬럼명 그대로 해석하되 모호하면 그렇다고 밝힙니다.
 
 답변 원칙:
 1. 반드시 도구로 조회한 결과만 근거로 답합니다. 일반 지식, 추측, 외부 정보로 수치를 만들지 않습니다.
-2. 이 서비스의 데이터(A, B, C, D, E, F)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
+2. 이 서비스의 데이터(A, B, C, D, E, F, G)와 무관한 질문(일반 상식, 코딩, 다른 업무 시스템 등)에는 답하지 말고, 이 서비스 데이터로 가능한 분석을 짧게 제안합니다.
 3. 대화마다 [화면 컨텍스트]로 오늘 날짜, 사용자가 보고 있는 화면, 사용자가 조회 권한을 가진 데이터가 주어집니다.
    권한이 없는 데이터는 조회할 수 없으며, 요청받으면 해당 메뉴 권한이 필요하다고 안내합니다.
 4. 질문이 어느 데이터에 관한 것인지 불분명하면 사용자가 보고 있는 화면의 데이터를 우선합니다.
@@ -142,9 +149,9 @@ def _context_text(ctx: dict | None, me: dict) -> str:
     allowed = [n for n, ok in (("온라인 가격(A)", sc["price"]), ("매장 재고 실사계획(B)", sc["invt"]),
                                ("판매 현황(C)", sc["dash"] or sc["sale"]),
                                ("월별 매장별 판매 집계(C, 판매 행 조회 포함)", sc["sale"]), ("매장 정보·담당 영업직원(E)", sc["shop"]),
-                               ("판매처 매장 연결(F)", sc["mall"])) if ok]
+                               ("판매처 매장 연결(F)", sc["mall"]), ("재고 재배치 추천(G)", sc["stock"])) if ok]
     parts = [f"오늘 날짜: {date.today():%Y%m%d}", f"조회 권한이 있는 데이터: {', '.join(allowed) or '없음'}"]
-    if (sc["dash"] or sc["sale"]) and me.get("brands"):
+    if (sc["dash"] or sc["sale"] or sc["stock"]) and me.get("brands"):
         parts.append(f"판매 데이터 브랜드 권한: {', '.join(me['brands'])} 만 조회됩니다 (도구 결과도 이 브랜드로만 계산됨). "
                      "전사·다른 브랜드 수치는 알 수 없다고 답하세요.")
     if ctx:
@@ -178,6 +185,10 @@ def _context_text(ctx: dict | None, me: dict) -> str:
             if ctx.get("seasons"):
                 cond.append(f"시즌 {ctx['seasons']}")
             parts.append("보고 있는 화면: 월별 매장별 판매 집계 (조건: " + ", ".join(cond) + ")")
+        elif view == "stock_rt":
+            tab = "창고 → 매장 배분" if ctx.get("tab") == "alloc" else "매장 간 RT"
+            cond = [f"{k} {ctx[k]}" for k in ("brand", "period", "seasons", "prdt") if ctx.get(k)]
+            parts.append(f"보고 있는 화면: 재고 재배치 추천 > {tab}" + (f" (조건: {', '.join(cond)})" if cond else ""))
         elif view == "admin":
             parts.append("보고 있는 화면: 관리자")
     return "[화면 컨텍스트] " + " / ".join(parts)
@@ -461,6 +472,10 @@ def _table_title(name: str, inp: dict) -> str:
     if name == "find_online_discount_alerts":
         ym = inp.get("ym") or "최근 마감 월"
         return f"온라인 할인 주의 상품 · 매장 {inp['ym_from'] + '~' if inp.get('ym_from') else ''}{ym}{' · ' + inp['brand'] if inp.get('brand') else ''}"
+    if name in ("recommend_store_rt", "recommend_wh_allocation", "get_auto_rt_stats"):
+        title = {"recommend_store_rt": "매장 간 RT 추천", "recommend_wh_allocation": "창고 → 매장 배분 추천", "get_auto_rt_stats": "자동 RT 현황"}[name]
+        cond = [f"{k}={','.join(map(str, v)) if isinstance(v, list) else v}" for k, v in inp.items() if k not in ("limit",) and v not in (None, "", [])]
+        return title + (f" · {', '.join(cond)}" if cond else "")
     if name == "get_product_insight":
         return f"상품 종합 · {inp.get('prdt_cd', '')}"
     if name in ("sum_sales_shop_month", "aggregate_sales", "search_sales"):

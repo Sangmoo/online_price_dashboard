@@ -71,6 +71,11 @@ const INVT_SUGGESTIONS = [
   '권역별 실사계획 건수와 업체 예상 비용 합계를 알려줘',
   '실사예정월별 계획 건수와 예상 비용을 정리해줘',
 ]
+const STOCK_SUGGESTIONS = [
+  '최근 7일 판매 후 품절된 매장에 보낼 RT 추천해줘',
+  '자동 RT 가 지시가능매장없음으로 취소되는 이유가 뭐야?',
+  '어제 판매분 자동보충하면 창고에서 몇 장 나가?',
+]
 const SALE_SUGGESTIONS = [
   '지난달 매장별 실판금액 상위 10개 매장을 알려줘',
   '최근 12개월 월별 수량과 실판금액 추이를 보여줘',
@@ -132,6 +137,8 @@ export default function ChatWidget({ user, context }: { user: User; context: Rec
     const invt = user.pages.includes('invt_plan') ? INVT_SUGGESTIONS : []
     const sale = user.pages.includes('sale_monthly') ? SALE_SUGGESTIONS : []
     const dash = user.pages.includes('sale_dashboard') || user.pages.includes('sale_monthly') ? SALE_DASH_SUGGESTIONS : []
+    const stock = user.pages.includes('stock_rt') ? STOCK_SUGGESTIONS : []
+    if (context.view === 'stock_rt') return [...stock, ...dash, ...sale, ...price].slice(0, 4)
     if (context.view === 'invt_plan') return [...invt, ...dash, ...sale, ...price].slice(0, 4)
     if (context.view === 'sale_dashboard') return [...dash, ...sale, ...invt, ...price].slice(0, 4)
     if (context.view === 'sale_monthly') return [...sale, ...dash, ...invt, ...price].slice(0, 4)

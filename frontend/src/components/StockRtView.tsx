@@ -1,0 +1,677 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, ArrowRight, ArrowRightLeft, BarChart3, Download, Info, ListOrdered, Loader2, RefreshCw, Search, Store, Warehouse, X } from 'lucide-react'
+import { ApiError } from '../api'
+import { fmtNum } from '../format'
+import {
+  stockApi,
+  type AllocCond, type AllocResult, type AllocRow, type AllocSku, type RecentRun, type RtCond, type RtResult, type RtStats, type StockOptions,
+} from '../stockApi'
+
+type Tab = 'rt' | 'alloc'
+const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
+const addDaysIso = (isoDate: string, n: number) => {
+  const d = new Date(`${isoDate}T00:00:00`)
+  d.setDate(d.getDate() + n)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const spanDays = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86400000) + 1
+const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e))
+const pct = (a: number, b: number) => (b ? `${Math.round((a * 1000) / b) / 10}%` : '-')
+
+/** 계산 중 경과 초 */
+function useElapsed(on: boolean) {
+  const [sec, setSec] = useState(0)
+  useEffect(() => {
+    if (!on) return
+    setSec(0)
+    const t = window.setInterval(() => setSec((s) => s + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [on])
+  return sec
+}
+
+function Chips({ items, value, onChange, empty }: { items: { code: string; name: string }[]; value: string[]; onChange: (v: string[]) => void; empty?: string }) {
+  return (
+    <div className="chips wrap">
+      {items.map((it) => (
+        <button key={it.code} className={`chip ${value.includes(it.code) ? 'active' : ''}`} onClick={() => onChange(toggle(value, it.code))} title={it.code}>{it.name}</button>
+      ))}
+      {empty && <span className="muted small">{empty}</span>}
+    </div>
+  )
+}
+
+function Computing({ sec, what }: { sec: number; what: string }) {
+  return (
+    <section className="card stock-computing" role="status">
+      <Loader2 size={18} className="spin" />
+      <div>
+        <b>{what} 계산 중… {sec}초</b>
+        <div className="muted small">판매 · 재고 · 수불제어를 ERP 규칙대로 확인합니다. 보통 10~30초, 기간이 길거나 시즌을 비우면 더 걸립니다. 같은 조건은 30분 동안 바로 열립니다.</div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * 재고 재배치 추천: 매장 간 RT(자동 RT 규칙) · 창고 → 매장 배분(판매분 자동보충 규칙). 조회 · 추천만 하고 ERP 에는 등록하지 않는다.
+ */
+export default function StockRtView({ onContextChange }: { onContextChange?: (ctx: Record<string, string>) => void }) {
+  const [tab, setTab] = useState<Tab>('rt')
+  const [brand, setBrand] = useState('')
+  const [opts, setOpts] = useState<StockOptions | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    stockApi.options(brand || undefined).then((o) => {
+      setOpts(o)
+      if (!brand) setBrand(o.brand)
+    }).catch((e) => setError(errText(e)))
+  }, [brand])
+
+  return (
+    <div className="stack">
+      <section className="card stock-head">
+        <div className="toolbar-title"><ArrowRightLeft size={18} /> 재고 재배치 추천</div>
+        <div className="seg big" role="tablist" aria-label="추천 종류">
+          <button role="tab" aria-selected={tab === 'rt'} className={tab === 'rt' ? 'on' : ''} onClick={() => setTab('rt')}><Store size={14} /> 매장 간 RT</button>
+          <button role="tab" aria-selected={tab === 'alloc'} className={tab === 'alloc' ? 'on' : ''} onClick={() => setTab('alloc')}><Warehouse size={14} /> 창고 → 매장 배분</button>
+        </div>
+        <div className="chips" role="group" aria-label="브랜드">
+          {(opts?.brands ?? []).map((b) => (
+            <button key={b.code} className={`chip ${brand === b.code ? 'active' : ''}`} onClick={() => setBrand(b.code)}>{b.name}</button>
+          ))}
+        </div>
+        <span className="pill hint-pill"><Info size={13} /> 조회 · 추천만 합니다 — ERP 에 RT · 배분의뢰가 등록되지 않습니다</span>
+      </section>
+      {error && <div className="alert error">{error}</div>}
+      {opts && opts.brand === brand && (
+        <>
+          <div hidden={tab !== 'rt'}><RtTab key={`rt-${brand}`} opts={opts} onContext={(c) => tab === 'rt' && onContextChange?.({ view: 'stock_rt', tab: 'rt', ...c })} /></div>
+          <div hidden={tab !== 'alloc'}><AllocTab key={`al-${brand}`} opts={opts} onContext={(c) => tab === 'alloc' && onContextChange?.({ view: 'stock_rt', tab: 'alloc', ...c })} /></div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- 매장 간 RT
+function RtTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<string, string>) => void }) {
+  const today = iso(opts.today)
+  const init: RtCond = {
+    brand: opts.brand, dateFrom: addDaysIso(today, -6), dateTo: today, planYy: opts.defaultPlanYy, seasons: opts.defaultSeasons, prdt: '', teams: [],
+    per: 1, order: 'slow', senderMax: 0, limits: false,
+  }
+  const [cond, setCond] = useState<RtCond>(init)
+  const [applied, setApplied] = useState<RtCond | null>(null)
+  const [data, setData] = useState<RtResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [view, setView] = useState<'rows' | 'unfilled' | 'shops' | 'stats'>('rows')
+  const [q, setQ] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const abort = useRef<AbortController | null>(null)
+  const sec = useElapsed(loading)
+  const days = spanDays(cond.dateFrom, cond.dateTo)
+  const bad = !cond.dateFrom || !cond.dateTo || days < 1 ? '기간을 고르세요.' : days > opts.maxDays ? `기간은 최대 ${opts.maxDays}일입니다.` : ''
+  const seasonNm = useMemo(() => Object.fromEntries(opts.seasons.map((s) => [s.code, s.name])), [opts])
+
+  const run = (refresh = false) => {
+    if (bad) return
+    abort.current?.abort()
+    const ac = new AbortController()
+    abort.current = ac
+    setLoading(true)
+    setError('')
+    const c = { ...cond }
+    stockApi.rt(c, refresh, ac.signal).then((d) => {
+      setData(d)
+      setApplied(c)
+      onContext({ brand: d.brandNm, period: `${d.from}~${d.to}`, seasons: c.seasons.map((s) => seasonNm[s] ?? s).join(','), prdt: c.prdt })
+    }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
+  }
+  useEffect(() => () => abort.current?.abort(), [])
+
+  const dirty = applied !== null && JSON.stringify(applied) !== JSON.stringify(cond)
+  const rows = useMemo(() => {
+    const k = q.trim().toUpperCase()
+    if (!data) return []
+    if (!k) return data.rows
+    return data.rows.filter((r) => [r.prdtCd, r.fromShopId, r.toShopId, r.fromShopNm, r.toShopNm, r.styleNm].some((v) => v?.toUpperCase().includes(k)))
+  }, [data, q])
+  const unfilled = useMemo(() => {
+    const k = q.trim().toUpperCase()
+    if (!data) return []
+    return k ? data.unfilled.filter((r) => [r.prdtCd, r.shopId, r.shopNm].some((v) => v?.toUpperCase().includes(k))) : data.unfilled
+  }, [data, q])
+  const s = data?.summary
+
+  const exportXlsx = async () => {
+    if (!applied) return
+    setExporting(true)
+    try { await stockApi.rtExport(applied) } catch (e) { setError(errText(e)) } finally { setExporting(false) }
+  }
+
+  return (
+    <div className="stack">
+      <section className="card sale-filter">
+        <div className="sale-filter-row">
+          <div className="toolbar-title"><Store size={17} /> 매장 간 RT 추천</div>
+          <div className="date-range" title="판매 기간 (최대 31일)">
+            <span className="date-range-label">판매 기간</span>
+            <input type="date" value={cond.dateFrom} max={cond.dateTo || today} onChange={(e) => setCond({ ...cond, dateFrom: e.target.value })} aria-label="판매 기간 시작" />
+            <span className="muted">~</span>
+            <input type="date" value={cond.dateTo} min={cond.dateFrom} max={today} onChange={(e) => setCond({ ...cond, dateTo: e.target.value })} aria-label="판매 기간 끝" />
+            <span className={`muted small ${days > opts.maxDays ? 'danger-text' : ''}`}>{days > 0 ? `${days}일` : ''}</span>
+          </div>
+          <div className="chips">
+            {[7, 14, 31].map((n) => (
+              <button key={n} className="chip" onClick={() => setCond({ ...cond, dateFrom: addDaysIso(today, -(n - 1)), dateTo: today })}>최근 {n}일</button>
+            ))}
+          </div>
+          <div className="toolbar-actions">
+            <button className="btn primary" onClick={() => run(false)} disabled={loading || !!bad} title={bad || undefined}>
+              {loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 추천 계산{dirty ? ' *' : ''}
+            </button>
+            <button className="btn ghost" onClick={() => run(true)} disabled={loading || !applied || !!bad} title="30분 캐시를 무시하고 지금 재고로 다시 계산">
+              <RefreshCw size={15} /> 새로 계산
+            </button>
+            <button className="btn success" onClick={exportXlsx} disabled={!data || exporting || dirty}>
+              {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} 엑셀
+            </button>
+          </div>
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">기획년도</span>
+          <Chips items={opts.planYears.map((y) => ({ code: y, name: y }))} value={cond.planYy} onChange={(planYy) => setCond({ ...cond, planYy })} />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">시즌</span>
+          <Chips items={opts.seasons} value={cond.seasons} onChange={(seasons) => setCond({ ...cond, seasons })} empty="비우면 전체 (느림)" />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">받는 팀</span>
+          <Chips items={opts.teams} value={cond.teams} onChange={(teams) => setCond({ ...cond, teams })} empty="비우면 전체" />
+          <span className="filter-label">품번</span>
+          <input className="input sm stock-prdt" value={cond.prdt} placeholder="앞부분만 입력 가능" onChange={(e) => setCond({ ...cond, prdt: e.target.value.toUpperCase() })} aria-label="품번" />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">방식</span>
+          <div className="seg" role="group" aria-label="보내는 매장 순서">
+            <button className={cond.order === 'slow' ? 'on' : ''} onClick={() => setCond({ ...cond, order: 'slow' })} title="기간 판매가 적은 매장부터 (재고 재배치)">안 팔리는 매장 우선</button>
+            <button className={cond.order === 'auto' ? 'on' : ''} onClick={() => setCond({ ...cond, order: 'auto' })} title="ERP 자동 RT 와 같은 순서 (요청가능 재고 많은 순 · 판매율 · 최종판매일)">자동 RT 순서</button>
+          </div>
+          <label className="field-label">받는 상품당
+            <select className="input sm" value={cond.per} onChange={(e) => setCond({ ...cond, per: Number(e.target.value) })} aria-label="받는 상품당 수량">
+              {[1, 2, 3].map((n) => <option key={n} value={n}>{n}장</option>)}
+            </select>
+          </label>
+          <label className="field-label">보내는 매장당 최대
+            <select className="input sm" value={cond.senderMax} onChange={(e) => setCond({ ...cond, senderMax: Number(e.target.value) })} aria-label="보내는 매장당 최대 수량">
+              {[0, 10, 20, 50, 100].map((n) => <option key={n} value={n}>{n ? `${n}장` : '제한 없음'}</option>)}
+            </select>
+          </label>
+          <label className="check-label" title="ERP 자동 RT 의 하루 지정가능수 · 요청가능수까지 지킴 (지정가능수 0 매장이 많아 추천이 크게 줄어듭니다)">
+            <input type="checkbox" checked={cond.limits} onChange={(e) => setCond({ ...cond, limits: e.target.checked })} /> 자동 RT 하루 한도 적용
+          </label>
+        </div>
+      </section>
+
+      {bad && <div className="alert warn">{bad}</div>}
+      {error && <div className="alert error">{error}</div>}
+      {loading && <Computing sec={sec} what="매장 간 RT 추천" />}
+      {!data && !loading && (
+        <section className="card stock-empty">
+          <ArrowRightLeft size={26} />
+          <div>
+            <b>판매됐는데 재고가 없는 매장에, 같은 RT 그룹의 안 팔리는 재고를 짝지어 드립니다.</b>
+            <div className="muted small">ERP 자동 RT 규칙(같은 RT 그룹 · 이동중/요청중 · 최소보유재고 · 출고 경과일 · 매장등급 · 수불제어)을 그대로 적용합니다. [추천 계산]을 누르세요.</div>
+          </div>
+        </section>
+      )}
+
+      {data && s && (
+        <>
+          <section className="summary-pills">
+            <div className="pill strong"><span>받을 상품</span><b>{fmtNum(s.receivers)}건</b><span className="muted">필요 {fmtNum(s.needQty)}장</span></div>
+            <div className="pill strong"><span>추천</span><b>{fmtNum(s.recRows)}건 · {fmtNum(s.recQty)}장</b><span className="muted">채움 {pct(s.filledReceivers, s.receivers)}</span></div>
+            <div className="pill"><span>보내는 매장</span><b>{fmtNum(s.senders)}곳</b></div>
+            <div className="pill"><span>받는 매장</span><b>{fmtNum(s.receivingShops)}곳</b></div>
+            <div className="pill" title="기간 중 자동 RT 가 '지시가능매장없음'으로 취소된 요청 중 이번 추천으로 보낼 매장을 찾은 건"><span>자동 RT 취소 요청</span><b>{fmtNum(s.failFilled)} / {fmtNum(s.failRequests)}</b></div>
+            <div className="pill"><span>못 채움</span><b>{fmtNum(s.unfilled)}건</b></div>
+            <div className="pill hint-pill">{data.brandNm} · {data.from} ~ {data.to} · {data.orderNm}{data.limits ? ' · 하루 한도' : ''} · {data.asOf} 기준 · {data.timing.total}초</div>
+            {dirty && <div className="pill hint-pill warn-pill">조건을 바꿨습니다 · [추천 계산]을 누르면 적용됩니다</div>}
+          </section>
+
+          <section className="card grid-card">
+            <div className="stock-subbar">
+              <div className="seg" role="tablist" aria-label="결과 보기">
+                <button className={view === 'rows' ? 'on' : ''} onClick={() => setView('rows')}>추천 목록 ({fmtNum(data.rowsTotal)})</button>
+                <button className={view === 'unfilled' ? 'on' : ''} onClick={() => setView('unfilled')}>못 채운 수요 ({fmtNum(data.unfilledTotal)})</button>
+                <button className={view === 'shops' ? 'on' : ''} onClick={() => setView('shops')}>매장별 합계</button>
+                <button className={view === 'stats' ? 'on' : ''} onClick={() => setView('stats')}><BarChart3 size={13} /> 자동 RT 현황</button>
+              </div>
+              {(view === 'rows' || view === 'unfilled') && (
+                <div className="search sm">
+                  <Search size={14} />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="품번 · 매장코드 · 매장명" aria-label="결과 검색" />
+                  {q && <button className="clear" onClick={() => setQ('')}><X size={13} /></button>}
+                </div>
+              )}
+              {view === 'rows' && data.rowsTotal > data.rows.length && <span className="muted small">화면은 앞쪽 {fmtNum(data.rows.length)}건 · 전체는 엑셀</span>}
+            </div>
+            {view === 'rows' && <RtTable rows={rows} />}
+            {view === 'unfilled' && <UnfilledTable data={data} rows={unfilled} />}
+            {view === 'shops' && <ShopTotals data={data} />}
+            {view === 'stats' && applied && <RtStatsPanel brand={applied.brand} from={applied.dateFrom} to={applied.dateTo} data={data} />}
+          </section>
+        </>
+      )}
+    </div>
+  )
+}
+
+function RtTable({ rows }: { rows: RtResult['rows'] }) {
+  return (
+    <div className="table-wrap tall">
+      <table className="table stock-table" aria-label="매장 간 RT 추천 목록">
+        <thead>
+          <tr>
+            <th>품번 · 칼라 · 사이즈</th><th className="num">수량</th>
+            <th>보내는 매장</th><th className="num" title="현재고 / 보낼 수 있는 수량">재고</th><th className="num">기간 판매</th><th>최종판매일</th>
+            <th aria-label="방향" />
+            <th>받는 매장</th><th className="num">재고</th><th className="num">기간 판매</th><th>사유</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.no}>
+              <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span>{r.styleNm && r.styleNm !== r.prdtCd && <div className="muted small">{r.styleNm}</div>}</td>
+              <td className="num"><b>{r.qty}</b></td>
+              <td><span className="mono">{r.fromShopId}</span> {r.fromShopNm}<div className="muted small">{r.fromTeam}</div></td>
+              <td className="num">{r.fromStock}<span className="muted"> / {r.fromSendable}</span></td>
+              <td className="num">{r.fromSales}</td>
+              <td className="muted">{r.fromLastSale ?? '-'}</td>
+              <td className="center muted"><ArrowRight size={14} /></td>
+              <td><span className="mono">{r.toShopId}</span> {r.toShopNm}<div className="muted small">{r.toTeam}</div></td>
+              <td className={`num ${r.toStock < 0 ? 'danger-text' : ''}`}>{r.toStock}</td>
+              <td className="num">{r.toSales}</td>
+              <td><span className={`tag ${r.toFailCnt ? 'miss' : r.toStock < 0 ? 'warn' : 'auto'}`}>{r.why}{r.toFailCnt > 1 ? ` ${r.toFailCnt}회` : ''}</span></td>
+            </tr>
+          ))}
+          {!rows.length && <tr><td colSpan={11} className="empty">추천할 RT 가 없습니다.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function UnfilledTable({ data, rows }: { data: RtResult; rows: RtResult['unfilled'] }) {
+  const s = data.summary
+  const ex = Object.entries(s.senderExcluded).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+  return (
+    <>
+      <div className="stock-reasons">
+        <div>
+          <b>못 채운 이유</b>
+          {Object.entries(s.unfilledBy).filter(([, v]) => v > 0).map(([k, v]) => <span key={k} className="chip small">{data.reasonNames[k]} {fmtNum(v)}</span>)}
+        </div>
+        <div title="재고는 있지만 자동 RT 규칙으로 보내는 후보에서 빠진 매장 × 상품 (확인한 후보 기준)">
+          <b>보내는 후보에서 빠진 이유</b>
+          {ex.map(([k, v]) => <span key={k} className="chip small">{data.ruleNames[k]} {fmtNum(v)}</span>)}
+        </div>
+        {(s.skipped.noGroup > 0 || s.skipped.recvCtl > 0) && (
+          <div className="muted small">받는 매장에서 뺀 것: RT 그룹 없음 · 정상 매장 아님 {fmtNum(s.skipped.noGroup)}건 · 자동RT 반입 수불제어 {fmtNum(s.skipped.recvCtl)}건</div>
+        )}
+      </div>
+      <div className="table-wrap tall">
+        <table className="table stock-table" aria-label="못 채운 수요">
+          <thead><tr><th>매장</th><th>품번 · 칼라 · 사이즈</th><th className="num">재고</th><th className="num">기간 판매</th><th className="num">자동RT 취소</th><th className="num">못 채운 수량</th><th>이유</th></tr></thead>
+          <tbody>
+            {rows.map((u, i) => (
+              <tr key={`${u.shopId}-${u.prdtCd}-${u.colorCd}-${u.sizeCd}-${i}`}>
+                <td><span className="mono">{u.shopId}</span> {u.shopNm}<div className="muted small">{u.team}</div></td>
+                <td><b className="mono">{u.prdtCd}</b> <span className="muted">{u.colorCd} · {u.sizeCd}</span></td>
+                <td className="num">{u.stock}</td><td className="num">{u.sales}</td><td className="num">{u.failCnt || '-'}</td><td className="num">{u.left}</td>
+                <td>{u.reasonNm}</td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={7} className="empty">못 채운 수요가 없습니다.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+function ShopTotals({ data }: { data: RtResult }) {
+  const box = (title: string, list: RtResult['topSenders']) => {
+    const max = Math.max(1, ...list.map((x) => x.qty))
+    return (
+      <div className="stock-bars">
+        <b>{title}</b>
+        {list.map((x) => (
+          <div key={x.shopId} className="stock-bar-row">
+            <span className="stock-bar-name"><span className="mono">{x.shopId}</span> {x.shopNm}</span>
+            <span className="stock-bar"><i style={{ width: `${(x.qty / max) * 100}%` }} /></span>
+            <b className="num">{fmtNum(x.qty)}장</b>
+          </div>
+        ))}
+        {!list.length && <span className="muted">없음</span>}
+      </div>
+    )
+  }
+  return <div className="stock-two">{box('많이 보내는 매장 (상위 15)', data.topSenders)}{box('많이 받는 매장 (상위 15)', data.topReceivers)}</div>
+}
+
+function RtStatsPanel({ brand, from, to, data }: { brand: string; from: string; to: string; data: RtResult }) {
+  const [st, setSt] = useState<RtStats | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    setSt(null)
+    stockApi.rtStats(brand, from, to).then(setSt).catch((e) => setError(errText(e)))
+  }, [brand, from, to])
+  if (error) return <div className="alert error">{error}</div>
+  if (!st) return <div className="stock-loading"><Loader2 size={16} className="spin" /> 자동 RT 현황을 불러오는 중…</div>
+  const max = Math.max(1, ...st.days.map((d) => d.total))
+  return (
+    <div className="stock-stats">
+      <div className="summary-pills">
+        <div className="pill strong"><span>자동 RT 요청</span><b>{fmtNum(st.total)}건</b></div>
+        {st.results.map((r) => <div key={r.code} className="pill"><span>{r.name}</span><b>{fmtNum(r.count)}</b></div>)}
+        <div className="pill warn-pill"><span>'지시가능매장없음' 취소</span><b>{fmtNum(st.noShopCancel)}건 ({st.noShopRate ?? '-'}%)</b></div>
+      </div>
+      <div className="alert info">
+        <AlertTriangle size={14} /> 이번 조건의 추천은 취소된 요청 {fmtNum(data.summary.failRequests)}건 중 {fmtNum(data.summary.failFilled)}건에 보낼 매장을 찾았습니다.
+        자동 RT 가 못 찾은 주된 이유는 보내는 매장의 <b>자동 RT 지정가능수(ASIGN_ABLE_QTY)</b>입니다 — 0 인 매장이 많아 재고가 있어도 지정되지 않습니다
+        ([자동 RT 하루 한도 적용]을 켜서 비교해 보세요).
+      </div>
+      <div className="stock-two">
+        <div className="stock-bars">
+          <b>일별 요청 · 완료 · 취소</b>
+          {st.days.map((d) => (
+            <div key={d.day} className="stock-bar-row">
+              <span className="stock-bar-name">{d.day}</span>
+              <span className="stock-bar stack3" title={`요청 ${d.total} · 완료 ${d.done} · 지시가능매장없음 ${d.fail}`}>
+                <i className="done" style={{ width: `${(d.done / max) * 100}%` }} />
+                <i className="fail" style={{ width: `${(d.fail / max) * 100}%` }} />
+                <i className="etc" style={{ width: `${((d.total - d.done - d.fail) / max) * 100}%` }} />
+              </span>
+              <b className="num">{fmtNum(d.total)}</b>
+            </div>
+          ))}
+          <div className="stock-legend"><i className="done" /> 완료 <i className="fail" /> 지시가능매장없음 <i className="etc" /> 그 외</div>
+        </div>
+        <div className="stock-bars">
+          <b>취소가 많은 매장</b>
+          {st.failShops.map((x) => <div key={x.shopId} className="stock-bar-row"><span className="stock-bar-name"><span className="mono">{x.shopId}</span> {x.shopNm}</span><b className="num">{fmtNum(x.count)}건</b></div>)}
+          <b className="stock-gap">취소가 많은 품번</b>
+          {st.failProducts.map((x) => <div key={x.prdtCd} className="stock-bar-row"><span className="stock-bar-name"><span className="mono">{x.prdtCd}</span> {x.styleNm !== x.prdtCd ? x.styleNm : ''}</span><b className="num">{fmtNum(x.count)}건</b></div>)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- 창고 → 매장 배분
+function fromRun(opts: StockOptions, r: RecentRun | undefined, today: string): AllocCond {
+  const yday = addDaysIso(today, -1)
+  return {
+    brand: opts.brand, wh: r?.wh ?? opts.warehouses[0]?.code ?? 'IN', dateFrom: yday, dateTo: yday,
+    base: r?.base ?? opts.bases[0]?.id ?? '', grdGrp: r?.grdGrp ?? opts.gradeGroups.find((g) => g.base)?.id ?? '',
+    planYy: r?.planYy ?? opts.defaultPlanYy, seasons: r?.seasons ?? opts.defaultSeasons, prdtGrps: r?.prdtGrps ?? [], items: r?.items ?? [],
+    prdt: r?.prdt ?? '', teams: r?.teams ?? [], rate: r?.rate ?? 1,
+  }
+}
+
+function AllocTab({ opts, onContext }: { opts: StockOptions; onContext: (c: Record<string, string>) => void }) {
+  const today = iso(opts.today)
+  const [runSeq, setRunSeq] = useState(opts.recentRuns[0]?.seq ?? '')
+  const [cond, setCond] = useState<AllocCond>(() => fromRun(opts, opts.recentRuns[0], today))
+  const [applied, setApplied] = useState<AllocCond | null>(null)
+  const [data, setData] = useState<AllocResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [view, setView] = useState<'rows' | 'skus' | 'shops'>('rows')
+  const [q, setQ] = useState('')
+  const [onlyShort, setOnlyShort] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [cand, setCand] = useState<AllocSku | null>(null)
+  const abort = useRef<AbortController | null>(null)
+  const sec = useElapsed(loading)
+  const run0 = opts.recentRuns.find((r) => r.seq === runSeq)
+  const days = spanDays(cond.dateFrom, cond.dateTo)
+  const bad = !cond.dateFrom || !cond.dateTo || days < 1 ? '기간을 고르세요.' : days > opts.maxDays ? `기간은 최대 ${opts.maxDays}일입니다.`
+    : !cond.base ? '판매보충기준을 고르세요.' : ''
+
+  const pickRun = (seq: string) => {
+    setRunSeq(seq)
+    const r = opts.recentRuns.find((x) => x.seq === seq)
+    if (r) setCond({ ...fromRun(opts, r, today), dateFrom: cond.dateFrom, dateTo: cond.dateTo })
+  }
+  const run = (refresh = false) => {
+    if (bad) return
+    abort.current?.abort()
+    const ac = new AbortController()
+    abort.current = ac
+    setLoading(true)
+    setError('')
+    const c = { ...cond }
+    stockApi.alloc(c, refresh, ac.signal).then((d) => {
+      setData(d)
+      setApplied(c)
+      onContext({ brand: d.brandNm, period: `${d.from}~${d.to}`, prdt: c.prdt })
+    }).catch((e) => { if (!ac.signal.aborted) setError(errText(e)) }).finally(() => { if (abort.current === ac) setLoading(false) })
+  }
+  useEffect(() => () => abort.current?.abort(), [])
+
+  const dirty = applied !== null && JSON.stringify(applied) !== JSON.stringify(cond)
+  const match = (vals: (string | null)[]) => {
+    const k = q.trim().toUpperCase()
+    return !k || vals.some((v) => v?.toUpperCase().includes(k))
+  }
+  const rows = useMemo(() => (data?.rows ?? []).filter((r) => match([r.prdtCd, r.shopId, r.shopNm, r.styleNm])), [data, q]) // eslint-disable-line react-hooks/exhaustive-deps
+  const skus = useMemo(() => (data?.skus ?? []).filter((r) => (!onlyShort || r.short > 0) && match([r.prdtCd, r.styleNm])), [data, q, onlyShort]) // eslint-disable-line react-hooks/exhaustive-deps
+  const s = data?.summary
+  const baseNm = (id: string) => opts.bases.find((b) => b.id === id)?.rmk ?? ''
+
+  const exportXlsx = async () => {
+    if (!applied) return
+    setExporting(true)
+    try { await stockApi.allocExport(applied) } catch (e) { setError(errText(e)) } finally { setExporting(false) }
+  }
+
+  return (
+    <div className="stack">
+      <section className="card sale-filter">
+        <div className="sale-filter-row">
+          <div className="toolbar-title"><Warehouse size={17} /> 창고 → 매장 배분 추천 <span className="muted small">(판매분 자동보충 규칙)</span></div>
+          <div className="date-range" title="판매 기간 (최대 31일)">
+            <span className="date-range-label">판매 기간</span>
+            <input type="date" value={cond.dateFrom} max={cond.dateTo || today} onChange={(e) => setCond({ ...cond, dateFrom: e.target.value })} aria-label="배분 판매 기간 시작" />
+            <span className="muted">~</span>
+            <input type="date" value={cond.dateTo} min={cond.dateFrom} max={today} onChange={(e) => setCond({ ...cond, dateTo: e.target.value })} aria-label="배분 판매 기간 끝" />
+          </div>
+          <div className="toolbar-actions">
+            <button className="btn primary" onClick={() => run(false)} disabled={loading || !!bad} title={bad || undefined}>
+              {loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 배분 계산{dirty ? ' *' : ''}
+            </button>
+            <button className="btn ghost" onClick={() => run(true)} disabled={loading || !applied || !!bad} title="캐시를 무시하고 지금 재고로 다시 계산"><RefreshCw size={15} /> 새로 계산</button>
+            <button className="btn success" onClick={exportXlsx} disabled={!data || exporting || dirty}>
+              {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} 엑셀
+            </button>
+          </div>
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">최근 실행</span>
+          <select className="input sm stock-run" value={runSeq} onChange={(e) => pickRun(e.target.value)} aria-label="최근 판매분 자동보충 실행 조건">
+            {opts.recentRuns.map((r) => (
+              <option key={r.seq} value={r.seq}>
+                {r.seq} · {r.at} · {r.from === r.to ? r.from : `${r.from}~${r.to}`} · {baseNm(r.base) || r.base} · {r.seasons.map((x) => opts.seasons.find((s) => s.code === x)?.name ?? x).join(',')}
+              </option>
+            ))}
+            {!opts.recentRuns.length && <option value="">최근 실행 기록 없음</option>}
+          </select>
+          {run0?.ignored.length ? <span className="muted small"><Info size={12} /> 이 화면에서 쓰지 않는 조건: {run0.ignored.join(', ')}</span> : null}
+        </div>
+        <div className="sale-filter-row">
+          <label className="field-label">창고
+            <select className="input sm" value={cond.wh} onChange={(e) => setCond({ ...cond, wh: e.target.value })} aria-label="창고">
+              {opts.warehouses.map((w) => <option key={w.code} value={w.code}>{w.name}</option>)}
+              {!opts.warehouses.some((w) => w.code === cond.wh) && <option value={cond.wh}>{cond.wh}</option>}
+            </select>
+          </label>
+          <label className="field-label">판매보충기준
+            <select className="input sm stock-base" value={cond.base} onChange={(e) => setCond({ ...cond, base: e.target.value })} aria-label="판매보충기준">
+              {opts.bases.map((b) => <option key={b.id} value={b.id}>{b.id} · {b.rmk ?? ''} ({b.aplyDt})</option>)}
+            </select>
+          </label>
+          <label className="field-label">등급 그룹
+            <select className="input sm" value={cond.grdGrp} onChange={(e) => setCond({ ...cond, grdGrp: e.target.value })} aria-label="등급 그룹">
+              {opts.gradeGroups.map((g) => <option key={g.id} value={g.id}>{g.name}{g.base ? ' (기본)' : ''}</option>)}
+            </select>
+          </label>
+          <label className="field-label">배수
+            <input className="input sm stock-rate" type="number" min={0.1} max={10} step={0.1} value={cond.rate} onChange={(e) => setCond({ ...cond, rate: Number(e.target.value) })} aria-label="배수" />
+          </label>
+          <span className="filter-label">품번</span>
+          <input className="input sm stock-prdt" value={cond.prdt} placeholder="앞부분만 입력 가능" onChange={(e) => setCond({ ...cond, prdt: e.target.value.toUpperCase() })} aria-label="배분 품번" />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">기획년도</span>
+          <Chips items={opts.planYears.map((y) => ({ code: y, name: y }))} value={cond.planYy} onChange={(planYy) => setCond({ ...cond, planYy })} />
+          <span className="filter-label">시즌</span>
+          <Chips items={opts.seasons} value={cond.seasons} onChange={(seasons) => setCond({ ...cond, seasons })} />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">팀</span>
+          <Chips items={opts.teams} value={cond.teams} onChange={(teams) => setCond({ ...cond, teams })} empty="비우면 전체" />
+        </div>
+        <div className="sale-filter-row">
+          <span className="filter-label">품군</span>
+          <Chips items={opts.prdtGrps} value={cond.prdtGrps} onChange={(prdtGrps) => setCond({ ...cond, prdtGrps })} empty="비우면 전체" />
+        </div>
+      </section>
+
+      {bad && <div className="alert warn">{bad}</div>}
+      {error && <div className="alert error">{error}</div>}
+      {loading && <Computing sec={sec} what="창고 → 매장 배분" />}
+      {!data && !loading && (
+        <section className="card stock-empty">
+          <Warehouse size={26} />
+          <div>
+            <b>판매분 자동보충을 돌리기 전에, 어느 매장에 몇 장이 가는지 미리 봅니다.</b>
+            <div className="muted small">최근 실행 조건을 불러왔습니다. 오늘 이미 실행했다면 그 미확정 의뢰가 창고 가용에서 빠져 '추가로 더 보낼 수 있는 양'이 계산됩니다.</div>
+          </div>
+        </section>
+      )}
+
+      {data && s && (
+        <>
+          <section className="summary-pills">
+            <div className="pill strong"><span>배분</span><b>{fmtNum(s.allocQty)}장</b><span className="muted">완불 {fmtNum(s.allocFp)}</span></div>
+            <div className="pill"><span>상품</span><b>{fmtNum(s.allocSkus)} / {fmtNum(s.skus)}</b></div>
+            <div className="pill"><span>받는 매장</span><b>{fmtNum(s.shops)}곳</b></div>
+            <div className="pill"><span>필요 수량</span><b>{fmtNum(s.demand)}장</b></div>
+            <div className={`pill ${s.short ? 'warn-pill' : ''}`}><span>창고 부족</span><b>{fmtNum(s.short)}장</b><span className="muted">재고 없는 상품 {fmtNum(s.noStockSkus)}</span></div>
+            {s.ctlRows > 0 && <div className="pill"><span>수불제어로 건너뜀</span><b>{fmtNum(s.ctlRows)}</b></div>}
+            <div className="pill hint-pill">{data.brandNm} · {data.wh} · {data.from === data.to ? data.from : `${data.from} ~ ${data.to}`} · 기준 {data.base} · {data.asOf} 기준 · {data.timing.total}초</div>
+            {dirty && <div className="pill hint-pill warn-pill">조건을 바꿨습니다 · [배분 계산]을 누르면 적용됩니다</div>}
+          </section>
+          <section className="card grid-card">
+            <div className="stock-subbar">
+              <div className="seg" role="tablist" aria-label="배분 결과 보기">
+                <button className={view === 'rows' ? 'on' : ''} onClick={() => setView('rows')}>매장별 배분 ({fmtNum(data.rowsTotal)})</button>
+                <button className={view === 'skus' ? 'on' : ''} onClick={() => setView('skus')}>상품별 ({fmtNum(data.skusTotal)})</button>
+                <button className={view === 'shops' ? 'on' : ''} onClick={() => setView('shops')}>많이 받는 매장</button>
+              </div>
+              {view !== 'shops' && (
+                <div className="search sm">
+                  <Search size={14} />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={view === 'rows' ? '품번 · 매장' : '품번'} aria-label="배분 결과 검색" />
+                  {q && <button className="clear" onClick={() => setQ('')}><X size={13} /></button>}
+                </div>
+              )}
+              {view === 'skus' && <label className="check-label"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} /> 부족한 상품만</label>}
+              {view === 'skus' && <span className="muted small">상품을 누르면 후보 매장 순서</span>}
+            </div>
+            {view === 'rows' && <AllocTable rows={rows} />}
+            {view === 'skus' && (
+              <div className="table-wrap tall">
+                <table className="table stock-table" aria-label="상품별 배분">
+                  <thead><tr><th>품번 · 칼라 · 사이즈</th><th className="num">창고 재고</th><th className="num" title="오늘 이후 출고지시 미명세 + 미확정 배분의뢰">지시 · 의뢰</th><th className="num">창고하한</th><th className="num">배분 가능</th><th className="num">후보 매장</th><th className="num">필요</th><th className="num">배분</th><th className="num">부족</th><th className="num">매장상한</th></tr></thead>
+                  <tbody>
+                    {skus.map((k) => (
+                      <tr key={`${k.prdtCd}-${k.colorCd}-${k.sizeCd}`} className="clickable" onClick={() => setCand(k)}>
+                        <td><b className="mono">{k.prdtCd}</b> <span className="muted">{k.colorCd} · {k.sizeCd}</span></td>
+                        <td className="num">{fmtNum(k.whStock)}</td><td className="num">{fmtNum(k.reserved)}</td><td className="num">{k.minWh}</td>
+                        <td className="num"><b>{fmtNum(k.avail)}</b></td><td className="num">{k.shops}</td><td className="num">{k.demand}</td>
+                        <td className="num"><b>{k.alloc}</b></td><td className={`num ${k.short ? 'danger-text' : ''}`}>{k.short || '-'}</td><td className="num">{k.maxStock === 9999 ? '없음' : k.maxStock}</td>
+                      </tr>
+                    ))}
+                    {!skus.length && <tr><td colSpan={10} className="empty">상품이 없습니다.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {view === 'shops' && (
+              <div className="stock-two"><div className="stock-bars"><b>많이 받는 매장 (상위 15)</b>
+                {data.topShops.map((x) => {
+                  const max = Math.max(1, ...data.topShops.map((y) => y.qty))
+                  return <div key={x.shopId} className="stock-bar-row"><span className="stock-bar-name"><span className="mono">{x.shopId}</span> {x.shopNm}</span><span className="stock-bar"><i style={{ width: `${(x.qty / max) * 100}%` }} /></span><b className="num">{fmtNum(x.qty)}장</b></div>
+                })}
+              </div></div>
+            )}
+          </section>
+        </>
+      )}
+      {cand && applied && <CandidatesModal cond={applied} sku={cand} onClose={() => setCand(null)} />}
+    </div>
+  )
+}
+
+function AllocTable({ rows }: { rows: AllocRow[] }) {
+  return (
+    <div className="table-wrap tall">
+      <table className="table stock-table" aria-label="매장별 배분">
+        <thead><tr><th>품번 · 칼라 · 사이즈</th><th className="num">순위</th><th>매장</th><th>유통 · 등급</th><th className="num">판매율</th><th className="num">완불 · 판매</th><th className="num">현재고</th><th className="num">배분(완불)</th><th className="num">배분(판매)</th><th className="num">합계</th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={`${r.prdtCd}-${r.colorCd}-${r.sizeCd}-${r.shopId}`}>
+              <td><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span></td>
+              <td className="num">{r.rank}</td>
+              <td><span className="mono">{r.shopId}</span> {r.shopNm}<div className="muted small">{r.team}</div></td>
+              <td>{r.shopType} <span className="muted">{r.grade}{r.gradeRank != null ? ` · ${r.gradeRank}` : ''}</span></td>
+              <td className="num">{r.srate}%</td><td className="num">{r.fq} · {r.sq}</td><td className="num">{r.stock}</td>
+              <td className="num">{r.askFp || '-'}</td><td className="num">{r.askSale || '-'}</td><td className="num"><b>{r.ask}</b></td>
+            </tr>
+          ))}
+          {!rows.length && <tr><td colSpan={10} className="empty">배분할 매장이 없습니다.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CandidatesModal({ cond, sku, onClose }: { cond: AllocCond; sku: AllocSku; onClose: () => void }) {
+  const [rows, setRows] = useState<AllocRow[] | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    stockApi.allocCandidates(cond, sku).then((d) => setRows(d.rows)).catch((e) => setError(errText(e)))
+  }, [cond, sku])
+  return (
+    <div className="modal-backdrop top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal card help-modal stock-cand-modal" role="dialog" aria-label="후보 매장 순서">
+        <div className="modal-head">
+          <h3><ListOrdered size={17} /> {sku.prdtCd} {sku.colorCd} · {sku.sizeCd} 후보 매장 순서</h3>
+          <button className="icon-btn" onClick={onClose} title="닫기"><X size={18} /></button>
+        </div>
+        <div className="muted small">창고 배분 가능 {fmtNum(sku.avail)}장 (창고 {fmtNum(sku.whStock)} − 지시 · 의뢰 {fmtNum(sku.reserved)} − 하한 {sku.minWh}) · 매장재고상한 {sku.maxStock === 9999 ? '없음' : sku.maxStock} · 순서 = 유통형태 · 판매율 · 등급 · 등급 내 순위 · 최초판매일</div>
+        {error && <div className="alert error">{error}</div>}
+        {!rows && !error && <div className="stock-loading"><Loader2 size={16} className="spin" /> 불러오는 중…</div>}
+        {rows && <AllocTable rows={rows.map((r) => ({ ...r, shopNm: r.ctl ? `${r.shopNm ?? ''} (수불제어 · 건너뜀)` : r.shopNm }))} />}
+      </div>
+    </div>
+  )
+}

@@ -1,7 +1,7 @@
 // 지표 정의 · 도움말 내용. 화면의 (?) 아이콘이 id 로 이 항목을 열고, 상단 [도움말] 은 전체를 보여준다.
 // 계산식을 바꾸면 이 파일도 같이 고친다 (서버 계산 위치를 code 에 적어 둔다).
 
-export type HelpGroup = 'online' | 'sales' | 'invt'
+export type HelpGroup = 'online' | 'sales' | 'invt' | 'stock'
 
 export type HelpEntry = {
   id: string
@@ -23,6 +23,7 @@ export const HELP_GROUPS: { key: HelpGroup; label: string; desc: string }[] = [
   { key: 'online', label: '온라인 가격', desc: '온라인몰 가격 수집 결과 (T_SELECT_ONLINE_MNG_R)' },
   { key: 'sales', label: '판매 분석', desc: '마감 매출 기초 데이터 (T_CLOSE_SALE_BASE, 매월 1일 13:00 전월 적재)' },
   { key: 'invt', label: '매장 재고 실사계획', desc: '실사계획 (T_SHOP_INVT_PLAN) 의 자동 계산 값' },
+  { key: 'stock', label: '재고 재배치 추천', desc: 'ERP 자동 RT · 판매분 자동보충과 같은 규칙으로 계산 (조회 · 추천만, ERP 에 등록하지 않음)' },
 ]
 
 export const HELP: HelpEntry[] = [
@@ -247,6 +248,47 @@ export const HELP: HelpEntry[] = [
     source: 'T_SHOP_STOCK.STOCK_QTY',
     notes: ['자동 계산 뒤 직접 고칠 수 있습니다. 권역·재고 수량을 바꾸면 다시 계산됩니다.'],
     where: ['매장 재고 실사계획'],
+  },
+  // ---------------------------------------------------------------- 재고 재배치 추천
+  {
+    id: 'stock.rt',
+    group: 'stock',
+    name: '매장 간 RT 추천',
+    formula: [
+      '받는 매장 = 판매 기간(최대 31일)에 판매가 있는데 지금 재고 ≤ 0 인 매장 × 품번 · 칼라 · 사이즈 + 기간 중 “지시가능매장없음”으로 취소된 자동 RT 요청',
+      '필요 수량 = 받는 상품당 수량(1~3) + 마이너스 재고(완불 대기)',
+      '보낼 수 있는 수량 = 현재고 − 이동중(30일 미확정) − 자동 RT 요청중(10일) − 최소보유재고',
+      '보내는 매장 = 같은 RT 그룹 · 모매장 브랜드 행낭 규칙 · 정상 매장 · 매장등급 있음 · 최초/최종 출고 경과일 · 수불제어 · 자동RT 제외 스타일 통과',
+      '순서: 안 팔리는 매장 우선 = 기간 판매 적은 순 → 자동 RT 순서(보낼 수 있는 수량 많은 순 · 판매율 · 최종판매일 · 최초출고일)',
+    ],
+    source: 'T_SHOP_RNDS_BASE(판매) · T_SHOP_STOCK(재고) · T_SHOP_PRDT_BASE · T_SHOP_RT_GRP_DETL · T_AUTO_RT · T_SHOP_MOVE · T_RNDS_CNTR',
+    notes: [
+      '[자동 RT 하루 한도 적용]을 켜면 지정가능수(ASIGN_ABLE_QTY) 0 매장을 빼고 오늘 남은 지정 · 요청 가능 수까지 지킵니다. 지정가능수 0 매장이 많아 추천이 크게 줄어듭니다.',
+      '수불제어는 ERP 함수(F_GET_RNDS_CNTR · F_GET_RNDS_CNTR_AUTO_RT)와 같은 규칙으로 계산합니다 (표본 421건 대조 일치).',
+      '받는 매장은 자동 RT 취소 요청 → 마이너스 재고 → 기간 판매 많은 순으로 먼저 채웁니다.',
+    ],
+    where: ['재고 재배치 추천 > 매장 간 RT'],
+    code: 'stock_rt.recommend',
+  },
+  {
+    id: 'stock.alloc',
+    group: 'stock',
+    name: '창고 → 매장 배분 추천 (판매분 자동보충)',
+    formula: [
+      '창고 배분 가능 = 창고 재고(이번 달) − 오늘 이후 출고지시 미명세 − 오늘 이후 미확정 배분의뢰 − 창고재고하한',
+      '후보 매장 = 정상 매장 · 등급 그룹에 매장등급 있음 · 기간 판매 있음 · 현재고 ≤ 매장재고상한 · 판매율 ≥ 최소판매율',
+      '판매율(%) = 일반 판매 ÷ (현재고 + 기간 시작 시점 재고) × 100',
+      '순서 = 유통형태(백화점 → 아울렛 → 직영점 → 대리점) · 판매율 높은 순 · 매장등급 · 등급 내 순위(리스트는 반대) · 최초판매일',
+      '배분 = 1차 완불 수량, 2차 일반 판매 수량 — 각각 min(판매 × 배수, 매장재고상한 − 현재고 − 1차 배분, 창고 남은 수량)',
+    ],
+    source: 'T_SALE_SUPLM_BASE · _APLY · _XCLD · T_STYLE_PLAN · T_WH_STOCK_PRDT · T_DELV_INDC · T_DELV_ASK · T_SHOP_STOCK · T_SHOP_GRD_GRP_DETL',
+    notes: [
+      '최근 판매분 자동보충 실행 조건(SS10DEV.T_AUTO_DVID_MASTER_HIST)을 불러와 같은 조건으로 미리 계산합니다. 오늘 아침 실행과 대조해 상품 목록 · 후보 매장 순서가 일치했습니다.',
+      '오늘 이미 실행한 자동보충의 미확정 의뢰는 창고 가용에서 빠지므로, 실행 뒤에 보면 “추가로 더 보낼 수 있는 양”입니다.',
+      '상품구분 · 제품상태 · 리오더 · 지역 · 매장형태 · 판매유형 · 물류반품기간 · 스타일그룹 조건은 쓰지 않습니다.',
+    ],
+    where: ['재고 재배치 추천 > 창고 → 매장 배분'],
+    code: 'wh_alloc.recommend',
   },
 ]
 
