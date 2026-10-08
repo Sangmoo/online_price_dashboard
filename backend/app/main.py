@@ -1255,13 +1255,22 @@ def stock_writer(request: Request) -> dict:
     return me
 
 
+RT_PREVIEW_COLS = ("prdtCd", "colorCd", "sizeCd", "styleNm", "qty", "fromShopId", "fromShopNm", "fromTeam", "fromStock", "fromSendable", "fromSales",
+                   "toShopId", "toShopNm", "toTeam", "toStock", "toSales", "why")
+
+
+def _rt_preview_out(request: Request, p: dict) -> Response:
+    """지시 전 확인: 지시될 행(화면 표시용 열만) · 제외 행 — 수천 건이면 gzip"""
+    return _json_gz(request, {**{k: v for k, v in p.items() if k != "rows"},
+                              "rows": [{c: r.get(c) for c in RT_PREVIEW_COLS} for r in p["rows"]]})
+
+
 @app.post("/api/stock-rt/rt/preview")
-def stock_rt_write_preview(body: dict, args: dict = Depends(_rt_args), me: dict = Depends(stock_writer)):
-    """고른 RT 추천 행을 지금 재고로 다시 확인 (등록하지 않음)"""
+def stock_rt_write_preview(request: Request, body: dict, args: dict = Depends(_rt_args), me: dict = Depends(stock_writer)):
+    """고른 RT 추천 행을 지금 재고로 다시 확인 (등록하지 않음) — 지시될 내역을 함께 돌려준다"""
     from . import stock_write
 
-    p = stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me))
-    return {k: v for k, v in p.items() if k != "rows"}
+    return _rt_preview_out(request, stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me)))
 
 
 @app.post("/api/stock-rt/rt/register")
@@ -1294,12 +1303,17 @@ def stock_alloc_seqns(brand: str | None = None, askDt: str | None = None, me: di
     return stock_write.alloc_seqns(brand, askDt, brand_scope.brands_of(me))
 
 
+ALLOC_PREVIEW_COLS = ("prdtCd", "colorCd", "sizeCd", "shopId", "shopNm", "rank", "stock", "askFp", "askSale", "ask")
+
+
 @app.post("/api/stock-rt/alloc/preview")
-def stock_alloc_write_preview(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+def stock_alloc_write_preview(request: Request, body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+    """고른 배분을 지금 창고 재고로 다시 확인 (등록하지 않음) — 의뢰될 내역을 함께 돌려준다"""
     from . import stock_write
 
     p = stock_write.alloc_preview(args, body.get("keys"), brand_scope.brands_of(me))
-    return {k: v for k, v in p.items() if k != "rows"}
+    return _json_gz(request, {**{k: v for k, v in p.items() if k != "rows"},
+                              "rows": [{c: r.get(c) for c in ALLOC_PREVIEW_COLS} for r in p["rows"]]})
 
 
 @app.post("/api/stock-rt/alloc/register")
@@ -1377,11 +1391,10 @@ def stock_alloc_short_rt(request: Request, args: dict = Depends(_alloc_args), re
 
 
 @app.post("/api/stock-rt/alloc/short-rt/preview")
-def stock_alloc_short_rt_preview(body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
+def stock_alloc_short_rt_preview(request: Request, body: dict, args: dict = Depends(_alloc_args), me: dict = Depends(stock_writer)):
     from . import stock_write
 
-    p = stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me), source="short")
-    return {k: v for k, v in p.items() if k != "rows"}
+    return _rt_preview_out(request, stock_write.rt_preview(args, body.get("keys"), brand_scope.brands_of(me), source="short"))
 
 
 @app.post("/api/stock-rt/alloc/short-rt/register")

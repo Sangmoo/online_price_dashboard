@@ -181,7 +181,8 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시 · 확정
   api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
   api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
   api.on('POST', '/api/stock-rt/rt/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: RT.asOf, count: 1, qty: 2, senders: 1, receivers: 1,
-    rows: [{ fromShopId: 'S32017', fromShopNm: '대구점', toShopId: 'S11016', toShopNm: '영등포점', qty: 2 }],
+    rows: [{ prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', qty: 2, fromShopId: 'S32017', fromShopNm: '대구점', fromStock: 3, fromSendable: 2,
+      toShopId: 'S11016', toShopNm: '영등포점', toStock: 0, toSales: 2, why: '판매 후 품절' }],
     skipped: [{ key: ['SWWSLQ42230', 'LG', '44', 'S11003', 'S21018'], reason: '보내는 매장 재고 부족 (지금 보낼 수 있는 수량 0)' }] } }))
   api.on('POST', '/api/stock-rt/rt/register', () => ({ json: { ok: true, indcDt: ymd(now), count: 1, qty: 2, firstId: `${ymd(now)}00042`,
     lastId: `${ymd(now)}00043`, senders: 1, receivers: 1, skipped: [] } }))
@@ -211,10 +212,13 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시 · 확정
   await expect(dlg).toContainText('로그인한 사번으로 확정')
   await expect(dlg).toContainText('제외 1건')
   expect(api.find('POST', '/api/stock-rt/rt/preview')[0].body).toEqual({ keys: [['SWWJKQ42010', 'BK', '55', 'S32017', 'S11016']] })
-  const shopSum = dlg.getByRole('table', { name: '매장별 지시 요약' })                     // 지시 전 보내는 · 받는 매장별 한눈에
-  await expect(shopSum).toContainText('S32017 대구점')
+  const detail = dlg.getByRole('table', { name: '지시 내역' })                             // 지시 전 대상 내역 · 매장별 합계
+  await expect(detail).toContainText('SWWJKQ42010')
+  await expect(detail).toContainText('S32017 대구점')
+  await expect(detail).toContainText('판매 후 품절')
   await dlg.getByRole('button', { name: '받는 매장별' }).click()
-  await expect(shopSum).toContainText('S11016 영등포점')
+  await expect(dlg.getByRole('table', { name: '받는 매장별 합계' })).toContainText('S11016 영등포점')
+  await dlg.getByRole('button', { name: /지시 내역 \(1\)/ }).click()
   await shot(page, 'stock-rt-register')
   await dlg.getByRole('button', { name: '2장 지시' }).click()
   await expect(page.locator('.stock-done')).toContainText(`지시번호 ${ymd(now)}00042 ~ ${ymd(now)}00043`)
@@ -241,7 +245,9 @@ test('관리자: 창고 배분을 골라 배분의뢰(미확정) 등록 — 차�
   const api = await mockApi(makeUser('ADMIN'))
   api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
   api.on('GET', '/api/stock-rt/alloc', () => ({ json: ALLOC }))
-  api.on('POST', '/api/stock-rt/alloc/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: ALLOC.asOf, wh: 'IN', count: 2, qty: 3, shops: 2, skipped: [] } }))
+  api.on('POST', '/api/stock-rt/alloc/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: ALLOC.asOf, wh: 'IN', count: 2, qty: 3, shops: 2, skipped: [],
+    rows: [{ prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '55', shopId: 'S11003', shopNm: '롯데잠실', rank: 1, stock: 0, askFp: 1, askSale: 1, ask: 2 },
+      { prdtCd: 'SWWJKQ42010', colorCd: 'BK', sizeCd: '66', shopId: 'S21018', shopNm: '천호점', rank: 2, stock: 1, askFp: 0, askSale: 1, ask: 1 }] } }))
   api.on('GET', '/api/stock-rt/alloc/seqns', () => ({ json: { brand: 'S', askDt: isoDay(now), next: 19,
     used: [{ seqn: 17, brand: 'S', brandNm: '쉬즈미스', clsby: 'C0632', rows: 1295, confirmed: true, web: false },
       { seqn: 18, brand: 'S', brandNm: '쉬즈미스', clsby: 'C0632', rows: 2861, confirmed: true, web: false }] } }))
@@ -255,6 +261,13 @@ test('관리자: 창고 배분을 골라 배분의뢰(미확정) 등록 — 차�
   await rows.getByLabel('배분 모두 선택').check()
   await page.getByRole('button', { name: /배분의뢰 등록 \(2건 · 3장\)/ }).click()
   const dlg = page.getByRole('dialog', { name: '배분의뢰 등록' })
+  await expect(dlg.getByRole('table', { name: '의뢰 내역' })).toContainText('S21018 천호점')      // 의뢰 전 대상 내역 · 매장별 · 품번별
+  await dlg.getByLabel('의뢰 내역 검색').fill('롯데')
+  await expect(dlg.getByRole('table', { name: '의뢰 내역' }).getByRole('row')).toHaveCount(2)
+  await dlg.getByLabel('의뢰 내역 검색').fill('')
+  await dlg.getByRole('button', { name: '매장별' }).click()
+  await expect(dlg.getByRole('table', { name: '매장별 합계' })).toContainText('S11003 롯데잠실')
+  await dlg.getByRole('button', { name: /의뢰 내역 \(2\)/ }).click()
   await expect(dlg.getByLabel('의뢰차수')).toHaveValue('19')
   await expect(dlg).toContainText('17(쉬즈미스·확정)')
   await dlg.getByLabel('의뢰차수').fill('18')

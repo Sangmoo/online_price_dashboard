@@ -276,3 +276,26 @@ def test_open_screen_tool_makes_card_not_navigation(monkeypatch):
         ts.run("open_stock_rt_screen", {"tab": "alloc", "view": "unfilled"}, allowed=None)     # 배분 탭에 없는 보기
     with pytest.raises(ts.StockToolError):
         ts.run("open_stock_rt_screen", {"brand": "쉬즈미스"}, allowed=["리스트"])                # 브랜드 권한
+
+
+def test_preview_routes_send_rows_for_review(monkeypatch):
+    """지시 · 의뢰 전 확인 창이 내역을 그릴 수 있게 미리보기 응답에 행(화면용 열만)이 들어간다"""
+    import gzip
+    import json
+    from types import SimpleNamespace
+
+    from app import main, stock_write
+
+    req = SimpleNamespace(headers={"accept-encoding": "gzip"})
+    rt_row = {"no": 1, "prdtCd": "SWW1", "colorCd": "BK", "sizeCd": "55", "qty": 2, "fromShopId": "S1", "fromShopNm": "가", "toShopId": "S2",
+              "toShopNm": "나", "why": "판매 후 품절", "fromStock": 3, "fromSendable": 2, "toStock": 0, "toSales": 1, "internal": "x"}
+    monkeypatch.setattr(stock_write, "rt_preview", lambda *a, **k: {"brand": "S", "count": 300, "qty": 600, "skipped": [], "rows": [rt_row] * 300})
+    monkeypatch.setattr(main.brand_scope, "brands_of", lambda me: None)
+    res = main.stock_rt_write_preview(req, {"keys": [["SWW1", "BK", "55", "S1", "S2"]]}, {}, {"id": "A"})
+    body = json.loads(gzip.decompress(res.body) if res.headers.get("content-encoding") == "gzip" else res.body)
+    assert body["count"] == 300 and len(body["rows"]) == 300
+    assert body["rows"][0]["fromShopNm"] == "가" and body["rows"][0]["why"] == "판매 후 품절" and "internal" not in body["rows"][0]
+    al_row = {"prdtCd": "SWW1", "colorCd": "BK", "sizeCd": "55", "shopId": "S1", "shopNm": "가", "rank": 1, "stock": 0, "askFp": 1, "askSale": 0, "ask": 1}
+    monkeypatch.setattr(stock_write, "alloc_preview", lambda *a, **k: {"brand": "S", "count": 1, "qty": 1, "skipped": [], "rows": [al_row]})
+    res = main.stock_alloc_write_preview(SimpleNamespace(headers={}), {"keys": [["S1", "SWW1", "BK", "55"]]}, {}, {"id": "A"})
+    assert json.loads(res.body)["rows"] == [al_row]

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ClipboardList, Loader2, Send, Trash2, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ClipboardList, Loader2, Search, Send, Trash2, X } from 'lucide-react'
 import { ApiError } from '../api'
 import { fmtNum } from '../format'
 import {
   stockApi,
   type AllocCond, type AllocRegistered, type AskSeqns, type RtRegistered, type RtWriteSource, type Skipped, type WritePreview,
 } from '../stockApi'
+import { Pager, usePaged } from './stockUi'
 
 // 재고 재배치 추천 > ERP 등록 · 삭제 (관리자). 본사지시 RT 는 지시(미확정)만, 배분은 출고의뢰(미확정)만 넣는다.
 
@@ -45,41 +46,105 @@ function SkippedList({ list, label }: { list: Skipped[]; label: (k: string[]) =>
 }
 
 // ---------------------------------------------------------------- 매장 간 RT → 본사지시 RT 지시
-type RtPlanRow = { fromShopId: string; fromShopNm?: string | null; toShopId: string; toShopNm?: string | null; qty: number }
+type Col<T> = { label: string; num?: boolean; cell: (r: T) => React.ReactNode }
+type Group<T> = { tab: string; head: string; otherHead: string; id: (r: T) => string; name: (r: T) => string | null | undefined; other: (r: T) => string }
 
-/** 지시 전 한눈에: 보내는 매장 · 받는 매장별 건수 · 장수 (많은 순) */
-function RtShopSummary({ rows }: { rows?: RtPlanRow[] }) {
-  const [side, setSide] = useState<'from' | 'to'>('from')
-  if (!rows?.length) return null
-  const m = new Map<string, { id: string; nm: string; rows: number; qty: number; other: Set<string> }>()
-  for (const r of rows) {
-    const id = side === 'from' ? r.fromShopId : r.toShopId
-    const x = m.get(id) ?? { id, nm: (side === 'from' ? r.fromShopNm : r.toShopNm) ?? '', rows: 0, qty: 0, other: new Set<string>() }
-    x.rows += 1
-    x.qty += r.qty
-    x.other.add(side === 'from' ? r.toShopId : r.fromShopId)
-    m.set(id, x)
-  }
-  const list = [...m.values()].sort((a, b) => b.qty - a.qty)
+/** 지시 · 의뢰 전 확인: 대상 내역(검색 · 100행씩) · 매장별 합계 — 무엇이 들어가는지 버튼 누르기 전에 본다 */
+function PreviewDetail<T>({ rows, cols, groups, qtyOf, search, label }: {
+  rows: T[]; cols: Col<T>[]; groups: Group<T>[]; qtyOf: (r: T) => number; search: (r: T) => (string | null | undefined)[]; label: string
+}) {
+  const [tab, setTab] = useState<number>(-1)
+  const [q, setQ] = useState('')
+  const shown = useMemo(() => {
+    const k = q.trim().toUpperCase()
+    return k ? rows.filter((r) => search(r).some((v) => v?.toUpperCase().includes(k))) : rows
+  }, [rows, q]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pg = usePaged(shown)
+  const g = tab >= 0 ? groups[tab] : null
+  const sums = useMemo(() => {
+    if (!g) return []
+    const m = new Map<string, { id: string; nm: string; rows: number; qty: number; other: Set<string> }>()
+    for (const r of shown) {
+      const id = g.id(r)
+      const x = m.get(id) ?? { id, nm: g.name(r) ?? '', rows: 0, qty: 0, other: new Set<string>() }
+      x.rows += 1
+      x.qty += qtyOf(r)
+      x.other.add(g.other(r))
+      m.set(id, x)
+    }
+    return [...m.values()].sort((a, b) => b.qty - a.qty)
+  }, [g, shown]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="stock-reg-shops">
-      <div className="seg">
-        <button className={side === 'from' ? 'on' : ''} onClick={() => setSide('from')}>보내는 매장별</button>
-        <button className={side === 'to' ? 'on' : ''} onClick={() => setSide('to')}>받는 매장별</button>
+    <div className="stock-reg-detail">
+      <div className="stock-reg-detail-bar">
+        <div className="seg" role="tablist" aria-label={`${label} 보기`}>
+          <button className={tab < 0 ? 'on' : ''} onClick={() => setTab(-1)}>{label} 내역 ({fmtNum(rows.length)})</button>
+          {groups.map((x, i) => <button key={x.tab} className={tab === i ? 'on' : ''} onClick={() => setTab(i)}>{x.tab}</button>)}
+        </div>
+        <div className="search sm">
+          <Search size={14} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="품번 · 매장코드 · 매장명" aria-label={`${label} 내역 검색`} />
+          {q && <button className="clear" onClick={() => setQ('')}><X size={13} /></button>}
+        </div>
+        {q && <span className="muted small">{fmtNum(shown.length)}건 · {fmtNum(shown.reduce((a, r) => a + qtyOf(r), 0))}장</span>}
       </div>
       <div className="table-wrap">
-        <table className="table stock-table" aria-label="매장별 지시 요약">
-          <thead><tr><th>{side === 'from' ? '보내는 매장' : '받는 매장'}</th><th className="num">건수</th><th className="num">장수</th><th className="num">{side === 'from' ? '받는 매장 수' : '보내는 매장 수'}</th></tr></thead>
-          <tbody>
-            {list.map((x) => (
-              <tr key={x.id}><td><span className="mono">{x.id}</span> {x.nm}</td><td className="num">{fmtNum(x.rows)}</td><td className="num"><b>{fmtNum(x.qty)}</b></td><td className="num">{fmtNum(x.other.size)}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        {!g ? (
+          <table className="table stock-table" aria-label={`${label} 내역`}>
+            <thead><tr>{cols.map((c) => <th key={c.label} className={c.num ? 'num' : ''}>{c.label}</th>)}</tr></thead>
+            <tbody>
+              {pg.slice.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c.label} className={c.num ? 'num' : ''}>{c.cell(r)}</td>)}</tr>)}
+              {!shown.length && <tr><td colSpan={cols.length} className="empty">{q ? '검색 결과가 없습니다.' : `${label}할 행이 없습니다.`}</td></tr>}
+            </tbody>
+          </table>
+        ) : (
+          <table className="table stock-table" aria-label={`${g.tab} 합계`}>
+            <thead><tr><th>{g.head}</th><th className="num">건수</th><th className="num">장수</th><th className="num">{g.otherHead}</th></tr></thead>
+            <tbody>
+              {sums.map((x) => <tr key={x.id}><td><span className="mono">{x.id}</span> {x.nm}</td><td className="num">{fmtNum(x.rows)}</td><td className="num"><b>{fmtNum(x.qty)}</b></td><td className="num">{fmtNum(x.other.size)}</td></tr>)}
+            </tbody>
+          </table>
+        )}
       </div>
+      {!g && <Pager pg={pg} />}
     </div>
   )
 }
+
+type RtPlanRow = { prdtCd: string; colorCd: string; sizeCd: string; styleNm?: string | null; qty: number; fromShopId: string; fromShopNm?: string | null
+  fromStock?: number; fromSendable?: number; toShopId: string; toShopNm?: string | null; toStock?: number; toSales?: number; why?: string }
+const RT_COLS: Col<RtPlanRow>[] = [
+  { label: '품번 · 칼라 · 사이즈', cell: (r) => <><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span></> },
+  { label: '수량', num: true, cell: (r) => <b>{r.qty}</b> },
+  { label: '보내는 매장', cell: (r) => <><span className="mono">{r.fromShopId}</span> {r.fromShopNm}</> },
+  { label: '보내는 재고', num: true, cell: (r) => <>{r.fromStock ?? '-'}<span className="muted"> / {r.fromSendable ?? '-'}</span></> },
+  { label: '받는 매장', cell: (r) => <><span className="mono">{r.toShopId}</span> {r.toShopNm}</> },
+  { label: '받는 재고', num: true, cell: (r) => r.toStock ?? '-' },
+  { label: '받는 판매', num: true, cell: (r) => r.toSales ?? '-' },
+  { label: '사유', cell: (r) => (r.why ? <span className="tag auto">{r.why}</span> : '-') },
+]
+const RT_GROUPS: Group<RtPlanRow>[] = [
+  { tab: '보내는 매장별', head: '보내는 매장', otherHead: '받는 매장 수', id: (r) => r.fromShopId, name: (r) => r.fromShopNm, other: (r) => r.toShopId },
+  { tab: '받는 매장별', head: '받는 매장', otherHead: '보내는 매장 수', id: (r) => r.toShopId, name: (r) => r.toShopNm, other: (r) => r.fromShopId },
+]
+const rtSearch = (r: RtPlanRow) => [r.prdtCd, r.fromShopId, r.fromShopNm, r.toShopId, r.toShopNm, r.styleNm]
+
+type AllocPlanRow = { prdtCd: string; colorCd: string; sizeCd: string; shopId: string; shopNm?: string | null; rank?: number; stock?: number
+  askFp?: number; askSale?: number; ask: number }
+const ALLOC_COLS: Col<AllocPlanRow>[] = [
+  { label: '품번 · 칼라 · 사이즈', cell: (r) => <><b className="mono">{r.prdtCd}</b> <span className="muted">{r.colorCd} · {r.sizeCd}</span></> },
+  { label: '매장', cell: (r) => <><span className="mono">{r.shopId}</span> {r.shopNm}</> },
+  { label: '순위', num: true, cell: (r) => r.rank ?? '-' },
+  { label: '현재고', num: true, cell: (r) => r.stock ?? '-' },
+  { label: '완불', num: true, cell: (r) => r.askFp || '-' },
+  { label: '판매', num: true, cell: (r) => r.askSale || '-' },
+  { label: '의뢰', num: true, cell: (r) => <b>{r.ask}</b> },
+]
+const ALLOC_GROUPS: Group<AllocPlanRow>[] = [
+  { tab: '매장별', head: '매장', otherHead: '상품 수', id: (r) => r.shopId, name: (r) => r.shopNm, other: (r) => r.prdtCd },
+  { tab: '품번별', head: '품번', otherHead: '매장 수', id: (r) => r.prdtCd, name: () => '', other: (r) => r.shopId },
+]
+const allocSearch = (r: AllocPlanRow) => [r.prdtCd, r.shopId, r.shopNm]
 
 export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
   source: RtWriteSource; keys: string[][]; today: string; onClose: () => void; onDone: (msg: string) => void
@@ -98,7 +163,7 @@ export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
     } catch (e) { setError(errText(e)) } finally { setBusy(false) }
   }
   return (
-    <Modal title="본사지시 RT 지시 등록" icon={<Send size={17} />} onClose={onClose}>
+    <Modal title="본사지시 RT 지시 등록" icon={<Send size={17} />} onClose={onClose} wide>
       <div className="alert info">
         <span>ERP <b>본사지시 RT</b> 를 지시하고 <b>로그인한 사번으로 확정</b>합니다 (T_INDC_RT 1장에 1행 → 매장 이동요청 T_SHOP_REQ <b>매장 미처리</b>).
         매장이 수락 · 거부합니다. 보내는 매장 재고는 지금 기준으로 다시 확인해 모자라면 뺍니다.</span>
@@ -112,7 +177,9 @@ export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
             <div className="pill"><span>받는 매장</span><b>{fmtNum(Number(pv.receivers))}곳</b></div>
             <div className="pill hint-pill">{pv.brandNm} · 추천 {pv.asOf} 기준</div>
           </div>
-          <RtShopSummary rows={pv.rows as RtPlanRow[] | undefined} />
+          {Array.isArray(pv.rows) && (
+            <PreviewDetail rows={pv.rows as RtPlanRow[]} cols={RT_COLS} groups={RT_GROUPS} qtyOf={(r) => r.qty} search={rtSearch} label="지시" />
+          )}
           <SkippedList list={pv.skipped} label={(k) => (k.length === 5 ? `${k[0]} ${k[1]}·${k[2]} ${k[3]}→${k[4]}` : k.join(' '))} />
           <label className="field-label">지시일자
             <input type="date" className="input sm" value={indcDt} min={iso(today)} max={addDaysIso(iso(today), 7)} onChange={(e) => setIndcDt(e.target.value)} />
@@ -158,7 +225,7 @@ export function AllocRegisterModal({ cond, keys, today, onClose, onDone }: {
     } catch (e) { setError(errText(e)) } finally { setBusy(false) }
   }
   return (
-    <Modal title="배분의뢰 등록" icon={<Send size={17} />} onClose={onClose}>
+    <Modal title="배분의뢰 등록" icon={<Send size={17} />} onClose={onClose} wide>
       <div className="alert info">
         <span>ERP <b>출고의뢰</b>(T_DELV_ASK)에 판매분 자동보충과 같은 값(판매분의뢰(자동) · <b>미확정</b>)으로 넣습니다. 의뢰 확정 · 출고지시는 ERP 에서 합니다.
         창고 가용은 지금 기준으로 다시 확인해 모자라면 순위 뒤쪽 매장부터 뺍니다.</span>
@@ -171,6 +238,9 @@ export function AllocRegisterModal({ cond, keys, today, onClose, onDone }: {
             <div className="pill"><span>받는 매장</span><b>{fmtNum(Number(pv.shops))}곳</b></div>
             <div className="pill hint-pill">{pv.brandNm} · 창고 {String(pv.wh)} · 추천 {pv.asOf} 기준</div>
           </div>
+          {Array.isArray(pv.rows) && (
+            <PreviewDetail rows={pv.rows as AllocPlanRow[]} cols={ALLOC_COLS} groups={ALLOC_GROUPS} qtyOf={(r) => r.ask} search={allocSearch} label="의뢰" />
+          )}
           <SkippedList list={pv.skipped} label={(k) => (k.length === 4 ? `${k[0]} ${k[1]} ${k[2]}·${k[3]}` : k.join(' '))} />
           <div className="stock-write-fields">
             <label className="field-label">의뢰일자

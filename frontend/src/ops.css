@@ -510,8 +510,10 @@
 .stock-short-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: rgba(245, 158, 11, 0.5); vertical-align: -1px; }
 .stock-short-note, .stock-done { margin: 10px 12px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .stock-subbar.flat { padding: 0; border-bottom: 0; }
-.stock-reg-shops { display: flex; flex-direction: column; gap: 6px; }
-.stock-reg-shops .table-wrap { max-height: 260px; overflow: auto; }
+.stock-reg-detail { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.stock-reg-detail-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px 0; }
+.stock-reg-detail-bar .search.sm { flex: 0 1 240px; height: 32px; }
+.stock-reg-detail .table-wrap { max-height: min(46vh, 420px); overflow: auto; }
 .stock-selbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .stock-selbar-count { font-size: 12.5px; margin-right: 4px; }
 .stock-selbar-count.on { color: var(--primary); }
