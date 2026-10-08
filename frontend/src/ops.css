@@ -407,12 +407,15 @@
 .rp-shops { display: grid; gap: 8px; flex: 1; min-height: 0; }
 .rp-foot { font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 4px; }
 
+/* 보고서 인쇄: printReport() 가 보고서만 body 바로 아래 #print-host 로 복사 → 앱 화면은 빼고 A4 가로 한 장 */
+#print-host { display: none; }
 @media print {
   @page { size: A4 landscape; margin: 0; }
-  html.printing-report, html.printing-report body { background: #fff !important; overflow: visible !important; }
-  html.printing-report body * { visibility: hidden !important; }
-  html.printing-report .report-page, html.printing-report .report-page * { visibility: visible !important; }
-  html.printing-report .report-page { position: fixed; left: 0; top: 0; width: 297mm; height: 210mm; box-shadow: none; margin: 0;
+  html:has(#print-host), html:has(#print-host) body { background: #fff !important; height: 210mm !important; min-height: 0 !important;
+    overflow: hidden !important; margin: 0 !important; padding: 0 !important; }
+  body:has(> #print-host) > *:not(#print-host) { display: none !important; }
+  #print-host { display: block; width: 297mm; height: 210mm; overflow: hidden; }
+  #print-host .report-page { width: 297mm; height: 210mm; margin: 0; box-shadow: none; overflow: hidden; break-inside: avoid; page-break-inside: avoid;
     -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .view-seg button { display: inline-flex; align-items: center; gap: 4px; }

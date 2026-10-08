@@ -67,7 +67,12 @@ test('판매 현황 한 장 보고서: A4 가로 미리보기 · PDF(인쇄) · 
   await page.addInitScript(() => {
     const w = window as unknown as { __printed: string[] }
     w.__printed = []
-    window.print = () => { w.__printed.push(document.title) }
+    // 인쇄 순간: 제목 · 보고서 복사본(#print-host)이 있는지 기록하고, 인쇄 화면 확인용으로 복사본을 남겨 둔다
+    window.print = () => {
+      const h = document.getElementById('print-host')
+      w.__printed.push(`${document.title}|${h?.querySelectorAll('.report-page').length ?? 0}`)
+      if (h) { const keep = h.cloneNode(true) as HTMLElement; h.id = 'print-host-old'; document.body.appendChild(keep) }
+    }
   })
   await page.goto('/?view=sale_dashboard')
   await page.getByRole('button', { name: '한 장 보고서' }).click()
@@ -81,13 +86,16 @@ test('판매 현황 한 장 보고서: A4 가로 미리보기 · PDF(인쇄) · 
   await shot(page, 'sale-report')
 
   await dlg.getByRole('button', { name: /PDF 저장/ }).click()
-  expect(await page.evaluate(() => (window as unknown as { __printed: string[] }).__printed)).toEqual(['판매현황_보고_2026-08'])
+  expect(await page.evaluate(() => (window as unknown as { __printed: string[] }).__printed)).toEqual(['판매현황_보고_2026-08|1'])
 
-  // 인쇄 화면에는 보고서만
+  // 인쇄 화면에는 보고서만 · A4 가로 1장
   await page.emulateMedia({ media: 'print' })
-  expect(await page.locator('.sidebar').evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden')
-  expect(await page.locator('.report-page').evaluate((el) => getComputedStyle(el).visibility)).toBe('visible')
+  expect(await page.locator('#root').evaluate((el) => getComputedStyle(el).display)).toBe('none')     // 앱 화면은 통째로 빠짐
+  await expect(page.locator('#print-host .report-page')).toBeVisible()
+  const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true })
+  expect((pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1)
   await page.emulateMedia({ media: 'screen' })
+  await page.evaluate(() => document.getElementById('print-host')?.remove())
 
   const dl = page.waitForEvent('download')
   await dlg.getByRole('button', { name: /이미지/ }).click()

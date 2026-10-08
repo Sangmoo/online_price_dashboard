@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { printReport, saveReportPng } from '../reportExport'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FileImage, Loader2, Printer, RefreshCw, Sparkles, X } from 'lucide-react'
@@ -76,24 +77,12 @@ export default function WeeklyBriefingModal({ brand, onClose }: { brand?: string
     }
   }, [])
   const fileBase = `AI주간브리핑_${d?.period.from ?? ''}_${d?.period.to ?? ''}`
-  const printPdf = () => {
-    const prev = document.title
-    document.title = fileBase
-    window.print()
-    document.title = prev
-  }
+  const printPdf = () => pageRef.current && printReport(pageRef.current, fileBase)   // 'PDF로 저장' 기본 파일 이름
   const savePng = async () => {
     if (!pageRef.current) return
     setBusy(true)
     try {
-      const { toPng } = await import('html-to-image')
-      const url = await toPng(pageRef.current, { pixelRatio: 2, backgroundColor: '#ffffff', skipFonts: true, cacheBust: true })
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${fileBase}.png`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      await saveReportPng(pageRef.current, fileBase)
     } catch (e) {
       setError(`이미지를 만들지 못했습니다: ${(e as Error).message}`)
     } finally {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { printReport, saveReportPng } from '../reportExport'
 import { Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, XAxis, YAxis } from 'recharts'
 import { FileImage, FileText, Loader2, Printer, X } from 'lucide-react'
 import type { Dash, Shop } from './SaleDashboardView'
@@ -85,25 +86,13 @@ export default function SaleReportModal({ data, userName, onClose }: { data: Das
     }
   }, [])
 
-  const printPdf = () => {
-    const prev = document.title
-    document.title = fileBase   // 'PDF로 저장' 기본 파일 이름
-    window.print()
-    document.title = prev
-  }
+  const printPdf = () => pageRef.current && printReport(pageRef.current, fileBase)   // 'PDF로 저장' 기본 파일 이름
   const savePng = async () => {
     if (!pageRef.current) return
     setBusy(true)
     setError(null)
     try {
-      const { toPng } = await import('html-to-image')
-      const url = await toPng(pageRef.current, { pixelRatio: 2, backgroundColor: '#ffffff', skipFonts: true, cacheBust: true })
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${fileBase}.png`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      await saveReportPng(pageRef.current, fileBase)
     } catch (e) {
       setError(`이미지를 만들지 못했습니다: ${(e as Error).message}`)
     } finally {
