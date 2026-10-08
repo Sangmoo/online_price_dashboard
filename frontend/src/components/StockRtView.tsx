@@ -13,6 +13,7 @@ import { consumeStockOpen, useStockOpen, type StockOpenRequest } from '../stockN
 import { Pager, SelectAllFiltered, usePaged } from './stockUi'
 import { AgingTab, PendingTab, ReturnTab } from './StockMoreTabs'
 import { InitialTab, TurnoverTab } from './StockAnalysisTabs'
+import { BriefingButton } from './WeeklyBriefing'
 
 type Tab = 'rt' | 'alloc' | 'return' | 'pending' | 'aging' | 'turnover' | 'initial'
 const iso = (d8: string) => `${d8.slice(0, 4)}-${d8.slice(4, 6)}-${d8.slice(6, 8)}`
@@ -129,6 +130,7 @@ export default function StockRtView({ onContextChange }: { onContextChange?: (ct
             <button key={b.code} className={`chip ${brand === b.code ? 'active' : ''}`} onClick={() => setBrand(b.code)}>{b.name}</button>
           ))}
         </div>
+        <BriefingButton brand={brand || undefined} className="btn ghost sm" />
         <span className="pill hint-pill"><Info size={13} /> {opts?.canWrite
           ? '관리자: 고른 추천을 ERP 본사지시 RT 지시 · 확정(로그인 사번) · 배분의뢰(미확정)로 등록할 수 있습니다'
           : '조회 · 추천만 합니다 — ERP 에 RT · 배분의뢰가 등록되지 않습니다'}</span>

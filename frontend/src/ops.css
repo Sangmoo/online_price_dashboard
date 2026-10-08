@@ -416,6 +416,23 @@
     -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .view-seg button { display: inline-flex; align-items: center; gap: 4px; }
+/* AI 주간 브리핑 (A4 가로 한 장, 흰 바탕) */
+.brief-page { display: flex; flex-direction: column; gap: 10px; }
+.brief-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; }
+.brief-ai { font-size: 12.5px; line-height: 1.6; overflow: hidden; }
+.brief-ai h3 { font-size: 13.5px; margin: 8px 0 3px; color: #4f46e5; }
+.brief-ai h3:first-child { margin-top: 0; }
+.brief-ai ul, .brief-ai ol { margin: 0; padding-left: 18px; }
+.brief-ai li { margin: 1px 0; }
+.brief-ai p { margin: 2px 0; }
+.brief-blocked { padding: 10px 12px; background: #fff7ed; color: #9a3412; border-radius: 6px; font-size: 12.5px; }
+.brief-nums { display: flex; flex-direction: column; gap: 8px; min-width: 0; overflow: hidden; }
+.brief-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; font-size: 11px; }
+.brief-li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brief-li b { float: right; font-weight: 700; }
+.brief-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; height: 92px; align-items: end; }
+.brief-day { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; font-size: 10px; gap: 2px; }
+.brief-bar { width: 70%; min-height: 2px; background: #4f46e5; border-radius: 3px 3px 0 0; }
 
 /* ---------------------------------------------------------------- 재고 재배치 추천 (매장 간 RT · 창고 → 매장 배분) */
 .stock-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }

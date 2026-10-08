@@ -11,6 +11,7 @@ import SaleHeavyShopsPanel from './SaleHeavyShopsPanel'
 import ProductInsightModal from './ProductInsightModal'
 import { HelpTip } from '../help/HelpTip'
 import SaleReportModal from './SaleReportModal'
+import { BriefingButton } from './WeeklyBriefing'
 
 export type Kpi = {
   amt: number
@@ -242,6 +243,7 @@ export default function SaleDashboardView({ onContextChange, canOnline = false }
               title={dirty ? '바꾼 조건을 먼저 [조회]하세요' : '지금 조회한 조건으로 핵심 카드 · 추이 · 브랜드 · 매장 순위를 A4 한 장(PDF · 이미지)으로'}>
               <FileText size={15} /> 한 장 보고서
             </button>
+            <BriefingButton />
             <button className="icon-btn bordered" title="새로고침" onClick={() => load(applied)} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : ''} /></button>
           </div>
         </div>

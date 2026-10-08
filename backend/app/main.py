@@ -1506,6 +1506,14 @@ def stock_initial_export(args: dict = Depends(_init_args), me: dict = Depends(st
     return _xlsx_response(content, f"초도배분적중률_{d['brandNm']}_{d['to']}.xlsx")
 
 
+@app.get("/api/briefing/weekly")
+def weekly_briefing(request: Request, brand: str | None = None, refresh: bool = False, me: dict = Depends(current_user)):
+    """AI 주간 브리핑 (지난주 월~일): 판매 · RT 성과 · 미처리 RT · 창고 부족 · 재고 회전 · 장기 재고 · 초도 적중률 + AI 요약 (1시간 캐시)"""
+    from . import briefing
+
+    return _json_gz(request, briefing.weekly(me, brand, refresh))
+
+
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")
 
 
