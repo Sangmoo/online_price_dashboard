@@ -283,6 +283,31 @@ test('판매 현황에서 매장을 누르면 매장 정보·담당 영업직원
   await expect(modal).not.toContainText('현재 매니저') // 실사계획 권한이 없으면 실사·매니저 정보 없음
 })
 
+test('매장 정보 팝업의 매장 평가 카드: 판매 추세 · 재고 회전 · RT 응답 · 초도 판매율을 브랜드 평균과 비교', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['sale_dashboard', 'stock_rt']))
+  api.on('GET', '/api/sale-dashboard/shops/S41001/trend', () => ({ json: { shopId: 'S41001', shopNm: '테스트매장1', from: '202510', to: '202609', months: [],
+    total: { qty: 0, amt: 0, prevQty: 0, prevAmt: 0, growth: null } } }))
+  api.on('GET', '/api/shops/S41001/profile', () => ({ json: { shop: { shopId: 'S41001', shopNm: '테스트매장1', status: '정상', teamNm: '쉬즈4팀', repId: null,
+    repNm: null, openDt: null, closeDt: null, brands: [], addr: null, tel: null, found: true } } }))
+  api.on('GET', '/api/shops/S41001/scorecard', () => ({ json: {
+    shopId: 'S41001', shopNm: '테스트매장1', brand: 'S', brandNm: '쉬즈미스', virtual: false, asOf: '2026-10-08 09:30', errors: [],
+    summary: { good: 1, ok: 1, bad: 2 },
+    sales: { from: '2026-09-10', to: '2026-10-07', curAmt: 91_281_900, curQty: 1054, prevQty: 1450, vsPrev: -18.5, vsLy: -56.4, brandVsPrev: 34.4, brandVsLy: -3.3, grade: 'bad', note: 'n' },
+    stock: { stock: 4671, amt: 1, sales28: 1054, cover: 124.1, sellThru: 18.4, agedQty: 775, agedRate: 16.6, brandCover: 171.7, brandAgedRate: 20, grade: 'good', note: 'n' },
+    rt: { requests: 675, accepted: 410, denied: 1, autoDenied: 259, pending: 5, acceptRate: 61.2, avgHours: 2.6, brandAcceptRate: 57.7, brandAvgHours: 7.8, grade: 'bad', note: 'n' },
+    initial: { period: '2026-08-12 ~ 2026-09-10', window: 28, alloc: 663, sold: 67, sellThru: 10.1, products: 221, zero: 180, soldOut: 13, brandSellThru: 15.1, brandOverlap: 21.9, grade: 'ok', note: 'n' },
+  } }))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: '테스트매장1' }).click()
+  const card = page.getByLabel('매장 평가 카드')
+  await expect(card).toContainText('주의 2')
+  await expect(card.locator('.sc-tile.bad').first()).toContainText('전 4주 대비 -18.5%')
+  await expect(card).toContainText('브랜드 전 4주 대비 +34.4%')
+  await expect(card).toContainText('재고일수 124일')
+  await expect(card).toContainText('자동거부 259')
+  await expect(card).toContainText('초도 판매율 (28일)')
+})
+
 test('판매 현황에 할인율을 보여준다', async ({ page, mockApi }) => {
   await mockApi(makeUser('USER'))
   await page.goto('/?view=sale_dashboard')

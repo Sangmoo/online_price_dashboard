@@ -154,6 +154,8 @@ export class MockApi {
     this.on('GET', '/api/sale-dashboard/products', () => ({ json: productsData }))
     this.on('GET', '/api/sale-dashboard/season', () => ({ json: seasonData }))
     this.on('GET', '/api/sale-dashboard/online-alerts', () => ({ json: alertsData }))
+    // 매장 정보 팝업의 매장 평가 카드: 기본은 '권한 없음'(카드 숨김) — 카드를 시험하는 테스트에서 다시 등록
+    this.on('GET', /^\/api\/shops\/[^/]+\/scorecard$/, () => ({ status: 403, json: { detail: { message: '권한 없음', code: 'FORBIDDEN' } } }))
     this.on('GET', '/api/feedback/mine', () => ({ json: { rows: [] } }))
     this.on('GET', '/api/feedback/badge', () => ({ json: { newAnswers: 0, open: null } }))
     this.on('GET', '/api/sale-dashboard/sale-heavy-shops', () => ({ json: heavyData }))

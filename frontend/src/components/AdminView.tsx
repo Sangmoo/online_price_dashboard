@@ -734,6 +734,8 @@ function UsageTab() {
   }, [days])
   const t = data?.total
   const tick = { fill: '#8b93a7', fontSize: 12 }
+  const brief = data?.byKind?.find((k) => k.kind === 'briefing')
+  const daily = (data?.daily ?? []).map((d) => ({ ...d, chatCost: Math.max(Number(d.cost) - Number(d.briefing_cost ?? 0), 0), briefCost: Number(d.briefing_cost ?? 0) }))
   return (
     <div className="stack">
       <section className="card toolbar">
@@ -746,25 +748,46 @@ function UsageTab() {
       </section>
       <section className="kpi-grid four">
         <MiniKpi label="질문 수" value={t ? `${fmtNum(t.questions)}회` : '-'} />
-        <MiniKpi label="사용 비용" value={t ? `$${Number(t.cost).toFixed(2)}` : '-'} />
+        <MiniKpi label="사용 비용" value={t ? `$${Number(t.cost).toFixed(2)}${brief && brief.cost ? ` (브리핑 $${Number(brief.cost).toFixed(2)})` : ''}` : '-'} />
         <MiniKpi label="토큰 (입력/출력)" value={t ? `${fmtNum(t.input_tokens)} / ${fmtNum(t.output_tokens)}` : '-'} />
         <MiniKpi label="사용자 수" value={t ? `${fmtNum(t.users)}명` : '-'} />
       </section>
       <AiToolStatsCard days={days} />
       <section className="card panel">
-        <div className="panel-head"><h3>일자별 사용량</h3><span className="panel-hint">막대: 비용($) · 선: 질문 수</span></div>
+        <div className="panel-head"><h3>일자별 사용량</h3><span className="panel-hint">막대: 비용($, AI 대화 · 주간 브리핑) · 선: 질문 수(브리핑 포함)</span></div>
         <ResponsiveContainer width="100%" height={260}>
-          <ComposedChart data={data?.daily ?? []} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <ComposedChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="rgba(148,163,184,.18)" vertical={false} />
             <XAxis dataKey="day" tick={tick} tickLine={false} axisLine={false} tickFormatter={(d) => String(d).slice(5)} />
             <YAxis yAxisId="l" tick={tick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={48} />
             <YAxis yAxisId="r" orientation="right" tick={tick} tickLine={false} axisLine={false} width={36} allowDecimals={false} />
             <Tooltip />
-            <Bar yAxisId="l" dataKey="cost" name="비용($)" fill="var(--primary-2)" radius={[5, 5, 0, 0]} maxBarSize={28} />
+            <Bar yAxisId="l" dataKey="chatCost" stackId="c" name="AI 대화 비용($)" fill="var(--primary-2)" maxBarSize={28} />
+            <Bar yAxisId="l" dataKey="briefCost" stackId="c" name="주간 브리핑 비용($)" fill="#14b8a6" radius={[5, 5, 0, 0]} maxBarSize={28} />
             <Line yAxisId="r" dataKey="questions" name="질문 수" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 3 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </section>
+      {(data?.byKind ?? []).length > 0 && (
+        <section className="card panel">
+          <div className="panel-head"><h3>용도별 사용량</h3><span className="panel-hint">AI 대화(대화창) · AI 주간 브리핑(판매 현황 · 재고 재배치 추천의 버튼) — 질문 수는 사용자 일일 질문 한도에 함께 들어갑니다</span></div>
+          <table className="table sd-table" aria-label="용도별 사용량">
+            <thead><tr><th>용도</th><th className="num">질문 · 브리핑</th><th className="num">API 호출</th><th className="num">사용자</th><th className="num">입력 토큰</th><th className="num">출력 토큰</th><th className="num">비용($)</th><th className="num">회당 비용($)</th><th className="num">비중</th></tr></thead>
+            <tbody>
+              {(data?.byKind ?? []).map((k) => (
+                <tr key={k.kind}>
+                  <td className="strong">{k.name}</td>
+                  <td className="num">{fmtNum(k.questions)}</td><td className="num">{fmtNum(k.calls)}</td><td className="num">{fmtNum(k.users)}</td>
+                  <td className="num">{fmtNum(k.input_tokens)}</td><td className="num">{fmtNum(k.output_tokens)}</td>
+                  <td className="num strong">${Number(k.cost).toFixed(4)}</td>
+                  <td className="num">{k.questions ? `$${(Number(k.cost) / k.questions).toFixed(4)}` : '-'}</td>
+                  <td className="num">{t && Number(t.cost) ? `${Math.round((Number(k.cost) / Number(t.cost)) * 1000) / 10}%` : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
       {(data?.byModel ?? []).length > 0 && (
         <section className="card panel">
           <div className="panel-head"><h3>모델별 사용량</h3><span className="panel-hint">모델 자동 선택 효과 확인용 · API 호출 기준</span></div>
@@ -793,6 +816,7 @@ function UsageTab() {
               <tr>
                 <th>사용자</th>
                 <th className="num">질문 수</th>
+                <th className="num" title="질문 수 중 AI 주간 브리핑">브리핑</th>
                 <th className="num">API 호출</th>
                 <th className="num">입력 토큰</th>
                 <th className="num">출력 토큰</th>
@@ -805,6 +829,7 @@ function UsageTab() {
                 <tr key={u.usr_id}>
                   <td><span className="strong">{u.usr_nm ?? '-'}</span> <span className="muted mono">{u.usr_id}</span></td>
                   <td className="num">{fmtNum(u.questions)}</td>
+                  <td className="num">{u.briefings ? `${fmtNum(u.briefings)} ($${Number(u.briefing_cost ?? 0).toFixed(2)})` : '-'}</td>
                   <td className="num">{fmtNum(u.calls)}</td>
                   <td className="num">{fmtNum(u.input_tokens)}</td>
                   <td className="num">{fmtNum(u.output_tokens)}</td>
@@ -813,7 +838,7 @@ function UsageTab() {
                 </tr>
               ))}
               {data && data.byUser.length === 0 && (
-                <tr><td colSpan={7} className="empty">사용 기록이 없습니다.</td></tr>
+                <tr><td colSpan={8} className="empty">사용 기록이 없습니다.</td></tr>
               )}
             </tbody>
           </table>

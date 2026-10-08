@@ -216,9 +216,29 @@ test('초도 배분 적중률: 적중률 · 판매율 · 상품 누르면 매장
   await t.getByRole('row').nth(1).click()
   const dlg = page.getByRole('dialog', { name: '초도 배분 매장별' })
   await expect(dlg.getByRole('row').nth(1)).toHaveClass(/row-short/)                        // 판매 비중 ≫ 배분 비중 = 더 받았어야
-  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/initial/shops')[0].query)).toMatchObject({ prdtCd: 'SWWJKQ31020', colorCd: 'BK', window: '14' })
+  expect(Object.fromEntries(api.find('GET', '/api/stock-rt/initial/shops')[0].query)).toMatchObject({ prdtCd: 'SWWJKQ31020', colorCd: 'BK', window: '28' })
   await dlg.getByTitle('닫기').click()
-  await page.getByRole('button', { name: '28일 판매' }).click()
+  await expect(page.locator('.stock-window-note')).toContainText('28일을 기본')                // 기본 28일 · 이유 표시
+  await page.getByRole('button', { name: '14일 판매' }).click()
   await page.getByRole('button', { name: /조회 \*/ }).click()
-  await expect.poll(() => api.find('GET', '/api/stock-rt/initial').map((r) => r.query.get('window'))).toEqual(['14', '28'])
+  await expect.poll(() => api.find('GET', '/api/stock-rt/initial').map((r) => r.query.get('window'))).toEqual(['28', '14'])
+})
+
+test('AI 사용 현황: 용도별(AI 대화 · AI 주간 브리핑) 사용량', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/usage', () => ({ json: { since: '2026-09-08', days: 30, total: { questions: 12, cost: 3.5, input_tokens: 900000, output_tokens: 30000, users: 3 },
+    daily: [{ day: '2026-10-08', questions: 5, calls: 8, input_tokens: 1, output_tokens: 1, cost: 1.2, users: 2, briefings: 2, briefing_cost: 0.4 }],
+    byUser: [{ usr_id: '260029', usr_nm: '김영업', questions: 7, calls: 9, input_tokens: 1, output_tokens: 1, cost: 2.0, last_used: '2026-10-08 09:00', briefings: 2, briefing_cost: 0.4 }],
+    byModel: [], byKind: [
+      { kind: 'chat', name: 'AI 대화', questions: 10, calls: 20, input_tokens: 800000, output_tokens: 25000, cost: 3.1, users: 3 },
+      { kind: 'briefing', name: 'AI 주간 브리핑', questions: 2, calls: 2, input_tokens: 100000, output_tokens: 5000, cost: 0.4, users: 1 }] } }))
+  api.on('GET', '/api/admin/users', () => ({ json: { users: [], pages: [], superAdminId: '', brandOptions: [], brandReady: false } }))
+  api.on('GET', '/api/admin/ai-tool-stats', () => ({ json: { days: 30, since: '2026-09-08', keepDays: 7, questions: 0, models: {}, routes: {}, modelSwitches: 0, tools: [], unusedTools: [] } }))
+  await page.goto('/?view=sale_dashboard')
+  await page.locator('.side-nav').getByText('관리자').click()
+  await page.locator('.admin-tabs').getByRole('button', { name: 'AI 사용 현황' }).click()
+  const t = page.getByRole('table', { name: '용도별 사용량' })
+  await expect(t).toContainText('AI 주간 브리핑')
+  await expect(t.getByRole('row').nth(2)).toContainText('$0.2000')            // 회당 비용
+  await expect(t.getByRole('row').nth(2)).toContainText('11.4%')               // 비용 비중
 })

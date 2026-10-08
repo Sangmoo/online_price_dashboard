@@ -1473,7 +1473,7 @@ def stock_turnover_export(args: dict = Depends(_turn_args), me: dict = Depends(s
     return _xlsx_response(content, f"재고회전_{d['brandNm']}_{d['days']}일.xlsx")
 
 
-def _init_args(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, window: int = 14,  # noqa: N803
+def _init_args(brand: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, window: int = 28,  # noqa: N803
                planYy: str | None = None, seasons: str | None = None, includeVirtual: bool = False, maturedOnly: bool = True) -> dict:  # noqa: N803
     return {"brand": brand, "frm": dateFrom, "to": dateTo, "window": window, "plan_yy": planYy, "seasons": seasons,
             "include_virtual": includeVirtual, "matured_only": maturedOnly}
@@ -1512,6 +1512,14 @@ def weekly_briefing(request: Request, brand: str | None = None, refresh: bool = 
     from . import briefing
 
     return _json_gz(request, briefing.weekly(me, brand, refresh))
+
+
+@app.get("/api/shops/{shop_id}/scorecard")
+def shop_scorecard_api(shop_id: str, me: dict = Depends(current_user)):
+    """매장 평가 카드 (매장 정보 팝업): 판매 추세 · 재고 회전 · RT 응답 · 초도 판매율 vs 브랜드 평균"""
+    from . import shop_scorecard
+
+    return shop_scorecard.scorecard(shop_id, me)
 
 
 SHOP_PROFILE_PAGES = ("sale_dashboard", "sale_monthly", "invt_plan")

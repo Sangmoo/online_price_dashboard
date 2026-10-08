@@ -302,7 +302,7 @@ TOOLS += [
     {
         "name": "get_initial_alloc_accuracy",
         "description": (
-            "초도 배분 적중률: 신상품 초도 배분(ERP 초도배분 · 확정)이 매장 판매와 얼마나 맞았는지 — 상품(품번 · 칼라) × 매장의 배분 대비 출고예정일부터 N일(기본 14) 판매. "
+            "초도 배분 적중률: 신상품 초도 배분(ERP 초도배분 · 확정)이 매장 판매와 얼마나 맞았는지 — 상품(품번 · 칼라) × 매장의 배분 대비 출고예정일부터 N일(기본 28 — 시즌 초 상품은 14일 판매가 적어 28일을 기본으로) 판매. "
             "판매율 = 판매 ÷ 배분, 무판매 매장, 소진 매장(판매 ≥ 배분), 적중률 = Σ 매장 min(배분 비중, 판매 비중)×100 (판매 10장 미만 상품은 판단 보류). "
             "기본 기간은 N일이 다 지난 최근 30일 초도 배분. '초도 배분 잘 됐어?', '초도 적중률 낮은 상품', '초도 받고 안 팔린 매장' 같은 질문에 씁니다. "
             "view=summary · products · shops · types(유통형태별)."
@@ -820,7 +820,7 @@ def _initial(inp: dict, allowed: list[str] | None) -> dict:
     if view not in ("summary", "products", "shops", "types"):
         raise StockToolError("view 는 summary, products, shops, types 중 하나입니다.")
     limit = _int(inp, "limit", 30, 1, 200)
-    d = si.analyze(_str(inp, "brand"), _str(inp, "date_from"), _str(inp, "date_to"), inp.get("window") or 14, _list(inp, "plan_yy"),
+    d = si.analyze(_str(inp, "brand"), _str(inp, "date_from"), _str(inp, "date_to"), inp.get("window") or 28, _list(inp, "plan_yy"),
                    _seasons(_list(inp, "seasons")), False, True, allowed)
     result: dict[str, Any] = {"brand": d["brandNm"], "allocPeriod": f"{d['from']} ~ {d['to']}", "salesWindowDays": d["window"], **d["summary"],
                               "types": d["types"], "immatureExcluded": d["immature"],

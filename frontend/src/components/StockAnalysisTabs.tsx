@@ -246,7 +246,7 @@ export function TurnoverTab({ opts }: { opts: StockOptions }) {
 
 // ---------------------------------------------------------------- 초도 배분 적중률
 export function InitialTab({ opts }: { opts: StockOptions }) {
-  const init: InitCond = { brand: opts.brand, dateFrom: '', dateTo: '', window: 14, planYy: [], seasons: [], includeVirtual: false, maturedOnly: true }
+  const init: InitCond = { brand: opts.brand, dateFrom: '', dateTo: '', window: 28, planYy: [], seasons: [], includeVirtual: false, maturedOnly: true }
   const [cond, setCond] = useState<InitCond>(init)
   const r = useRun<InitCond, InitReport>((c, refresh, signal) => stockApi.initial(c, refresh, signal))
   const [view, setView] = useState<'products' | 'shops' | 'types'>('products')
@@ -280,7 +280,7 @@ export function InitialTab({ opts }: { opts: StockOptions }) {
             <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setCond({ ...cond, dateTo: e.target.value, dateFrom: dateFrom })} aria-label="초도 배분 끝" />
           </div>
           <div className="seg" role="group" aria-label="판매 확인 기간">
-            {[7, 14, 28].map((n) => <button key={n} className={cond.window === n ? 'on' : ''} onClick={() => setCond({ ...cond, window: n })}>{n}일 판매</button>)}
+            {[7, 14, 28].map((n) => <button key={n} className={cond.window === n ? 'on' : ''} onClick={() => setCond({ ...cond, window: n })}>{n}일 판매{n === 28 ? ' (기본)' : ''}</button>)}
           </div>
           <div className="toolbar-actions">
             <button className="btn primary" onClick={() => r.run(cond)} disabled={r.loading}>{r.loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 조회{dirty ? ' *' : ''}</button>
@@ -311,6 +311,8 @@ export function InitialTab({ opts }: { opts: StockOptions }) {
             <div className="pill hint-pill">{d.brandNm} · 초도 배분 {d.from} ~ {d.to} · {fmtNum(s.products)}개 상품 · {fmtNum(s.shops)}개 매장 · {d.asOf} 기준
               {d.maturedOnly && d.immature ? ` · 진행 중 ${fmtNum(d.immature)}건 제외` : ''}</div>
           </section>
+          <div className="alert info stock-window-note"><Info size={14} /> <span>판매 확인 기간 <b>{d.window}일</b>{d.window === 28 ? ' (기본)' : ''} — 출고예정일부터 {d.window}일 판매로 봅니다.
+            시즌 초 상품은 14일 판매가 적어 판매율 · 적중률이 낮게 나오므로 <b>28일을 기본</b>으로 합니다. 판매 기간이 다 지난 초도 배분({d.from} ~ {d.to})만 보며, 더 최근 배분을 보려면 7 · 14일을 고르세요.</span></div>
           <div className="alert info"><Info size={14} /> <span><b>적중률</b> = 매장별 (배분 비중, 판매 비중) 중 작은 값의 합 — 판매가 많이 난 매장에 그만큼 배분했으면 100%. 판매율은 시즌 초 · 날씨 영향을 받으니 적중률과 함께 보세요. 상품을 누르면 매장별 배분 · 판매 비중.</span></div>
           <section className="card grid-card">
             <div className="stock-subbar">

@@ -66,3 +66,15 @@ def test_ai_blocked_returns_numbers_only(monkeypatch):
     monkeypatch.setattr(usage, "check_can_ask", lambda me: "오늘 질문 한도(10회)를 모두 사용했습니다.")
     out = briefing._ai({"id": "U1"}, {"period": {}})
     assert out["text"] is None and "한도" in out["blocked"]
+
+
+def test_scorecard_rt_sum_and_usage_kinds():
+    from app import shop_scorecard as sc_, usage
+
+    rows = [("C2951", "S1", " ", 8, 16.0, 8), ("C2952", "S1", "재고없음", 2, 10.0, 2), ("C2952", "ADMIN", "(자동거부) ", 3, 216.0, 3),
+            ("C2954", None, " ", 1, None, 0)]
+    r = sc_._rt_sum(rows)
+    assert (r["accepted"], r["denied"], r["autoDenied"], r["pending"], r["requests"]) == (8, 2, 3, 1, 14)
+    assert r["acceptRate"] == round(8 / 13 * 100, 1) and r["avgHours"] == round(26 / 10, 1)        # 자동거부 시간은 처리 시간에서 뺀다
+    k = usage._kinds([{"kind": "briefing", "questions": 2, "calls": 2, "input_tokens": 5, "output_tokens": 1, "cost": 0.4, "users": 1}])
+    assert [x["kind"] for x in k] == ["chat", "briefing"] and k[0]["cost"] == 0 and k[1]["name"] == "AI 주간 브리핑"

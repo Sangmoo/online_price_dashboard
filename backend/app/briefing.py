@@ -135,7 +135,7 @@ def _stock(b: str, start: date, end: date, allowed) -> tuple[dict, list[str]]:
         return {k: s[k] for k in ("qty", "agedQty", "agedAmt", "agedRate", "agedShops")}
 
     def initial():
-        d = stock_initial.analyze(b, window=14, allowed=allowed)
+        d = stock_initial.analyze(b, window=28, allowed=allowed)
         return {**{k: d["summary"][k] for k in ("alloc", "sold", "sellThru", "overlap", "lowOverlap", "products")},
                 "period": f"{d['from']} ~ {d['to']}"}
 
@@ -202,7 +202,7 @@ def weekly(me: dict, brand: str | None = None, refresh: bool = False, today: dat
             errors += errs
     ai = _ai(me, {**data, "note": "rt=지난주 본사지시 RT(행사 · 가상 매장 제외), pending=지금 매장 미처리 RT(최근 7일 요청), "
                                   "short=어제 판매분 창고 배분 시 창고 부족, turnover=최근 28일 재고일수, aging=90일 넘게 안 팔린 매장 재고, "
-                                  "initial=판매 14일이 지난 최근 30일 초도 배분 적중률",
+                                  "initial=판매 28일이 지난 최근 30일 초도 배분 적중률",
                                   "terms": "용어는 화면과 같게: sellThru=판매율, overlap=적중률(배분 비중과 판매 비중이 겹친 정도), cover=재고일수, "
                                            "acceptRate=수락률, soldRate=RT 후 7일 판매 전환율, agedRate=장기 미판매 비중, urgent=자동거부 임박, "
                                            "shortRows=품절 위험(매장 × 스타일), overRows=과다(매장 × 스타일)"})

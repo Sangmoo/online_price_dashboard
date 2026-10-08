@@ -471,9 +471,11 @@ export type AdminUsage = {
   since: string
   days: number
   total: { questions: number; cost: number; input_tokens: number; output_tokens: number; users: number }
-  daily: (UsageRow & { day: string; users: number })[]
-  byUser: (UsageRow & { usr_id: string; usr_nm: string | null; last_used: string })[]
+  daily: (UsageRow & { day: string; users: number; briefings?: number; briefing_cost?: number })[]
+  byUser: (UsageRow & { usr_id: string; usr_nm: string | null; last_used: string; briefings?: number; briefing_cost?: number })[]
   byModel?: { model: string | null; calls: number; cost: number; input_tokens: number; output_tokens: number }[]
+  /** 용도별 (AI 대화 · AI 주간 브리핑) */
+  byKind?: (UsageRow & { kind: 'chat' | 'briefing'; name: string; users: number })[]
 }
 export type LoginLog = { id: number; usr_id: string; usr_nm: string | null; ts: string; success: number; reason: string; ip: string | null }
 export type LockInfo = { usr_id: string; fail_count: number; locked_until: number; locked: boolean; remainSec: number }

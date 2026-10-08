@@ -1,7 +1,7 @@
 """재고 재배치 추천 > 초도 배분 적중률: 신상품 초도 배분(T_DELV_ASK 초도배분 C0631 · 확정)이 매장 판매 반응과 얼마나 맞았는지.
 
 - 단위 = 상품(품번 · 칼라) × 매장, 배분 = 확정된 초도 배분 수량(사이즈 합), 시작일 = 출고예정일(없으면 의뢰일)
-- 판매 = 시작일부터 N일(기본 14) 순판매 (T_SHOP_RNDS_BASE, 반품 차감, 0 미만은 0)
+- 판매 = 시작일부터 N일(기본 28 — 시즌 초 상품은 14일 판매가 적어 적중률이 낮게 나와 28일을 기본으로) 순판매 (T_SHOP_RNDS_BASE, 반품 차감, 0 미만은 0)
 - 판매율 = 판매 ÷ 배분, 무판매 매장 = 판매 0, 소진 매장 = 판매 ≥ 배분(더 받았어야)
 - 적중률 = Σ 매장 min(배분 비중, 판매 비중) × 100 — 배분을 매장별로 나눈 모양이 실제 판매 모양과 겹치는 정도 (100 = 판매 비중대로 배분)
 - 기본은 N일이 다 지난 배분만 (진행 중인 건은 판매가 덜 쌓여 낮게 나옴). 기간 판매가 10장 미만인 상품은 적중률을 매기지 않는다
@@ -41,13 +41,13 @@ def _range(frm: str | None, to: str | None, window: int) -> tuple[str, str]:
     return f, t
 
 
-def analyze(brand: str | None = None, frm: str | None = None, to: str | None = None, window: int = 14, plan_yy=None, seasons=None,
+def analyze(brand: str | None = None, frm: str | None = None, to: str | None = None, window: int = 28, plan_yy=None, seasons=None,
             include_virtual: bool = False, matured_only: bool = True, allowed: list[str] | None = None, refresh: bool = False) -> dict:
     b = sc.brand_code(brand, allowed)
     try:
         window = int(window)
     except (TypeError, ValueError):
-        window = 14
+        window = 28
     if window not in WINDOWS:
         sc.bad("판매 확인 기간은 7 · 14 · 28일 중 하나입니다.")
     f, t = _range(frm, to, window)
@@ -169,7 +169,7 @@ def product_shops(brand: str | None, frm: str | None, to: str | None, window: in
                   allowed: list[str] | None = None) -> list[dict]:
     """한 상품(품번 · 칼라)의 매장별 배분 · 판매 (적중률 팝업)"""
     b = sc.brand_code(brand, allowed)
-    window = int(window) if str(window).isdigit() and int(window) in WINDOWS else 14
+    window = int(window) if str(window).isdigit() and int(window) in WINDOWS else 28
     f, t = _range(frm, to, window)
     base = sc.cached(("initial", b, f, t, window), CACHE_TTL, lambda: _load(b, f, t, window))
     shops = sc.shops()

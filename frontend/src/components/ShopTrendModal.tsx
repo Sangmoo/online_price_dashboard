@@ -3,6 +3,7 @@ import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, T
 import { ClipboardList, Loader2, PieChart, Store, UserRound, X } from 'lucide-react'
 import { apiFetch } from '../api'
 import { fmtNum } from '../format'
+import ShopScorecard from './ShopScorecard'
 
 type Month = { ym: string; qty: number; amt: number; prevQty: number; prevAmt: number; growth: number | null }
 type Trend = {
@@ -113,6 +114,7 @@ export default function ShopTrendModal({ url, shopId, ctx, title, onClose }: {
           </div>
         )}
         {s && !s.found && <div className="muted small">매장 마스터(T_SHOP_BRD)에 이 매장 정보가 없습니다.</div>}
+        {shopId && ctx !== 'invt' && <ShopScorecard shopId={shopId} />}
         {profileError && <div className="muted small">매장 정보: {profileError}</div>}
 
         {error && <div className="alert error">{error}</div>}

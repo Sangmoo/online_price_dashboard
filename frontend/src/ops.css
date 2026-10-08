@@ -416,6 +416,28 @@
     -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .view-seg button { display: inline-flex; align-items: center; gap: 4px; }
+/* 매장 평가 카드 (매장 정보 팝업) */
+.sc-block { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+.sc-loading { flex-direction: row; align-items: center; color: var(--muted); font-size: 12.5px; }
+.sc-title { display: flex; align-items: center; gap: 6px; font-weight: 700; flex-wrap: wrap; }
+.sc-sum { margin-left: auto; display: inline-flex; gap: 4px; }
+.sc-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.sc-tile { border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-tile.good { border-left-color: #10b981; }
+.sc-tile.bad { border-left-color: #f59e0b; }
+.sc-tile.ok { border-left-color: #94a3b8; }
+.sc-tile-head { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.sc-tile-head .sc-grade { margin-left: auto; }
+.sc-main { font-size: 16px; font-weight: 800; }
+.sc-sub { font-size: 11.5px; color: var(--text-2); }
+.sc-compare { font-size: 11px; color: var(--muted); }
+.sc-grade { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
+.sc-grade.good { background: rgba(16, 185, 129, 0.14); color: #047857; }
+.sc-grade.bad { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+:root[data-theme='dark'] .sc-grade.good { color: #34d399; }
+:root[data-theme='dark'] .sc-grade.bad { color: #fbbf24; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .sc-grade.good { color: #34d399; } :root:not([data-theme='light']) .sc-grade.bad { color: #fbbf24; } }
+
 /* AI 주간 브리핑 (A4 가로 한 장, 흰 바탕) */
 .brief-page { display: flex; flex-direction: column; gap: 10px; }
 .brief-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; }
