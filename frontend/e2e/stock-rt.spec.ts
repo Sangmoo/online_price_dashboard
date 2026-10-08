@@ -181,6 +181,7 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시 · 확정
   api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
   api.on('GET', '/api/stock-rt/rt', () => ({ json: RT }))
   api.on('POST', '/api/stock-rt/rt/preview', () => ({ json: { brand: 'S', brandNm: '쉬즈미스', asOf: RT.asOf, count: 1, qty: 2, senders: 1, receivers: 1,
+    rows: [{ fromShopId: 'S32017', fromShopNm: '대구점', toShopId: 'S11016', toShopNm: '영등포점', qty: 2 }],
     skipped: [{ key: ['SWWSLQ42230', 'LG', '44', 'S11003', 'S21018'], reason: '보내는 매장 재고 부족 (지금 보낼 수 있는 수량 0)' }] } }))
   api.on('POST', '/api/stock-rt/rt/register', () => ({ json: { ok: true, indcDt: ymd(now), count: 1, qty: 2, firstId: `${ymd(now)}00042`,
     lastId: `${ymd(now)}00043`, senders: 1, receivers: 1, skipped: [] } }))
@@ -210,6 +211,10 @@ test('관리자: 매장 간 RT 추천을 골라 본사지시 RT 지시 · 확정
   await expect(dlg).toContainText('로그인한 사번으로 확정')
   await expect(dlg).toContainText('제외 1건')
   expect(api.find('POST', '/api/stock-rt/rt/preview')[0].body).toEqual({ keys: [['SWWJKQ42010', 'BK', '55', 'S32017', 'S11016']] })
+  const shopSum = dlg.getByRole('table', { name: '매장별 지시 요약' })                     // 지시 전 보내는 · 받는 매장별 한눈에
+  await expect(shopSum).toContainText('S32017 대구점')
+  await dlg.getByRole('button', { name: '받는 매장별' }).click()
+  await expect(shopSum).toContainText('S11016 영등포점')
   await shot(page, 'stock-rt-register')
   await dlg.getByRole('button', { name: '2장 지시' }).click()
   await expect(page.locator('.stock-done')).toContainText(`지시번호 ${ymd(now)}00042 ~ ${ymd(now)}00043`)

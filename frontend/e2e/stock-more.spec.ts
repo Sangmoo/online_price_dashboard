@@ -46,9 +46,42 @@ test('매장 간 RT 추천: 100행씩 넘겨 보고, 걸러진 전체를 한 번
   await expect(table.getByRole('row')).toHaveCount(51)
   await page.getByRole('button', { name: '전체 250건 선택' }).click()
   await expect(page.getByRole('button', { name: /본사지시 RT 지시 \(250건 · 250장\)/ })).toBeEnabled()
+  const bar = page.getByRole('toolbar', { name: '선택' })
+  await expect(bar).toContainText('선택 250건 · 250장 · 3페이지에 걸침')
   await page.getByLabel('결과 검색').fill('SWW0001')                                    // 검색하면 첫 페이지로 · 걸러진 것만
-  await expect(page.locator('.stock-pager').first()).toContainText('1–10 / 10건')
+  await expect(table.getByRole('row')).toHaveCount(11)
+  await expect(bar).toContainText('(지금 목록에 10건)')
+  await page.getByLabel('결과 검색').fill('')
   await shot(page, 'stock-paging')
+})
+
+test('매장 간 RT 추천: 선택 바 — 한 페이지 행 수 · 매장으로 고르기 · 선택한 것만 보기로 한눈에 확인하고 한 번에 지시', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/stock-rt/options', (_, url) => ({ json: OPTIONS(url.searchParams.get('brand') || 'S', true) }))
+  const d = RT(1200)
+  d.rows = d.rows.map((r, i) => (i % 3 === 0 ? { ...r, fromShopId: 'S11009', fromShopNm: '현대본점', qty: 2 } : r))
+  api.on('GET', '/api/stock-rt/rt', () => ({ json: d }))
+  await page.goto('/?view=stock_rt')
+  await page.getByRole('button', { name: /추천 계산/ }).click()
+  const table = page.getByRole('table', { name: '매장 간 RT 추천 목록' })
+  const bar = page.getByRole('toolbar', { name: '선택' })
+  await expect(bar).toContainText('고른 행 없음')
+  await page.getByLabel('한 페이지 행 수').selectOption('1000')
+  await expect(table.getByRole('row')).toHaveCount(1001)
+  await expect(page.locator('.stock-pager').first()).toContainText('1–1,000 / 1,200건')
+  await page.getByLabel('보내는 매장으로 고르기').selectOption('S11009')               // 매장 하나의 추천을 모든 페이지에서
+  await expect(bar).toContainText('선택 400건 · 800장 · 2페이지에 걸침')
+  await expect(page.getByRole('button', { name: /본사지시 RT 지시 \(400건 · 800장\)/ })).toBeEnabled()
+  await page.getByLabel('선택한 것만 보기').check()
+  await expect(table.getByRole('row')).toHaveCount(401)
+  await expect(page.locator('.stock-pager')).toHaveCount(0)
+  await table.getByRole('row').nth(1).getByRole('checkbox').uncheck()                    // 풀어도 그 행은 그대로 보임
+  await expect(table.getByRole('row')).toHaveCount(401)
+  await expect(bar).toContainText('선택 399건 · 798장')
+  await shot(page, 'stock-selbar')
+  await bar.getByRole('button', { name: '선택 해제' }).click()
+  await expect(table.getByRole('row')).toHaveCount(1001)
+  expect(await page.evaluate(() => localStorage.getItem('stock-page-size'))).toBe('1000')
 })
 
 test('창고 회수 추천: 배분 탭의 창고 부족에서 같은 조건으로 회수 추천 (추천만)', async ({ page, mockApi }) => {

@@ -45,6 +45,42 @@ function SkippedList({ list, label }: { list: Skipped[]; label: (k: string[]) =>
 }
 
 // ---------------------------------------------------------------- 매장 간 RT → 본사지시 RT 지시
+type RtPlanRow = { fromShopId: string; fromShopNm?: string | null; toShopId: string; toShopNm?: string | null; qty: number }
+
+/** 지시 전 한눈에: 보내는 매장 · 받는 매장별 건수 · 장수 (많은 순) */
+function RtShopSummary({ rows }: { rows?: RtPlanRow[] }) {
+  const [side, setSide] = useState<'from' | 'to'>('from')
+  if (!rows?.length) return null
+  const m = new Map<string, { id: string; nm: string; rows: number; qty: number; other: Set<string> }>()
+  for (const r of rows) {
+    const id = side === 'from' ? r.fromShopId : r.toShopId
+    const x = m.get(id) ?? { id, nm: (side === 'from' ? r.fromShopNm : r.toShopNm) ?? '', rows: 0, qty: 0, other: new Set<string>() }
+    x.rows += 1
+    x.qty += r.qty
+    x.other.add(side === 'from' ? r.toShopId : r.fromShopId)
+    m.set(id, x)
+  }
+  const list = [...m.values()].sort((a, b) => b.qty - a.qty)
+  return (
+    <div className="stock-reg-shops">
+      <div className="seg">
+        <button className={side === 'from' ? 'on' : ''} onClick={() => setSide('from')}>보내는 매장별</button>
+        <button className={side === 'to' ? 'on' : ''} onClick={() => setSide('to')}>받는 매장별</button>
+      </div>
+      <div className="table-wrap">
+        <table className="table stock-table" aria-label="매장별 지시 요약">
+          <thead><tr><th>{side === 'from' ? '보내는 매장' : '받는 매장'}</th><th className="num">건수</th><th className="num">장수</th><th className="num">{side === 'from' ? '받는 매장 수' : '보내는 매장 수'}</th></tr></thead>
+          <tbody>
+            {list.map((x) => (
+              <tr key={x.id}><td><span className="mono">{x.id}</span> {x.nm}</td><td className="num">{fmtNum(x.rows)}</td><td className="num"><b>{fmtNum(x.qty)}</b></td><td className="num">{fmtNum(x.other.size)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
   source: RtWriteSource; keys: string[][]; today: string; onClose: () => void; onDone: (msg: string) => void
 }) {
@@ -76,6 +112,7 @@ export function RtRegisterModal({ source, keys, today, onClose, onDone }: {
             <div className="pill"><span>받는 매장</span><b>{fmtNum(Number(pv.receivers))}곳</b></div>
             <div className="pill hint-pill">{pv.brandNm} · 추천 {pv.asOf} 기준</div>
           </div>
+          <RtShopSummary rows={pv.rows as RtPlanRow[] | undefined} />
           <SkippedList list={pv.skipped} label={(k) => (k.length === 5 ? `${k[0]} ${k[1]}·${k[2]} ${k[3]}→${k[4]}` : k.join(' '))} />
           <label className="field-label">지시일자
             <input type="date" className="input sm" value={indcDt} min={iso(today)} max={addDaysIso(iso(today), 7)} onChange={(e) => setIndcDt(e.target.value)} />

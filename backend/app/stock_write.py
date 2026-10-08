@@ -19,8 +19,8 @@ from . import audit, db
 from . import stock_ctl as sc
 
 MARK = sc.WEB_MARK
-MAX_KEYS = 3000            # 한 번에 등록할 수 있는 추천 행
-MAX_PIECES = 5000          # 본사지시 RT 는 1장에 1행
+MAX_KEYS = 10000           # 한 번에 등록할 수 있는 추천 행 (여러 페이지를 한 번에 지시)
+MAX_PIECES = 10000         # 본사지시 RT 는 1장에 1행 (지시번호는 하루 99,999 까지)
 LIST_DAYS = 31
 RT_STATUS = {"N": "미확정", "C2954": "확정 · 매장 미처리", "C2951": "매장 수락", "C2952": "매장 거부", "C2953": "기처리", "C2959": "요청취소",
              "DEL": "지시 취소"}

@@ -10,7 +10,7 @@ import {
 } from '../stockApi'
 import { AllocRegisterModal, RegisteredModal, RtRegisterModal } from './StockWrite'
 import { consumeStockOpen, useStockOpen, type StockOpenRequest } from '../stockNav'
-import { Pager, SelectAllFiltered, usePaged } from './stockUi'
+import { groupPicks, Pager, SelectBar, usePaged, usePageSize } from './stockUi'
 import { AgingTab, PendingTab, ReturnTab } from './StockMoreTabs'
 import { InitialTab, TurnoverTab } from './StockAnalysisTabs'
 import { BriefingButton } from './WeeklyBriefing'
@@ -377,7 +377,7 @@ function RtTab({ opts, request, onContext }: { opts: StockOptions; request: Stoc
                 <button className="btn ghost sm" onClick={() => { setAiPick(null); setOnlyPick(false) }}>닫기</button>
               </div>
             )}
-            {view === 'rows' && <RtTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} />}
+            {view === 'rows' && <RtTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} selQty={selQty} />}
             {view === 'unfilled' && <UnfilledTable data={data} rows={unfilled} />}
             {view === 'shops' && <ShopTotals data={data} />}
             {view === 'stats' && applied && <RtStatsPanel brand={applied.brand} from={applied.dateFrom} to={applied.dateTo} data={data} />}
@@ -405,12 +405,44 @@ function SelectAll({ keys, select, label }: { keys: string[]; select: Select; la
   return <th className="check"><input type="checkbox" checked={on} disabled={!keys.length} onChange={() => select.setMany(keys, !on)} aria-label={label} title={`화면의 ${keys.length}건 모두`} /></th>
 }
 
-function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) {
-  const allKeys = useMemo(() => rows.map((r) => rtKey(r).join('|')), [rows])
-  const pg = usePaged(rows)
-  const keys = useMemo(() => pg.slice.map((r) => rtKey(r).join('|')), [pg.slice])
+/** 선택 바 공통: 고른 것만 보기 · 한 페이지 행 수 · 고른 건수/장수 */
+function useSelectView<T>(rows: T[], keyOf: (r: T) => string, qtyOf: (r: T) => number, select?: Select, selQty?: number) {
+  const [onlySel, setOnlySel] = useState(false)
+  const [size, setSize] = usePageSize()
+  const sel = select?.sel
+  useEffect(() => { if (onlySel && sel && !sel.size) setOnlySel(false) }, [onlySel, sel])
+  // 고른 것만 보기에서 체크를 풀어도 그 행이 바로 사라지지 않게, 켤 때의 목록을 기준으로 보여 준다
+  const [frozen, setFrozen] = useState<Set<string> | null>(null)
+  const toggleOnly = (v: boolean) => { setOnlySel(v); setFrozen(v && sel ? new Set(sel) : null) }
+  const shown = useMemo(() => (onlySel && frozen ? rows.filter((r) => frozen.has(keyOf(r))) : rows), [rows, onlySel, frozen]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pg = usePaged(shown, size)
+  const allKeys = useMemo(() => shown.map(keyOf), [shown]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pageKeys = useMemo(() => pg.slice.map(keyOf), [pg.slice]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selIn = useMemo(() => (sel ? rows.filter((r) => sel.has(keyOf(r))) : []), [rows, sel]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pages = useMemo(() => {
+    if (!sel?.size) return 0
+    const ps = new Set<number>()
+    allKeys.forEach((k, i) => { if (sel.has(k)) ps.add(Math.floor(i / size)) })
+    return ps.size
+  }, [allKeys, sel, size])
+  const bar = (groups?: Parameters<typeof SelectBar>[0]['groups'], unit?: string) => select && (
+    <SelectBar total={shown.length} sel={select.sel} setMany={select.setMany} allKeys={allKeys} pageKeys={pageKeys} selShown={selIn.length}
+      selQty={selQty ?? selIn.reduce((a, r) => a + qtyOf(r), 0)} pages={pages} onlySel={onlySel} setOnlySel={toggleOnly} size={size} setSize={setSize}
+      groups={groups} unit={unit} />
+  )
+  return { pg, pageKeys, bar }
+}
+
+function RtTable({ rows, select, selQty }: { rows: RtResult['rows']; select?: Select; selQty?: number }) {
+  const keyOf = (r: RtResult['rows'][number]) => rtKey(r).join('|')
+  const { pg, pageKeys: keys, bar } = useSelectView(rows, keyOf, (r) => r.qty, select, selQty)
+  const groups = useMemo(() => (select ? [
+    { label: '보내는 매장으로 고르기', ...groupPicks(rows, keyOf, (r) => [r.fromShopId, `${r.fromShopId} ${r.fromShopNm ?? ''}`], (r) => r.qty) },
+    { label: '받는 매장으로 고르기', ...groupPicks(rows, keyOf, (r) => [r.toShopId, `${r.toShopId} ${r.toShopNm ?? ''}`], (r) => r.qty) },
+  ] : undefined), [rows, !!select]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
+    {bar(groups)}
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장 간 RT 추천 목록">
         <thead>
@@ -443,7 +475,7 @@ function RtTable({ rows, select }: { rows: RtResult['rows']; select?: Select }) 
         </tbody>
       </table>
     </div>
-    <Pager pg={pg}>{select && <SelectAllFiltered keys={allKeys} sel={select.sel} setMany={select.setMany} />}</Pager>
+    <Pager pg={pg} />
     </>
   )
 }
@@ -776,7 +808,7 @@ function AllocTab({ opts, request, onContext, onReturn }: {
               )}
             </div>
             {done && <div className="alert info stock-done"><CheckCircle2 size={14} /> <span>{done}</span></div>}
-            {view === 'rows' && <AllocTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} />}
+            {view === 'rows' && <AllocTable rows={rows} select={opts.canWrite ? { sel, flip, setMany } : undefined} selQty={selQty} />}
             {view === 'short' && (
               <>
                 <div className="alert warn stock-short-note">
@@ -822,12 +854,18 @@ function AllocTab({ opts, request, onContext, onReturn }: {
   )
 }
 
-function AllocTable({ rows, select, showShort }: { rows: AllocRow[]; select?: Select; showShort?: boolean }) {
-  const pg = usePaged(rows)
-  const keys = useMemo(() => pg.slice.map((r) => alKey(r).join('|')), [pg.slice])
-  const allKeys = useMemo(() => rows.filter((r) => r.ask).map((r) => alKey(r).join('|')), [rows])
+function AllocTable({ rows, select, showShort, selQty }: { rows: AllocRow[]; select?: Select; showShort?: boolean; selQty?: number }) {
+  const keyOf = (r: AllocRow) => alKey(r).join('|')
+  const askRows = useMemo(() => rows.filter((r) => r.ask), [rows])
+  const { pg, bar } = useSelectView(rows, keyOf, (r) => r.ask, select, selQty)
+  const keys = useMemo(() => pg.slice.map(keyOf), [pg.slice]) // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useMemo(() => (select ? [
+    { label: '매장으로 고르기', ...groupPicks(askRows, keyOf, (r) => [r.shopId, `${r.shopId} ${r.shopNm ?? ''}`], (r) => r.ask) },
+    { label: '품번으로 고르기', ...groupPicks(askRows, keyOf, (r) => [r.prdtCd, r.prdtCd], (r) => r.ask) },
+  ] : undefined), [askRows, !!select]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
+    {bar(groups)}
     <div className="table-wrap tall">
       <table className="table stock-table" aria-label="매장별 배분">
         <thead>
@@ -857,7 +895,7 @@ function AllocTable({ rows, select, showShort }: { rows: AllocRow[]; select?: Se
         </tbody>
       </table>
     </div>
-    <Pager pg={pg}>{select && <SelectAllFiltered keys={allKeys} sel={select.sel} setMany={select.setMany} />}</Pager>
+    <Pager pg={pg} />
     </>
   )
 }
