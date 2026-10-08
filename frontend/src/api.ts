@@ -12,6 +12,8 @@ export type AiLimits = {
   userEnabled: boolean
   dailyQuestions: number
   dailyCostUsd: number
+  /** AI 주간 브리핑 하루 횟수 (대화 질문 · 비용 한도와 별도) */
+  dailyBriefings: number
   customLimits: boolean
 }
 
@@ -279,6 +281,8 @@ export type AdminUser = Pick<User, 'id' | 'name' | 'role' | 'superAdmin' | 'acti
   updatedBy: string | null
   todayQuestions: number
   todayCostUsd: number
+  rawDailyBriefings: number | null
+  todayBriefings: number
   online: boolean
 }
 export type ServerLog = { ts: string; level: string; category: string; message: string }
@@ -288,6 +292,7 @@ export type AdminUserUpdate = {
   aiEnabled: boolean
   dailyQuestions: number | null
   dailyCostUsd: number | null
+  dailyBriefings?: number | null
   active: boolean
   brands: string[] | null
 }
@@ -415,6 +420,9 @@ export type AdminSettings = {
   aiEnabled: boolean
   defaultDailyQuestions: number
   defaultDailyCostUsd: number
+  defaultDailyBriefings: number
+  briefColReady?: boolean
+  briefDdl?: string
   model: string
   effort: string
   models: string[]

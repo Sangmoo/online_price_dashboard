@@ -34,6 +34,7 @@ def parts(monkeypatch):
     monkeypatch.setattr(briefing, "_sales", sales)
     monkeypatch.setattr(briefing, "_stock", stock)
     monkeypatch.setattr(briefing, "_ai", ai)
+    monkeypatch.setattr(briefing, "_quota", lambda me: {"used": 1, "limit": 3})   # DB 없이
     briefing._cache.clear()
     return calls
 
@@ -45,7 +46,7 @@ def test_weekly_sections_follow_pages_and_brands(parts):
     assert d["period"] == {"from": "2026-09-28", "to": "2026-10-04"} and d["ai"]["text"].startswith("### 핵심")
     # 같은 주 다시 열면 AI 를 다시 부르지 않는다 · [다시 만들기]는 다시
     again = briefing.weekly(me, today=date(2026, 10, 8))
-    assert again["cached"] is True and parts["ai"] == 1
+    assert again["cached"] is True and parts["ai"] == 1 and again["quota"] == {"used": 1, "limit": 3}
     briefing.weekly(me, refresh=True, today=date(2026, 10, 8))
     assert parts["ai"] == 2
     me2 = {"id": "U2", "brands": None, "pages": ["sale_dashboard"]}
@@ -63,9 +64,29 @@ def test_weekly_needs_page_and_brand(parts):
 def test_ai_blocked_returns_numbers_only(monkeypatch):
     from app import usage
 
-    monkeypatch.setattr(usage, "check_can_ask", lambda me: "오늘 질문 한도(10회)를 모두 사용했습니다.")
+    monkeypatch.setattr(usage, "check_can_brief", lambda me: "오늘 AI 주간 브리핑 횟수(3회)를 모두 사용했습니다.")
     out = briefing._ai({"id": "U1"}, {"period": {}})
-    assert out["text"] is None and "한도" in out["blocked"]
+    assert out["text"] is None and "3회" in out["blocked"]
+
+
+def test_briefing_limit_is_separate_from_chat_limits(monkeypatch):
+    """브리핑은 대화 질문 · 비용 한도와 따로 하루 N회 (사용자별, 기본 3회)"""
+    from app import auth, usage
+
+    ai = {"globalEnabled": True, "userEnabled": True, "dailyQuestions": 10, "dailyCostUsd": 2.0, "dailyBriefings": 3}
+    used = {"questions": 10, "costUsd": 5.0, "inputTokens": 0, "outputTokens": 0, "briefings": 2}
+    monkeypatch.setattr(usage, "today_usage", lambda uid: used)
+    assert usage.check_can_brief({"id": "U1", "ai": ai}) is None                      # 대화 한도를 다 써도 브리핑은 된다
+    assert usage.check_can_ask({"id": "U1", "ai": ai}) is not None
+    used["briefings"] = 3
+    assert "3회" in usage.check_can_brief({"id": "U1", "ai": ai})
+    assert usage.check_can_brief({"id": "U1", "ai": {**ai, "dailyBriefings": 5}}) is None   # 사용자별 값이 우선
+    row = {"usr_id": "U1", "usr_nm": "가", "role": "USER", "pages": "[]", "brands": "[]", "active": 1, "ai_enabled": 1,
+           "daily_questions": None, "daily_cost_usd": None, "daily_briefings": None}
+    s = {"ai_enabled": True, "default_daily_questions": 10, "default_daily_cost_usd": 2.0, "default_daily_briefings": 3}
+    monkeypatch.setattr(auth, "is_super_admin", lambda uid: False)
+    assert auth.effective(row, s)["ai"]["dailyBriefings"] == 3
+    assert auth.effective({**row, "daily_briefings": 7}, s)["ai"]["dailyBriefings"] == 7
 
 
 def test_scorecard_rt_sum_and_usage_kinds():

@@ -81,6 +81,8 @@ def effective(u: dict, settings: dict | None = None) -> dict:
             "userEnabled": bool(u["ai_enabled"]),
             "dailyQuestions": u["daily_questions"] if u["daily_questions"] is not None else s["default_daily_questions"],
             "dailyCostUsd": u["daily_cost_usd"] if u["daily_cost_usd"] is not None else s["default_daily_cost_usd"],
+            # AI 주간 브리핑은 질문 · 비용 한도와 따로 하루 횟수로 센다
+            "dailyBriefings": u.get("daily_briefings") if u.get("daily_briefings") is not None else s.get("default_daily_briefings", 3),
             "customLimits": u["daily_questions"] is not None or u["daily_cost_usd"] is not None,
         },
     }

@@ -21,6 +21,7 @@ SETTING_KEYS: dict[str, tuple[str, str]] = {
     "ai_enabled": ("AI_ENABLED", "yn"),
     "default_daily_questions": ("DEFAULT_DAY_QSTN_LMT", "int"),
     "default_daily_cost_usd": ("DEFAULT_DAY_COST_LMT", "float"),
+    "default_daily_briefings": ("DEFAULT_DAY_BRIEF_LMT", "int"),   # AI 주간 브리핑 하루 횟수 (질문 · 비용 한도와 별도)
     "model": ("AI_MODEL", "str"),
     "effort": ("AI_EFFORT", "str"),
     "log_keep_days": ("LOG_KEEP_DAYS", "int"),
@@ -39,6 +40,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ai_enabled": True,
     "default_daily_questions": 10,
     "default_daily_cost_usd": 2.0,
+    "default_daily_briefings": 3,
     "model": None,
     "effort": None,
     "log_keep_days": 7,
@@ -85,9 +87,35 @@ def invalidate(usr_id: str | None = None) -> None:
 # ----------------------------------------------------------------------------
 USER_SQL = """
     SELECT U.USR_ID, U.USR_NM, U.ROLE_CD, U.AI_USE_YN, U.DAY_QSTN_LMT, U.DAY_COST_LMT, U.USE_YN,
-           U.LAST_LOGIN_DAY, U.INS_DAY, U.UPT_DAY, U.UPT_USERID
+           U.LAST_LOGIN_DAY, U.INS_DAY, U.UPT_DAY, U.UPT_USERID"""
+USER_FROM = """
       FROM T_ERP_WEB_USER U
 """
+# 사용자별 AI 주간 브리핑 하루 횟수: db/alter_erp_web_user_brief_limit.sql 로 추가하는 열. 없으면 모두 기본값을 쓴다.
+BRIEF_COL = "DAY_BRIEF_LMT"
+BRIEF_DDL = "db/alter_erp_web_user_brief_limit.sql"
+_brief_col: tuple[float, bool] | None = None
+
+
+def has_brief_col() -> bool:
+    """T_ERP_WEB_USER.DAY_BRIEF_LMT 가 있는지 (1분 캐시)"""
+    global _brief_col
+    now = time.time()
+    if _brief_col and _brief_col[0] > now:
+        return _brief_col[1]
+    try:
+        with db.get_pool().acquire() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT {BRIEF_COL} FROM T_ERP_WEB_USER WHERE 1 = 0")
+            cur.fetchall()
+        ok = True
+    except Exception:  # noqa: BLE001 - ORA-00904 (열 없음)
+        ok = False
+    _brief_col = (now + 60, ok)
+    return ok
+
+
+def _brief_sel() -> str:
+    return f", U.{BRIEF_COL}" if has_brief_col() else f", NULL AS {BRIEF_COL}"
 
 
 def _pages_of(ids: list[str]) -> dict[str, list[str]]:
@@ -160,6 +188,7 @@ def _to_row(r: dict, pages: list[str], brands: list[str] | None = None) -> dict:
         "ai_enabled": 1 if r["AI_USE_YN"] == "Y" else 0,
         "daily_questions": int(r["DAY_QSTN_LMT"]) if r["DAY_QSTN_LMT"] is not None else None,
         "daily_cost_usd": float(r["DAY_COST_LMT"]) if r["DAY_COST_LMT"] is not None else None,
+        "daily_briefings": int(r[BRIEF_COL]) if r.get(BRIEF_COL) is not None else None,
         "active": 1 if r["USE_YN"] == "Y" else 0,
         "last_login_at": _fmt14(r["LAST_LOGIN_DAY"]),
         "created_at": _fmt14(r["INS_DAY"]),
@@ -175,7 +204,7 @@ def get_user(usr_id: str, fresh: bool = False) -> dict | None:
             hit = _user_cache.get(usr_id)
         if hit and hit[0] > now:
             return hit[1]
-    rows = db.query_dicts(USER_SQL + " WHERE U.USR_ID = :id", {"id": usr_id})
+    rows = db.query_dicts(USER_SQL + _brief_sel() + USER_FROM + " WHERE U.USR_ID = :id", {"id": usr_id})
     row = _to_row(rows[0], _pages_of([usr_id])[usr_id], _brands_of([usr_id])[usr_id]) if rows else None
     with _lock:
         _user_cache[usr_id] = (now + CACHE_TTL, row)
@@ -183,7 +212,7 @@ def get_user(usr_id: str, fresh: bool = False) -> dict | None:
 
 
 def list_users(q: str | None = None) -> list[dict]:
-    sql, p = USER_SQL, {}
+    sql, p = USER_SQL + _brief_sel() + USER_FROM, {}
     if q:
         sql += " WHERE U.USR_ID LIKE :q OR U.USR_NM LIKE :q"
         p["q"] = f"%{q}%"
@@ -232,7 +261,7 @@ def update_user(usr_id: str, values: dict[str, Any], by: str) -> None:
     """values 키: role, pages(list), ai_enabled(bool), daily_questions, daily_cost_usd, active(bool), usr_nm,
     brands(list, 빈 목록 = 모든 브랜드)."""
     col_map = {"role": "ROLE_CD", "usr_nm": "USR_NM", "daily_questions": "DAY_QSTN_LMT",
-               "daily_cost_usd": "DAY_COST_LMT"}
+               "daily_cost_usd": "DAY_COST_LMT", "daily_briefings": BRIEF_COL}
     sets, p = [], {"id": usr_id}
     for k, col in col_map.items():
         if k in values:

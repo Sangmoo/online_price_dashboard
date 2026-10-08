@@ -215,6 +215,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
               <th>AI 사용</th>
               <th className="num">일일 질문 한도</th>
               <th className="num">일일 비용 한도($)</th>
+              <th className="num" title="AI 주간 브리핑 하루 횟수 — AI 대화 질문 · 비용 한도와 별도">브리핑 횟수</th>
               <th className="num">오늘 사용</th>
               <th>계정</th>
               <th>최근 로그인</th>
@@ -287,9 +288,13 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
                     <LimitInput value={u.rawDailyCostUsd} placeholder={`기본 ${u.ai.dailyCostUsd.toFixed(2)}`} step={0.5} onSave={(v) => save(u, { dailyCostUsd: v })} />
                   </td>
                   <td className="num">
+                    <LimitInput value={u.rawDailyBriefings} placeholder={`기본 ${u.ai.dailyBriefings}`} step={1} onSave={(v) => save(u, { dailyBriefings: v === null ? null : Math.round(v) })} />
+                  </td>
+                  <td className="num">
                     <div className="usage-cell">
                       <span>{u.todayQuestions}/{u.ai.dailyQuestions}회</span>
                       <span className="muted">${u.todayCostUsd.toFixed(2)}</span>
+                      <span className="muted" title="AI 주간 브리핑 (질문 · 비용 한도와 별도)">브리핑 {u.todayBriefings}/{u.ai.dailyBriefings}</span>
                     </div>
                   </td>
                   <td>
@@ -301,7 +306,7 @@ function UsersTab({ me, notify }: { me: User; notify: Notify }) {
             })}
             {!loading && users.length === 0 && (
               <tr>
-                <td colSpan={10} className="empty">등록된 사용자가 없습니다.</td>
+                <td colSpan={11} className="empty">등록된 사용자가 없습니다.</td>
               </tr>
             )}
           </tbody>
@@ -633,6 +638,7 @@ function AiTab({ notify }: { notify: Notify }) {
           aiEnabled: s.aiEnabled,
           defaultDailyQuestions: Number(s.defaultDailyQuestions),
           defaultDailyCostUsd: Number(s.defaultDailyCostUsd),
+          defaultDailyBriefings: Number(s.defaultDailyBriefings),
           model: s.model,
           effort: s.effort,
           autoModel: s.autoModel,
@@ -675,6 +681,19 @@ function AiTab({ notify }: { notify: Notify }) {
         <div className="input-suffix">
           <span>$</span>
           <input className="input" type="number" min={0} step={0.5} value={s.defaultDailyCostUsd} onChange={(e) => setS({ ...s, defaultDailyCostUsd: Number(e.target.value) })} />
+        </div>
+      </div>
+      <div className="setting-row">
+        <div>
+          <div className="strong">기본 AI 주간 브리핑 하루 횟수</div>
+          <div className="muted">
+            사용자 1명이 하루에 새로 만들 수 있는 브리핑 수 — 위 질문 수 · 비용 한도와 따로 셉니다 (같은 주를 1시간 안에 다시 열면 세지 않음).
+            {s.briefColReady === false && <> 사용자별로 다르게 주려면 <b>{s.briefDdl}</b> 를 SS10 스키마에서 실행하세요.</>}
+          </div>
+        </div>
+        <div className="input-suffix">
+          <input className="input" type="number" min={0} max={100} value={s.defaultDailyBriefings ?? 3} onChange={(e) => setS({ ...s, defaultDailyBriefings: Number(e.target.value) })} aria-label="기본 AI 주간 브리핑 하루 횟수" />
+          <span>회</span>
         </div>
       </div>
       <div className="setting-row">
@@ -770,7 +789,7 @@ function UsageTab() {
       </section>
       {(data?.byKind ?? []).length > 0 && (
         <section className="card panel">
-          <div className="panel-head"><h3>용도별 사용량</h3><span className="panel-hint">AI 대화(대화창) · AI 주간 브리핑(판매 현황 · 재고 재배치 추천의 버튼) — 질문 수는 사용자 일일 질문 한도에 함께 들어갑니다</span></div>
+          <div className="panel-head"><h3>용도별 사용량</h3><span className="panel-hint">AI 대화(대화창) · AI 주간 브리핑(판매 현황 · 재고 재배치 추천의 버튼) — 브리핑은 대화 질문 · 비용 한도와 따로 하루 횟수로 셉니다 (사용자 · 권한의 "브리핑 횟수")</span></div>
           <table className="table sd-table" aria-label="용도별 사용량">
             <thead><tr><th>용도</th><th className="num">질문 · 브리핑</th><th className="num">API 호출</th><th className="num">사용자</th><th className="num">입력 토큰</th><th className="num">출력 토큰</th><th className="num">비용($)</th><th className="num">회당 비용($)</th><th className="num">비중</th></tr></thead>
             <tbody>

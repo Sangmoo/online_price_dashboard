@@ -27,6 +27,7 @@ def _names() -> dict[str, str]:
 def list_users(q: str | None = None) -> list[dict]:
     settings = userdb.get_settings()
     today = usage.today_by_user()
+    today_brief = usage.today_briefings_by_user()
     online = appdb.online_user_ids(time.time())
     out = []
     for u in userdb.list_users(q):
@@ -37,6 +38,8 @@ def list_users(q: str | None = None) -> list[dict]:
             "rawAiEnabled": bool(u["ai_enabled"]),
             "rawDailyQuestions": u["daily_questions"],
             "rawDailyCostUsd": u["daily_cost_usd"],
+            "rawDailyBriefings": u.get("daily_briefings"),
+            "todayBriefings": today_brief.get(u["usr_id"], 0),
             "lastLoginAt": u["last_login_at"],
             "createdAt": u["created_at"],
             "updatedAt": u["updated_at"],
@@ -155,6 +158,13 @@ def _validate(usr_id: str, body: dict) -> dict:
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1000):
             _bad("일일 비용 한도는 0~1000 USD 사이(또는 기본값)입니다.")
         updates["daily_cost_usd"] = float(v) if v is not None else None
+    if "dailyBriefings" in body:
+        v = body["dailyBriefings"]
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 100):
+            _bad("AI 주간 브리핑 하루 횟수는 0~100 사이 정수(또는 기본값)입니다.")
+        if not userdb.has_brief_col():
+            _bad(f"사용자별 브리핑 횟수를 저장할 열이 없습니다. {userdb.BRIEF_DDL} 를 SS10 스키마에서 실행하세요. (기본값은 AI 사용 설정에서 바꿀 수 있습니다)")
+        updates["daily_briefings"] = v
     if "active" in body:
         if super_admin and not body["active"]:
             _bad("최고 관리자는 비활성화할 수 없습니다.")
@@ -364,6 +374,9 @@ def get_settings() -> dict:
         "aiEnabled": bool(s["ai_enabled"]),
         "defaultDailyQuestions": s["default_daily_questions"],
         "defaultDailyCostUsd": s["default_daily_cost_usd"],
+        "defaultDailyBriefings": s.get("default_daily_briefings", 3),
+        "briefColReady": userdb.has_brief_col(),
+        "briefDdl": userdb.BRIEF_DDL,
         "model": s["model"] or config.ANTHROPIC_MODEL,
         "effort": s["effort"] or config.ANTHROPIC_EFFORT,
         "models": MODELS,
@@ -386,6 +399,11 @@ def save_settings(body: dict, admin: dict) -> dict:
         if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 1000:
             _bad("기본 일일 질문 한도는 0~1000 사이 정수입니다.")
         values["default_daily_questions"] = v
+    if "defaultDailyBriefings" in body:
+        v = body["defaultDailyBriefings"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 100:
+            _bad("AI 주간 브리핑 기본 하루 횟수는 0~100 사이 정수입니다.")
+        values["default_daily_briefings"] = v
     if "defaultDailyCostUsd" in body:
         v = body["defaultDailyCostUsd"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 1000:

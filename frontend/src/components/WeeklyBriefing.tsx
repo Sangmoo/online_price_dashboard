@@ -24,6 +24,8 @@ export type Briefing = {
   sales?: { brands: SaleBrand[]; ranges: Record<string, string[]> }; stock?: StockPart[]
   ai: { text: string | null; blocked?: string; model?: string; costUsd?: number }
   errors: string[]; asOf: string; sec: number; cached: boolean
+  /** 오늘 AI 주간 브리핑 사용 · 한도 (대화 질문 · 비용 한도와 별도) */
+  quota?: { used: number; limit: number }
 }
 
 const eok = (v: number) => (Math.abs(v) >= 1e8 ? `${(v / 1e8).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${Math.round(v / 1e4).toLocaleString('ko-KR')}만`)
@@ -37,7 +39,7 @@ export function BriefingButton({ brand, className = 'btn ghost' }: { brand?: str
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button className={className} onClick={() => setOpen(true)} title="지난주(월~일) 판매 · RT · 재고 숫자를 모아 AI 가 한 장으로 요약합니다 (AI 질문 1회 사용, 1시간 동안 다시 열면 그대로)">
+      <button className={className} onClick={() => setOpen(true)} title="지난주(월~일) 판매 · RT · 재고 숫자를 모아 AI 가 한 장으로 요약합니다 (브리핑 하루 횟수 1회 사용 · AI 대화 한도와 별도, 1시간 동안 다시 열면 그대로)">
         <Sparkles size={15} /> AI 주간 브리핑
       </button>
       {open && <WeeklyBriefingModal brand={brand} onClose={() => setOpen(false)} />}
@@ -95,7 +97,7 @@ export default function WeeklyBriefingModal({ brand, onClose }: { brand?: string
         <div className="modal-head report-no-print">
           <h3><Sparkles size={17} /> AI 주간 브리핑 <span className="muted small">{d ? `${d.period.from} ~ ${d.period.to} · ${d.brands.join(', ')}` : '지난주 월~일'}</span></h3>
           <div className="report-actions">
-            <button className="btn ghost" onClick={() => load(true)} disabled={loading} title="지금 숫자로 다시 모으고 AI 요약을 다시 만듭니다 (AI 질문 1회 사용)"><RefreshCw size={15} /> 다시 만들기</button>
+            <button className="btn ghost" onClick={() => load(true)} disabled={loading} title={`지금 숫자로 다시 모으고 AI 요약을 다시 만듭니다 (브리핑 1회 사용${d?.quota ? ` · 오늘 ${d.quota.used}/${d.quota.limit}회` : ''})`}><RefreshCw size={15} /> 다시 만들기{d?.quota ? <span className="muted small"> {d.quota.used}/{d.quota.limit}</span> : null}</button>
             <button className="btn primary" onClick={printPdf} disabled={!d || loading} title="인쇄 창에서 'PDF로 저장'을 고르세요 (A4 가로)"><Printer size={15} /> PDF 저장 · 인쇄</button>
             <button className="btn ghost" onClick={savePng} disabled={!d || loading || busy}>{busy ? <Loader2 size={15} className="spin" /> : <FileImage size={15} />} 이미지(PNG)</button>
             <button className="icon-btn" onClick={onClose} title="닫기"><X size={18} /></button>

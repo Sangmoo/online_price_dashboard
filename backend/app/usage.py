@@ -111,39 +111,57 @@ def _migrate_sqlite_usage() -> None:
 # 조회
 # ----------------------------------------------------------------------------
 def today_usage(usr_id: str) -> dict:
+    """오늘 AI 대화 사용량 (질문 · 비용 한도용). AI 주간 브리핑은 빼고 briefings 로 따로 센다."""
     if _use_oracle():
         r = db.query_dicts(
-            f"""SELECT NVL(SUM(DECODE(USE_TYPE, 'Q', 1, 0)), 0) AS QUESTIONS, NVL(SUM(COST_USD), 0) AS COST,
-                       NVL(SUM(INPUT_TOKENS + CACHE_READ + CACHE_WRITE), 0) AS INPUT_TOKENS,
-                       NVL(SUM(OUTPUT_TOKENS), 0) AS OUTPUT_TOKENS
+            f"""SELECT NVL(SUM(CASE WHEN USE_TYPE = 'Q' AND NOT {_BRIEF} THEN 1 ELSE 0 END), 0) AS QUESTIONS,
+                       NVL(SUM(CASE WHEN NOT {_BRIEF} THEN COST_USD ELSE 0 END), 0) AS COST,
+                       NVL(SUM(CASE WHEN NOT {_BRIEF} THEN INPUT_TOKENS + CACHE_READ + CACHE_WRITE ELSE 0 END), 0) AS INPUT_TOKENS,
+                       NVL(SUM(CASE WHEN NOT {_BRIEF} THEN OUTPUT_TOKENS ELSE 0 END), 0) AS OUTPUT_TOKENS,
+                       NVL(SUM(CASE WHEN USE_TYPE = 'Q' AND {_BRIEF} THEN 1 ELSE 0 END), 0) AS BRIEFINGS
                   FROM {ORA_TABLE} WHERE USR_ID = :u AND USE_DT = :d""",
             {"u": usr_id, "d": _ymd(today())},
         )[0]
         r = {k.lower(): v for k, v in r.items()}
     else:
         r = store.row(
-            """SELECT COALESCE(SUM(kind='question'),0) AS questions, COALESCE(SUM(cost_usd),0) AS cost,
-                      COALESCE(SUM(input_tokens + cache_read + cache_write),0) AS input_tokens,
-                      COALESCE(SUM(output_tokens),0) AS output_tokens
+            """SELECT COALESCE(SUM(kind='question' AND conversation_id NOT LIKE 'briefing-%'),0) AS questions,
+                      COALESCE(SUM(CASE WHEN conversation_id NOT LIKE 'briefing-%' THEN cost_usd ELSE 0 END),0) AS cost,
+                      COALESCE(SUM(CASE WHEN conversation_id NOT LIKE 'briefing-%' THEN input_tokens + cache_read + cache_write ELSE 0 END),0) AS input_tokens,
+                      COALESCE(SUM(CASE WHEN conversation_id NOT LIKE 'briefing-%' THEN output_tokens ELSE 0 END),0) AS output_tokens,
+                      COALESCE(SUM(kind='question' AND conversation_id LIKE 'briefing-%'),0) AS briefings
                  FROM ai_usage WHERE usr_id=? AND day=?""",
             (usr_id, today()),
         )
     return {"questions": int(r["questions"]), "costUsd": round(float(r["cost"]), 4),
-            "inputTokens": int(r["input_tokens"]), "outputTokens": int(r["output_tokens"])}
+            "inputTokens": int(r["input_tokens"]), "outputTokens": int(r["output_tokens"]), "briefings": int(r["briefings"] or 0)}
 
 
 def today_by_user() -> dict[str, tuple[int, float]]:
-    """관리자 사용자 목록용: 사용자별 오늘 (질문 수, 비용)."""
+    """관리자 사용자 목록용: 사용자별 오늘 AI 대화 (질문 수, 비용) — 브리핑 제외 (한도와 같은 기준)."""
     if _use_oracle():
         rows = db.query(
-            f"""SELECT USR_ID, SUM(DECODE(USE_TYPE, 'Q', 1, 0)), SUM(COST_USD)
+            f"""SELECT USR_ID, SUM(CASE WHEN USE_TYPE = 'Q' AND NOT {_BRIEF} THEN 1 ELSE 0 END), SUM(CASE WHEN NOT {_BRIEF} THEN COST_USD ELSE 0 END)
                   FROM {ORA_TABLE} WHERE USE_DT = :d GROUP BY USR_ID""",
             {"d": _ymd(today())},
         )[1]
     else:
         rows = [tuple(r.values()) for r in store.rows(
-            "SELECT usr_id, SUM(kind='question'), SUM(cost_usd) FROM ai_usage WHERE day=? GROUP BY usr_id", (today(),))]
+            """SELECT usr_id, SUM(kind='question' AND conversation_id NOT LIKE 'briefing-%'),
+                      SUM(CASE WHEN conversation_id NOT LIKE 'briefing-%' THEN cost_usd ELSE 0 END)
+                 FROM ai_usage WHERE day=? GROUP BY usr_id""", (today(),))]
     return {u: (int(q or 0), round(float(c or 0), 4)) for u, q, c in rows}
+
+
+def today_briefings_by_user() -> dict[str, int]:
+    """관리자 사용자 목록용: 사용자별 오늘 AI 주간 브리핑 횟수"""
+    if _use_oracle():
+        rows = db.query(f"""SELECT USR_ID, COUNT(*) FROM {ORA_TABLE} WHERE USE_DT = :d AND USE_TYPE = 'Q' AND {_BRIEF} GROUP BY USR_ID""",
+                        {"d": _ymd(today())})[1]
+    else:
+        rows = [tuple(r.values()) for r in store.rows(
+            "SELECT usr_id, COUNT(*) FROM ai_usage WHERE day=? AND kind='question' AND conversation_id LIKE 'briefing-%' GROUP BY usr_id", (today(),))]
+    return {u: int(n or 0) for u, n in rows}
 
 
 # AI 주간 브리핑은 대화 ID 를 'briefing-…' 로 남긴다 (briefing._ai) — 사용 현황에서 대화와 나눠 본다
@@ -238,6 +256,7 @@ def usage_summary(me: dict) -> dict:
         **u,
         "questionLimit": lim["dailyQuestions"],
         "costLimitUsd": lim["dailyCostUsd"],
+        "briefingLimit": lim.get("dailyBriefings", 3),
         "enabled": lim["enabled"],
     }
 
@@ -254,6 +273,19 @@ def check_can_ask(me: dict) -> str | None:
         return f"오늘 질문 한도({ai['dailyQuestions']}회)를 모두 사용했습니다. 내일 다시 이용해 주세요."
     if u["costUsd"] >= ai["dailyCostUsd"]:
         return f"오늘 AI 사용 비용 한도(${ai['dailyCostUsd']:.2f})에 도달했습니다. 내일 다시 이용해 주세요."
+    return None
+
+
+def check_can_brief(me: dict) -> str | None:
+    """AI 주간 브리핑을 새로 만들 수 있으면 None, 아니면 사유. 질문 · 비용 한도와 따로 하루 횟수만 본다."""
+    ai = me["ai"]
+    if not ai["globalEnabled"]:
+        return "관리자가 AI 기능을 일시 중지했습니다."
+    if not ai["userEnabled"]:
+        return "AI 사용 권한이 없습니다. 관리자에게 문의하세요."
+    limit = ai.get("dailyBriefings", 3)
+    if today_usage(me["id"])["briefings"] >= limit:
+        return f"오늘 AI 주간 브리핑 횟수({limit}회)를 모두 사용했습니다. 숫자 보고서만 보여 드립니다."
     return None
 
 

@@ -13,9 +13,9 @@ const notice = (id: string, extra: Record<string, unknown> = {}) => ({
 })
 const adminUser = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
   id, name, role: 'USER', superAdmin: false, active: true, pages: ['sale_dashboard'], brands: null,
-  ai: { enabled: true, globalEnabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2, customLimits: false },
+  ai: { enabled: true, globalEnabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2, dailyBriefings: 3, customLimits: false },
   rawAiEnabled: true, rawDailyQuestions: null, rawDailyCostUsd: null, lastLoginAt: '2026-10-01 09:00', createdAt: '2026-09-01 10:00:00',
-  updatedAt: null, updatedBy: null, todayQuestions: 0, todayCostUsd: 0, online: false, ...extra,
+  updatedAt: null, updatedBy: null, todayQuestions: 0, todayCostUsd: 0, rawDailyBriefings: null, todayBriefings: 0, online: false, ...extra,
 })
 const USERS = { users: [adminUser('170046', '홍길동'), adminUser('170047', '김영업')], pages: [{ key: 'sale_dashboard', label: '판매 현황', group: '판매' },
   { key: 'invt_plan', label: '매장 재고 실사계획', group: '데이터' }], superAdminId: '250016', brandOptions: ['리스트', '쉬즈미스'], brandReady: true }

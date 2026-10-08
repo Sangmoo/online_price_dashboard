@@ -202,9 +202,9 @@ test('관리자 화면을 열어만 두면 1시간 뒤 로그아웃된다 (자�
 
 const adminUser = (brands: string[] | null) => ({
   id: '170046', name: '홍길동', role: 'USER', superAdmin: false, active: true, pages: ['sale_dashboard'], brands,
-  ai: { enabled: true, globalEnabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2, customLimits: false },
+  ai: { enabled: true, globalEnabled: true, userEnabled: true, dailyQuestions: 10, dailyCostUsd: 2, dailyBriefings: 3, customLimits: false },
   rawAiEnabled: true, rawDailyQuestions: null, rawDailyCostUsd: null, lastLoginAt: null, createdAt: '2026-09-01 10:00:00',
-  updatedAt: null, updatedBy: null, todayQuestions: 0, todayCostUsd: 0, online: false,
+  updatedAt: null, updatedBy: null, todayQuestions: 0, todayCostUsd: 0, rawDailyBriefings: null, todayBriefings: 0, online: false,
 })
 
 test('관리자: 사용자 브랜드 권한을 바꾸면 선택한 브랜드로 저장한다', async ({ page, mockApi }) => {
@@ -223,6 +223,26 @@ test('관리자: 사용자 브랜드 권한을 바꾸면 선택한 브랜드로 
   await page.getByRole('button', { name: '저장' }).click()
   await expect(row).toContainText('리스트, 시스티나')
   expect(api.find('PUT', '/api/admin/users/170046')[0].body).toEqual({ brands: ['리스트', '시스티나'] })
+})
+
+test('관리자: 사용자별 AI 주간 브리핑 하루 횟수 (질문 · 비용 한도와 별도, 비우면 기본 3회)', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/users', () => ({
+    json: { users: [{ ...adminUser(null), todayBriefings: 2 }], pages: [], superAdminId: '250016', brandOptions: [], brandReady: true },
+  }))
+  api.on('PUT', '/api/admin/users/170046', (req) => {
+    const v = (req.postDataJSON() as { dailyBriefings: number | null }).dailyBriefings
+    return { json: { user: { ...adminUser(null), rawDailyBriefings: v, ai: { ...adminUser(null).ai, dailyBriefings: v ?? 3 }, todayBriefings: 2 } } }
+  })
+  await page.goto('/?view=admin')
+  await page.locator('.admin-tab', { hasText: '사용자 · 권한' }).click()
+  const row = page.getByRole('row', { name: /홍길동/ })
+  await expect(row).toContainText('브리핑 2/3')
+  const input = row.getByPlaceholder('기본 3')
+  await input.fill('5')
+  await input.press('Enter')
+  await expect(row).toContainText('브리핑 2/5')
+  expect(api.find('PUT', '/api/admin/users/170046')[0].body).toEqual({ dailyBriefings: 5 })
 })
 
 test('메뉴를 열면 이용 기록을 보내고, 관리자는 메뉴 이용 통계를 본다', async ({ page, mockApi }) => {

@@ -3,7 +3,8 @@
 
 - 브랜드: 사용자의 브랜드 권한 (없으면 모든 브랜드)
 - 판매 부분은 판매 메뉴 권한(판매 현황 · 월별 판매), 재고 부분은 재고 재배치 추천 권한이 있을 때만
-- AI 는 한 번 호출(대화창과 같은 모델 · 한도 · 사용량 기록). 한도 초과 등으로 못 쓰면 숫자 보고서만 돌려준다
+- AI 는 한 번 호출(대화창과 같은 모델 · 사용량 기록). 한도는 대화 질문 · 비용과 따로 하루 N회(사용자별, 기본 3회) —
+  넘으면 숫자 보고서만 돌려준다
 - 같은 사용자 · 주 · 브랜드 조합은 1시간 동안 다시 만들지 않는다 ([다시 만들기]는 새로 계산 · AI 다시 호출)
 """
 from __future__ import annotations
@@ -146,7 +147,7 @@ def _stock(b: str, start: date, end: date, allowed) -> tuple[dict, list[str]]:
 
 
 def _ai(me: dict, data: dict) -> dict:
-    blocked = usage.check_can_ask(me)
+    blocked = usage.check_can_brief(me)              # 질문 · 비용 한도와 따로: 하루 N회 (사용자별, 기본 3회)
     if blocked:
         return {"text": None, "blocked": blocked}
     conv_id = f"briefing-{int(time.time())}"
@@ -172,6 +173,14 @@ def _ai(me: dict, data: dict) -> dict:
         return {"text": None, "blocked": "AI 요약을 만들지 못했습니다 (AI 서비스 연결 오류). 숫자 보고서만 보여 드립니다."}
 
 
+def _quota(me: dict) -> dict | None:
+    """오늘 브리핑 사용 · 한도 (대화 질문 · 비용 한도와 별도) — 화면 [다시 만들기] 옆 표시"""
+    try:
+        return {"used": usage.today_usage(me["id"])["briefings"], "limit": (me.get("ai") or {}).get("dailyBriefings", 3)}
+    except Exception:  # noqa: BLE001 - 표시용
+        return None
+
+
 def weekly(me: dict, brand: str | None = None, refresh: bool = False, today: date | None = None) -> dict:
     allowed = me.get("brands") or None
     pages = set(me.get("pages") or [])
@@ -185,7 +194,7 @@ def weekly(me: dict, brand: str | None = None, refresh: bool = False, today: dat
     with _lock:
         hit = _cache.get(key)
     if hit and hit[0] > time.time() and not refresh:
-        return {**hit[1], "cached": True}
+        return {**hit[1], "cached": True, "quota": _quota(me)}
     t0 = time.perf_counter()
     errors: list[str] = []
     data: dict = {"period": {"from": sc.ymd_label(_d8(start)), "to": sc.ymd_label(_d8(end))}, "brands": [sc.BRAND_CODES[b] for b in brands]}
@@ -215,5 +224,6 @@ def weekly(me: dict, brand: str | None = None, refresh: bool = False, today: dat
               "cached": False}
     with _lock:
         _cache[key] = (time.time() + CACHE_TTL, result)
+    result = {**result, "quota": _quota(me)}
     _log.info("주간 브리핑 user=%s 브랜드=%s %.1f초 AI=%s 오류 %d", me["id"], brands, result["sec"], bool(ai.get("text")), len(errors))
     return result

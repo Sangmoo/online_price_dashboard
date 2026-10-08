@@ -16,7 +16,7 @@ export function makeUser(role: 'ADMIN' | 'USER', pages: string[] = role === 'ADM
     superAdmin: false,
     active: true,
     pages,
-    ai: { enabled: false, globalEnabled: true, userEnabled: false, dailyQuestions: 0, dailyCostUsd: 0, customLimits: false },
+    ai: { enabled: false, globalEnabled: true, userEnabled: false, dailyQuestions: 0, dailyCostUsd: 0, dailyBriefings: 3, customLimits: false },
     sessionExpiresAt: Math.floor(Date.now() / 1000) + 3600,
   }
 }
