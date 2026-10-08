@@ -401,7 +401,7 @@ export function AgingTab({ opts }: { opts: StockOptions }) {
           </div>
           <div className="toolbar-actions">
             <button className="btn primary" onClick={() => run(false)} disabled={loading}>{loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} 조회{dirty ? ' *' : ''}</button>
-            <button className="btn ghost" onClick={() => run(true)} disabled={loading} title="지금 매장 재고를 다시 읽습니다 (1~2분)"><RefreshCw size={15} /> 새로 계산</button>
+            <button className="btn ghost" onClick={() => run(true)} disabled={loading} title="재고 기준을 다시 읽습니다 (새벽 집계를 쓰면 바로 · 원장 직접 계산이면 1~2분)"><RefreshCw size={15} /> 새로 계산</button>
             <button className="btn success" onClick={exportXlsx} disabled={!d || busy || dirty}>{busy ? <Loader2 size={15} className="spin" /> : <Download size={15} />} 엑셀</button>
           </div>
         </div>
@@ -420,7 +420,7 @@ export function AgingTab({ opts }: { opts: StockOptions }) {
         </div>
       </section>
       {error && <div className="alert error">{error}</div>}
-      {loading && <section className="card"><Busy sec={sec} text="매장 재고와 최종판매일을 읽는 중… (처음은 1~2분, 이후 12시간은 바로)" /></section>}
+      {loading && <section className="card"><Busy sec={sec} text="매장 재고와 최종판매일을 읽는 중… (새벽 집계를 쓰면 몇 초, 집계가 없으면 1~2분)" /></section>}
       {d && s && (
         <>
           <section className="summary-pills">
@@ -428,7 +428,7 @@ export function AgingTab({ opts }: { opts: StockOptions }) {
             <div className="pill strong warn-pill"><span>{d.minDays}일 넘게 안 팔림</span><b>{fmtNum(s.agedQty)}장 · {won(s.agedAmt)}원</b><span className="muted">재고의 {s.agedRate ?? 0}%</span></div>
             <div className="pill"><span>해당 매장</span><b>{fmtNum(s.agedShops)}곳</b></div>
             <div className="pill"><span>해당 스타일</span><b>{fmtNum(s.agedStyles)}개</b></div>
-            <div className="pill hint-pill">{d.brandNm} · 재고 기준 {d.asOf}{!d.cond.includeVirtual && d.virtualQty ? ` · 행사 · 가상 매장 ${fmtNum(d.virtualQty)}장 제외` : ''}</div>
+            <div className="pill hint-pill">{d.brandNm} · 재고 기준 {d.asOf}{d.baseSource === 'table' ? ' (새벽 집계)' : d.baseSource === 'live' ? ' (원장 직접 계산)' : ''}{!d.cond.includeVirtual && d.virtualQty ? ` · 행사 · 가상 매장 ${fmtNum(d.virtualQty)}장 제외` : ''}</div>
           </section>
           <section className="card stock-aging-buckets">
             <div className="stock-bars">

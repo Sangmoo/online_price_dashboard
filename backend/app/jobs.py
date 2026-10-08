@@ -26,6 +26,7 @@ APP_JOBS: dict[str, dict[str, str]] = {
     "prewarm": {"label": "판매 현황 미리 계산", "schedule": "서버 시작 · 매일 07시 · 30분마다 데이터 변경 확인 · 뷰 갱신 직후"},
     "mv_refresh": {"label": "사전 집계 뷰 갱신", "schedule": "관리자 [지금 갱신] (월 마감 적재 후)"},
     "housekeeping": {"label": "정리 작업", "schedule": "6시간마다 (로그 · 엑셀 임시 파일 · 문의 이미지 · 다운로드 이력)"},
+    "stock_base": {"label": "매장 재고 기준 재집계 (화면)", "schedule": "관리자 [지금 재집계] (스케줄 · 배치)"},
     "shop_fill": {"label": "매장코드 채우기 (화면)", "schedule": "일자별 상세 [매장코드 채우기] · 최근 7일"},
 }
 # DB 스케줄: 이름 → (표시 이름, 결과 확인 방법)
@@ -34,6 +35,8 @@ DB_JOBS: dict[str, dict[str, str]] = {
                                 "sql": "db/create_job_online_shop_id.sql"},
     "JOB_LOAD_CLOSE_SALE_BASE": {"label": "마감 매출 기초 데이터 적재", "schedule": "매월 1일 13:00 · 전월",
                                  "sql": "db/create_job_close_sale_base_monthly.sql"},
+    "JOB_ERP_WEB_STOCK_BASE": {"label": "매장 재고 기준 집계 (재고 분석)", "schedule": "매일 06:30 · 이번 달 매장 재고",
+                               "sql": "db/create_erp_web_stock_base.sql"},
 }
 SCHED_FUNC_JOBS = "F_ERP_WEB_SCHED_JOBS"
 SCHED_FUNC_RUNS = "F_ERP_WEB_SCHED_RUNS"
@@ -170,6 +173,15 @@ def _check_result(name: str) -> dict | None:
             late = datetime.now().day > 1 or datetime.now().hour >= 14
             return {"label": f"원본 최신 판매년월 {base or '-'} · 사전 집계 뷰 {f.get('mvMaxMonth') or '-'}",
                     "warn": bool(late and base and base < prev)}
+        if name == "JOB_ERP_WEB_STOCK_BASE":
+            from . import stock_base
+
+            st = stock_base.status()
+            if not st["ready"]:
+                return {"label": "집계 테이블을 쓸 수 없습니다", "warn": True}
+            parts = [f"{b['brandNm']} {b['rows']:,}행 ({(b['baseDt'] or '')[5:16]})" if b["status"] == "OK" and b["rows"] is not None
+                     else f"{b['brandNm']} {b['status'] or '기록 없음'}" for b in st["brands"]]
+            return {"label": " · ".join(parts), "warn": any(not b["inUse"] for b in st["brands"])}
     except Exception as ex:  # noqa: BLE001
         return {"label": f"결과 확인 실패: {str(ex).splitlines()[0][:120]}", "warn": True}
     return None

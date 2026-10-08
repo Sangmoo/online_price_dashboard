@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
 import anthropic
@@ -188,18 +189,22 @@ def weekly(me: dict, brand: str | None = None, refresh: bool = False, today: dat
     t0 = time.perf_counter()
     errors: list[str] = []
     data: dict = {"period": {"from": sc.ymd_label(_d8(start)), "to": sc.ymd_label(_d8(end))}, "brands": [sc.BRAND_CODES[b] for b in brands]}
-    if pages & SALE_PAGES:
-        try:
-            data["sales"] = _sales(brands, start, end)
-        except Exception as ex:  # noqa: BLE001
-            errors.append(f"판매: {str(ex).splitlines()[0][:120]}")
-            _log.exception("주간 브리핑 판매 실패")
-    if "stock_rt" in pages:
-        data["stock"] = []
-        for b in brands:
-            part, errs = _stock(b, start, end, allowed)
-            data["stock"].append(part)
-            errors += errs
+    # 판매 · 브랜드별 재고를 동시에 계산 (서로 독립 · DB 연결 최대 4개)
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="briefing") as pool:
+        sales_f = pool.submit(_sales, brands, start, end) if pages & SALE_PAGES else None
+        stock_fs = [pool.submit(_stock, b, start, end, allowed) for b in brands] if "stock_rt" in pages else None
+        if sales_f is not None:
+            try:
+                data["sales"] = sales_f.result()
+            except Exception as ex:  # noqa: BLE001
+                errors.append(f"판매: {str(ex).splitlines()[0][:120]}")
+                _log.error("주간 브리핑 판매 실패", exc_info=ex)
+        if stock_fs is not None:
+            data["stock"] = []
+            for f in stock_fs:
+                part, errs = f.result()
+                data["stock"].append(part)
+                errors += errs
     ai = _ai(me, {**data, "note": "rt=지난주 본사지시 RT(행사 · 가상 매장 제외), pending=지금 매장 미처리 RT(최근 7일 요청), "
                                   "short=어제 판매분 창고 배분 시 창고 부족, turnover=최근 28일 재고일수, aging=90일 넘게 안 팔린 매장 재고, "
                                   "initial=판매 28일이 지난 최근 30일 초도 배분 적중률",

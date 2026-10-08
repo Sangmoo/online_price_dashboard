@@ -637,6 +637,24 @@ def admin_jobs(days: int = 14, fresh: bool = False, _: dict = Depends(require_ad
     return jobs.overview(days)
 
 
+@app.get("/api/admin/stock-base")
+def admin_stock_base(_: dict = Depends(require_admin)):
+    """매장 재고 기준 집계(재고 분석용): 브랜드별 마지막 집계 · 지금 쓰는지 · 재집계 진행 상태"""
+    from . import stock_base
+
+    return stock_base.status()
+
+
+@app.post("/api/admin/stock-base/refresh")
+def admin_stock_base_refresh(body: dict | None = None, me: dict = Depends(require_admin)):
+    """[지금 재집계] {brand?: S|T|A} — 백그라운드 실행, 진행 상태는 GET /api/admin/stock-base"""
+    from . import jobs, stock_base
+
+    run = stock_base.start(me, (body or {}).get("brand") or None)
+    jobs.clear_cache()
+    return {"run": run}
+
+
 @app.put("/api/admin/downloads/alert-settings")
 def admin_download_alert_settings(body: dict, me: dict = Depends(require_admin)):
     """대량 다운로드 알림 기준 {count, phone, rows}"""

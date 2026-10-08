@@ -129,7 +129,7 @@ def report(brand: str | None = None, days: int = 28, plan_yy=None, seasons=None,
     detail.sort(key=lambda x: (x["cls"] not in SHORT, -(x["daily"] if x["cls"] in SHORT else x["stock"]), x["shopId"], x["prdtCd"]))
     t_daily = tot["sales"] / days
     return {
-        "brand": b, "brandNm": sc.BRAND_CODES[b], "days": days, "stockAsOf": bs["asOf"], "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "brand": b, "brandNm": sc.BRAND_CODES[b], "days": days, "stockAsOf": bs["asOf"], "stockSource": bs.get("source"), "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "cond": {"planYy": yy, "seasons": ss, "teams": tm, "prdt": pp, "includeVirtual": bool(include_virtual)}, "virtualRows": virtual_rows,
         "summary": {**tot, "daily": round(t_daily, 1), "cover": round(tot["stock"] / t_daily, 1) if t_daily else None,
                     "sellThru": round(tot["sales"] / (tot["sales"] + tot["stock"]) * 100, 1) if (tot["sales"] + tot["stock"]) else None,

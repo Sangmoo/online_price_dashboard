@@ -147,7 +147,17 @@ export type UploadRow = { row: number; status: 'ok' | 'warn' | 'error'; messages
   display?: Record<string, unknown>; change?: string | null; auto?: string[] }
 export type UploadPreview = { rows: UploadRow[]; summary: { total: number; ok: number; warn: number; error: number; changes?: Record<string, number> } }
 
+/** 매장 재고 기준 집계 (재고 분석용 · T_ERP_WEB_STOCK_BASE) */
+export type StockBaseBrand = { brand: string; brandNm: string; makeYymm: string | null; baseDt: string | null; rows: number | null; sec: number | null
+  status: 'OK' | 'ERROR' | 'RUNNING' | null; msg: string | null; updDt: string | null; inUse: boolean }
+export type StockBaseRun = { status: 'idle' | 'running' | 'done' | 'error'; brand: string | null; started: string | null; finished: string | null
+  by: string | null; error: string | null; elapsedSec: number | null }
+export type StockBaseStatus = { ready: boolean; message: string | null; brands: StockBaseBrand[]; run: StockBaseRun; job: string; ddl: string
+  maxAgeHours?: number; schedule?: string }
+
 export const opsApi = {
+  stockBase: () => json<StockBaseStatus>('/api/admin/stock-base'),
+  stockBaseRefresh: (brand?: string) => send<{ run: StockBaseRun }>('POST', '/api/admin/stock-base/refresh', { brand: brand ?? null }),
   perf: (days: number) => json<PerfReport>(`/api/admin/perf?${qs({ days })}`),
   perfClear: () => send<{ since: string }>('POST', '/api/admin/perf/clear'),
   explain: (sql: string) => send<ExplainResult>('POST', '/api/admin/sql/explain', { sql }),

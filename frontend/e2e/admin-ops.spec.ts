@@ -152,3 +152,38 @@ test('관리자 홈 · 스케줄 · 다운로드 이력: 카드 요약, 테이�
   await page.getByRole('button', { name: '다운로드 이력' }).click()
   await expect(page.locator('.dl-kind.sensitive')).toContainText('매장 매니저 연락처 조회')
 })
+
+test('스케줄 · 배치: 매장 재고 기준 집계 상태 · [지금 재집계] 진행 → 완료', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('ADMIN'))
+  api.on('GET', '/api/admin/home', () => ({ status: 500, json: { detail: { message: '-' } } }))
+  api.on('GET', '/api/admin/jobs', () => ({ json: { days: 14, db: { days: 14, ready: true, error: null, jobs: [] }, app: [], appTable: TABLE_OK,
+    summary: { total: 0, problems: 0, problemNames: [], dbReady: true, appReady: true } } }))
+  const brand = (b: string, nm: string, over: object = {}) => ({ brand: b, brandNm: nm, makeYymm: '202610', baseDt: '2026-10-08 06:31:10', rows: 92000, sec: 71.2,
+    status: 'OK', msg: null, updDt: '2026-10-08 06:31:10', inUse: true, ...over })
+  let phase: 'idle' | 'running' | 'done' = 'idle'
+  let posted: unknown = null
+  api.on('GET', '/api/admin/stock-base', () => ({ json: {
+    ready: true, message: null, job: 'JOB_ERP_WEB_STOCK_BASE', ddl: 'db/create_erp_web_stock_base.sql', maxAgeHours: 36, schedule: '매일 06:30',
+    brands: [brand('S', '쉬즈미스'), brand('T', '리스트', { status: 'ERROR', msg: 'ORA-01555', inUse: false, baseDt: null, rows: null }), brand('A', '시스티나')],
+    run: phase === 'idle' ? { status: 'idle', brand: null, started: null, finished: null, by: null, error: null, elapsedSec: null }
+      : phase === 'running' ? (phase = 'done', { status: 'running', brand: null, started: '2026-10-08 10:00:00', finished: null, by: '900001', error: null, elapsedSec: 5 })
+      : { status: 'done', brand: null, started: '2026-10-08 10:00:00', finished: '2026-10-08 10:02:30', by: '900001', error: null, elapsedSec: 150 },
+  } }))
+  api.on('POST', '/api/admin/stock-base/refresh', (req) => {
+    posted = req.postDataJSON()
+    phase = 'running'
+    return { json: { run: { status: 'running', brand: null, started: '2026-10-08 10:00:00', finished: null, by: '900001', error: null, elapsedSec: 0 } } }
+  })
+  await page.goto('/?view=admin')
+  await page.getByRole('button', { name: '스케줄 · 배치' }).click()
+  const panel = page.getByLabel('매장 재고 기준 집계')
+  await expect(panel.locator('tr', { hasText: '쉬즈미스' })).toContainText('집계 사용')
+  await expect(panel.locator('tr', { hasText: '리스트' })).toContainText('원장 직접 계산')
+  await expect(panel.locator('tr', { hasText: '리스트' })).toContainText('ORA-01555')
+  page.once('dialog', (d) => d.accept())
+  await panel.getByRole('button', { name: '지금 재집계' }).click()
+  await expect(page.getByText(/매장 재고 기준을 재집계했습니다 \(150초\)/)).toBeVisible({ timeout: 10000 })
+  expect(posted).toEqual({ brand: null })
+  await expect(panel).toContainText('마지막 재집계 2026-10-08 10:02:30')
+  await shot(page, 'admin-stock-base')
+})

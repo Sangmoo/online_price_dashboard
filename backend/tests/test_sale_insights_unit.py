@@ -105,13 +105,17 @@ def test_prewarm_scopes_and_tick(monkeypatch):
     from app import sale_mix
 
     monkeypatch.setattr(sale_mix, "heavy_shops", lambda **k: calls.append(("m", k["allowed"], k["ttl"])))
+    from app import stock_aging
+
+    aging = []
+    monkeypatch.setattr(stock_aging, "warm_async", lambda: aging.append(1))   # 실제 재고 기준 읽기(운영 DB 수 분) 대신
     sig = {"v": ("FRESH", "t1")}
     monkeypatch.setattr(prewarm, "signature", lambda: sig["v"])
     prewarm._state.update({"signature": None, "day": None})
     assert prewarm.tick(datetime(2026, 10, 2, 6, 0)) == "서버 시작"
     assert len(calls) == 8 and calls[0] == ("d", None, prewarm.WARM_TTL)
     assert prewarm.tick(datetime(2026, 10, 2, 6, 30)) is None  # 7시 전 · 변경 없음
-    assert prewarm.tick(datetime(2026, 10, 2, 7, 5)) == "아침 계산"
+    assert prewarm.tick(datetime(2026, 10, 2, 7, 5)) == "아침 계산" and aging == [1]
     assert prewarm.tick(datetime(2026, 10, 2, 9, 0)) is None  # 그날은 한 번
     cleared = []
     monkeypatch.setattr(sd, "clear_cache", lambda: cleared.append("d"))

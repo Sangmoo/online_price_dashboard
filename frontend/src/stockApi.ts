@@ -316,7 +316,7 @@ export type AgingShop = { shopId: string; shopNm: string | null; team: string | 
 export type AgingStyle = { prdtCd: string; styleNm: string | null; planYy: string | null; sesn: string | null; sesnNm: string | null; qty: number; amt: number
   agedQty: number; agedAmt: number; agedShops: number; maxDays: number | null }
 export type AgingReport = {
-  brand: string; brandNm: string; minDays: number; asOf: string; baseSec: number; ym: string; virtualQty: number
+  brand: string; brandNm: string; minDays: number; asOf: string; baseSec: number; baseSource?: 'table' | 'live'; ym: string; virtualQty: number
   cond: { planYy: string[]; seasons: string[]; teams: string[]; prdt: string | null; includeVirtual: boolean }
   summary: { qty: number; amt: number; rows: number; agedQty: number; agedAmt: number; agedRows: number; agedRate: number | null; shops: number
     agedShops: number; agedStyles: number }
@@ -334,7 +334,7 @@ export type TurnRow = { shopId: string; shopNm: string | null; team: string | nu
   sesnNm: string | null; stock: number; amt: number; sales: number; daily: number; cover: number | null; sellThru: number | null; cls: string }
 export type TurnCond = { brand: string; days: number; planYy: string[]; seasons: string[]; teams: string[]; prdt: string; includeVirtual: boolean }
 export type TurnReport = {
-  brand: string; brandNm: string; days: number; stockAsOf: string; asOf: string; virtualRows: number
+  brand: string; brandNm: string; days: number; stockAsOf: string; stockSource?: 'table' | 'live'; asOf: string; virtualRows: number
   summary: { stock: number; amt: number; sales: number; daily: number; cover: number | null; sellThru: number | null; shops: number; styles: number
     shortRows: number; overRows: number; overStock: number }
   classes: { key: string; name: string; rows: number; stock: number; sales: number }[]

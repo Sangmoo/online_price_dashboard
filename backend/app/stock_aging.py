@@ -32,8 +32,17 @@ def _bucket(days: int | None) -> str:
 
 
 def _base(brand: str) -> dict:
-    """매장 × 스타일 묶음 (재고 수량 · 금액 · 최종판매일 · 최종/최초 출고일) — 오래 걸려 12시간 캐시"""
+    """매장 × 스타일 묶음 (재고 수량 · 금액 · 최종판매일 · 최종/최초 출고일) — 12시간 캐시.
+    새벽 집계 테이블(stock_base, 1초 안팎)을 먼저 쓰고, 쓸 수 없으면 원장에서 바로 계산 (브랜드당 1분 안팎)"""
+    from . import stock_base
+
     t0 = time.perf_counter()
+    styles = _styles(brand)
+    agg = stock_base.read(brand)
+    if agg is not None:
+        sec = round(time.perf_counter() - t0, 1)
+        _log.info("장기 미판매 재고 기준 읽기 %s %d행 %.1f초 (집계 테이블 %s)", brand, len(agg["rows"]), sec, agg["asOf"])
+        return {"rows": agg["rows"], "styles": styles, "asOf": agg["asOf"], "sec": sec, "ym": agg["ym"], "source": "table"}
     ym = sc.today()[:6]
     rows = db.query(f"""SELECT /*+ PARALLEL(S 4) PARALLEL(B 4) USE_HASH(S B) FULL(B) */
                                S.SHOP_ID, S.PRDT_CD, SUM(S.STOCK_QTY), SUM(NVL(S.STOCK_AMT, 0)), MAX(B.L_SALE_DT), MAX(B.L_RNDS_DT), MIN(B.F_RNDS_DT),
@@ -43,12 +52,15 @@ def _base(brand: str) -> dict:
                            AND B.COMPY_CD(+) = '{sc.COMPY_CD}' AND B.PARENT_BRD_CD(+) = :b AND B.SHOP_ID(+) = S.SHOP_ID
                            AND B.PRDT_CD(+) = S.PRDT_CD AND B.COLOR_CD(+) = S.COLOR_CD AND B.SIZE_CD(+) = S.SIZE_CD
                          GROUP BY S.SHOP_ID, S.PRDT_CD""", {"ym": ym, "b": brand}, arraysize=50000)[1]
-    styles = {p: (nm, yy, ss) for p, nm, yy, ss in db.query(
+    sec = round(time.perf_counter() - t0, 1)
+    _log.info("장기 미판매 재고 기준 읽기 %s %d행 %.1f초 (원장)", brand, len(rows), sec)
+    return {"rows": rows, "styles": styles, "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"), "sec": sec, "ym": ym, "source": "live"}
+
+
+def _styles(brand: str) -> dict:
+    return {p: (nm, yy, ss) for p, nm, yy, ss in db.query(
         f"""SELECT PRDT_CD, STYLE_NM, PLAN_YY, SESN_CD FROM T_STYLE_PLAN WHERE COMPY_CD = '{sc.COMPY_CD}' AND PARENT_BRD_CD = :b""",
         {"b": brand}, arraysize=50000)[1]}
-    sec = round(time.perf_counter() - t0, 1)
-    _log.info("장기 미판매 재고 기준 읽기 %s %d행 %.1f초", brand, len(rows), sec)
-    return {"rows": rows, "styles": styles, "asOf": datetime.now().strftime("%Y-%m-%d %H:%M"), "sec": sec, "ym": ym}
 
 
 # 공용 캐시(stock_ctl.cached)는 항목이 많으면 통째로 비우므로, 오래 걸리는 이 기준은 따로 둔다
@@ -70,6 +82,12 @@ def base(brand: str, refresh: bool = False) -> dict:
         val = _base(brand)
         _cache[brand] = (time.time() + BASE_TTL, val)
         return val
+
+
+def drop(brand: str) -> None:
+    """재집계 뒤: 다음 조회가 새 기준을 읽게"""
+    with _guard:
+        _cache.pop(brand, None)
 
 
 def report(brand: str | None = None, min_days: int = 90, plan_yy=None, seasons=None, teams=None, prdt: str | None = None,
@@ -152,7 +170,7 @@ def report(brand: str | None = None, min_days: int = 90, plan_yy=None, seasons=N
         g["agedRate"] = round(g["agedQty"] / g["qty"] * 100, 1) if g["qty"] else None
     style_rows = sorted((g for g in by_style.values() if g["agedQty"]), key=lambda g: (-g["agedAmt"], -g["agedQty"], g["prdtCd"]))
     return {
-        "brand": b, "brandNm": sc.BRAND_CODES[b], "minDays": min_days, "asOf": bs["asOf"], "baseSec": bs["sec"], "ym": bs["ym"],
+        "brand": b, "brandNm": sc.BRAND_CODES[b], "minDays": min_days, "asOf": bs["asOf"], "baseSec": bs["sec"], "baseSource": bs.get("source"), "ym": bs["ym"],
         "cond": {"planYy": yy, "seasons": ss, "teams": tm, "prdt": pp, "includeVirtual": bool(include_virtual)}, "virtualQty": virtual_qty,
         "summary": {"qty": tot["qty"], "amt": tot["amt"], "rows": tot["rows"], "agedQty": aged["qty"], "agedAmt": aged["amt"], "agedRows": aged["rows"],
                     "agedRate": round(aged["qty"] / tot["qty"] * 100, 1) if tot["qty"] else None, "shops": len(by_shop),

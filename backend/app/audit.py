@@ -31,6 +31,7 @@ ACTIONS = {
     "LOCK_RELEASE": "로그인 잠금 해제",
     "SESSION_KILL": "세션 강제 로그아웃",
     "MV_REFRESH": "사전 집계 뷰 갱신",
+    "STOCK_BASE_REFRESH": "매장 재고 기준 재집계",
     "SETTINGS_RESTORE": "설정 복원",
     "FEEDBACK_UPDATE": "문의·신고 처리",
     "MALL_SHOP_MAP": "판매처 매장 연결",

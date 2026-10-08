@@ -149,7 +149,7 @@ export function TurnoverTab({ opts }: { opts: StockOptions }) {
             <div className="pill"><span>판매율 ({d.days}일)</span><b>{pctv(s.sellThru)}</b><span className="muted">판매 {fmtNum(s.sales)}장</span></div>
             <div className={`pill ${s.shortRows ? 'warn-pill' : ''}`}><span>품절 · 품절 위험</span><b>{fmtNum(s.shortRows)}</b><span className="muted">매장 × 스타일</span></div>
             <div className="pill warn-pill"><span>과다 (90일 넘음 · 판매 없음)</span><b>{fmtNum(s.overRows)}</b><span className="muted">재고 {fmtNum(s.overStock)}장</span></div>
-            <div className="pill hint-pill">{d.brandNm} · 재고 기준 {d.stockAsOf} · {fmtNum(s.shops)}개 매장 · {fmtNum(s.styles)}개 스타일{!r.applied?.includeVirtual && d.virtualRows ? ` · 행사 · 가상 매장 ${fmtNum(d.virtualRows)}건 제외` : ''}</div>
+            <div className="pill hint-pill">{d.brandNm} · 재고 기준 {d.stockAsOf}{d.stockSource === 'table' ? ' (새벽 집계)' : d.stockSource === 'live' ? ' (원장 직접 계산)' : ''} · {fmtNum(s.shops)}개 매장 · {fmtNum(s.styles)}개 스타일{!r.applied?.includeVirtual && d.virtualRows ? ` · 행사 · 가상 매장 ${fmtNum(d.virtualRows)}건 제외` : ''}</div>
           </section>
           <section className="card stock-aging-buckets">
             <div className="stock-bars">

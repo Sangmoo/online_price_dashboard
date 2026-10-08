@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react'
 import { opsApi, type JobInfo, type JobRun, type JobStatus, type JobsOverview } from '../../opsApi'
+import StockBasePanel from './StockBasePanel'
 
 type Notify = (text: string, error?: boolean) => void
 const PERIODS = [7, 14, 30]
@@ -38,6 +39,7 @@ export default function JobsTab({ notify }: { notify: Notify }) {
 
   return (
     <div className="stack">
+      <StockBasePanel notify={notify} onDone={() => load(true)} />
       <section className="card panel">
         <div className="panel-head row">
           <h3>DB 스케줄</h3>

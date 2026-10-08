@@ -64,9 +64,9 @@ def _stock(shop: str, brand: str, sales28: int) -> dict:
     out = {"stock": qty, "amt": amt, "sales28": sales28, "cover": round(qty / daily, 1) if daily else None,
            "sellThru": round(sales28 / (sales28 + qty) * 100, 1) if (sales28 + qty) > 0 else None,
            "agedQty": aged, "agedRate": round(aged / qty * 100, 1) if qty else None, "brandCover": None, "brandAgedRate": None}
-    try:                                             # 브랜드 평균: 재고 기준이 이미 계산돼 있으면 (매일 아침 미리 계산) — 없으면 비교 생략
-        from . import stock_aging, stock_turnover
-        if brand in stock_aging._cache:
+    try:                                             # 브랜드 평균: 재고 기준이 이미 있거나 새벽 집계로 바로 읽을 수 있으면 — 없으면 비교 생략
+        from . import stock_aging, stock_base, stock_turnover
+        if brand in stock_aging._cache or stock_base.usable(brand):
             out["brandCover"] = stock_turnover.report(brand, 28)["summary"]["cover"]
             out["brandAgedRate"] = stock_aging.report(brand, 90)["summary"]["agedRate"]
     except Exception:  # noqa: BLE001
