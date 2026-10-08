@@ -276,6 +276,9 @@ def check_can_ask(me: dict) -> str | None:
     return None
 
 
+BRIEF_LIMIT_MSG = "AI 주간 브리핑 일일 사용량 한도 초과\n관리자에게 문의바랍니다."
+
+
 def check_can_brief(me: dict) -> str | None:
     """AI 주간 브리핑을 새로 만들 수 있으면 None, 아니면 사유. 질문 · 비용 한도와 따로 하루 횟수만 본다."""
     ai = me["ai"]
@@ -285,7 +288,7 @@ def check_can_brief(me: dict) -> str | None:
         return "AI 사용 권한이 없습니다. 관리자에게 문의하세요."
     limit = ai.get("dailyBriefings", 3)
     if today_usage(me["id"])["briefings"] >= limit:
-        return f"오늘 AI 주간 브리핑 횟수({limit}회)를 모두 사용했습니다. 숫자 보고서만 보여 드립니다."
+        return BRIEF_LIMIT_MSG
     return None
 
 

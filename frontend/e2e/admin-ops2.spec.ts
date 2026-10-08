@@ -131,7 +131,7 @@ test('권한 묶음: 묶음을 만들고 사용자에게 적용한다', async ({
   await ed.getByRole('button', { name: '저장' }).click()
   await expect.poll(() => api.find('POST', '/api/admin/roles').length).toBe(1)
   expect((api.find('POST', '/api/admin/roles')[0].body as { conf: unknown }).conf).toEqual(
-    { pages: ['sale_dashboard'], brands: ['쉬즈미스'], aiEnabled: true, dailyQuestions: null, dailyCostUsd: null })
+    { pages: ['sale_dashboard'], brands: ['쉬즈미스'], aiEnabled: true, dailyQuestions: null, dailyCostUsd: null, dailyBriefings: null })
   await page.getByRole('button', { name: '사용자에게 적용' }).click()
   await page.locator('.role-user', { hasText: '홍길동' }).locator('input').check()
   page.once('dialog', (d) => d.accept())

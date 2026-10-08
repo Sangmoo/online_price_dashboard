@@ -18,7 +18,7 @@ from .tables import Tables
 ROLE_TABLE = "T_ERP_WEB_ROLE"
 MEMBER_TABLE = "T_ERP_WEB_ROLE_USER"
 tables = Tables(ROLE_TABLE, MEMBER_TABLE, ddl="db/alter_erp_web_admin_ops_2.sql")
-CONF_KEYS = ("pages", "brands", "aiEnabled", "dailyQuestions", "dailyCostUsd")
+CONF_KEYS = ("pages", "brands", "aiEnabled", "dailyQuestions", "dailyCostUsd", "dailyBriefings")
 
 
 def _bad(msg: str, status: int = 400):
@@ -42,7 +42,8 @@ def _conf(raw: dict) -> dict:
         body["brands"] = None
     v = admin._validate("__role__", body)   # 검증만 (저장 안 함)
     return {"pages": v["pages"], "brands": v.get("brands") or None, "aiEnabled": bool(v.get("ai_enabled", True)),
-            "dailyQuestions": v.get("daily_questions"), "dailyCostUsd": v.get("daily_cost_usd")}
+            "dailyQuestions": v.get("daily_questions"), "dailyCostUsd": v.get("daily_cost_usd"),
+            "dailyBriefings": v.get("daily_briefings")}
 
 
 def _rows() -> list[dict]:

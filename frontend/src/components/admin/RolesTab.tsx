@@ -4,7 +4,7 @@ import { api, type AdminUser } from '../../api'
 import { opsApi, type Role, type RoleConf, type RolesData } from '../../opsApi'
 
 type Notify = (text: string, error?: boolean) => void
-const EMPTY: RoleConf = { pages: [], brands: null, aiEnabled: true, dailyQuestions: null, dailyCostUsd: null }
+const EMPTY: RoleConf = { pages: [], brands: null, aiEnabled: true, dailyQuestions: null, dailyCostUsd: null, dailyBriefings: null }
 
 /** 권한 묶음 (역할 템플릿): 메뉴 · 브랜드 · AI 설정을 묶어 두고 사용자에게 한 번에 적용 */
 export default function RolesTab({ notify }: { notify: Notify }) {
@@ -56,7 +56,7 @@ export default function RolesTab({ notify }: { notify: Notify }) {
                 <td><div className="strong">{r.name}</div>{r.description && <div className="muted small">{r.description}</div>}</td>
                 <td className="small">{r.pageLabels.join(', ')}</td>
                 <td className="small">{r.conf.brands?.length ? r.conf.brands.join(', ') : '모든 브랜드'}</td>
-                <td className="small nowrap">{r.conf.aiEnabled ? `사용 · ${r.conf.dailyQuestions ?? '기본'}회 · $${r.conf.dailyCostUsd ?? '기본'}` : '사용 안 함'}</td>
+                <td className="small nowrap">{r.conf.aiEnabled ? `사용 · ${r.conf.dailyQuestions ?? '기본'}회 · $${r.conf.dailyCostUsd ?? '기본'} · 브리핑 ${r.conf.dailyBriefings ?? '기본'}회` : '사용 안 함'}</td>
                 <td className="num" title={r.members.map((m) => m.name).join(', ')}>{r.members.length}명</td>
                 <td className="muted small nowrap">{r.updatedBy} {r.updatedAt}</td>
                 <td className="nowrap">
@@ -134,6 +134,8 @@ function RoleEditor({ role, data, labelOf, onClose, onSaved, notify }: {
               onChange={(e) => setConf((c) => ({ ...c, dailyQuestions: e.target.value === '' ? null : Number(e.target.value) }))} /> 회</label>
             <label className="check-label">일일 비용 $ <input className="input small num-input" type="number" min={0} max={1000} step={0.5} placeholder="기본" value={conf.dailyCostUsd ?? ''}
               onChange={(e) => setConf((c) => ({ ...c, dailyCostUsd: e.target.value === '' ? null : Number(e.target.value) }))} /></label>
+            <label className="check-label" title="AI 주간 브리핑 하루 횟수 — 질문 · 비용 한도와 별도">브리핑 <input className="input small num-input" type="number" min={0} max={100} placeholder="기본" value={conf.dailyBriefings ?? ''}
+              aria-label="브리핑 하루 횟수" onChange={(e) => setConf((c) => ({ ...c, dailyBriefings: e.target.value === '' ? null : Number(e.target.value) }))} /> 회</label>
           </div>
           {role && role.members.length > 0 && (
             <label className="check-label full"><input type="checkbox" checked={reapply} onChange={(e) => setReapply(e.target.checked)} />

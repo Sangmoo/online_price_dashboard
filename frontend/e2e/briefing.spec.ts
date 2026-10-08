@@ -44,6 +44,21 @@ test('재고 재배치 추천의 [AI 주간 브리핑]: 브랜드 · AI 요약 �
   await expect(dlg).toBeHidden()
 })
 
+test('AI 주간 브리핑 하루 횟수를 넘으면 한도 초과 안내 (숫자 보고서는 그대로)', async ({ page, mockApi }) => {
+  const api = await mockApi(makeUser('USER', ['sale_dashboard']))
+  const b = BRIEF(null)
+  api.on('GET', '/api/briefing/weekly', () => ({ json: { ...b, ai: { text: null, limit: true, blocked: 'AI 주간 브리핑 일일 사용량 한도 초과\n관리자에게 문의바랍니다.' },
+    quota: { used: 3, limit: 3 } } }))
+  await page.goto('/?view=sale_dashboard')
+  await page.getByRole('button', { name: 'AI 주간 브리핑' }).click()
+  const dlg = page.getByRole('dialog', { name: 'AI 주간 브리핑' })
+  const alert = dlg.getByRole('alert')
+  await expect(alert).toContainText('AI 주간 브리핑 일일 사용량 한도 초과')
+  await expect(alert).toContainText('관리자에게 문의바랍니다.')
+  await expect(dlg.locator('.brief-nums')).toContainText('25.3억')
+  await expect(dlg.getByRole('button', { name: /다시 만들기/ })).toContainText('3/3')
+})
+
 test('판매 현황의 [AI 주간 브리핑]: 브랜드 전체 · AI 한도면 숫자만', async ({ page, mockApi }) => {
   const api = await mockApi(makeUser('USER', ['sale_dashboard']))
   api.on('GET', '/api/briefing/weekly', () => ({ json: BRIEF(null) }))

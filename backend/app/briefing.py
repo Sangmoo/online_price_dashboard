@@ -149,7 +149,7 @@ def _stock(b: str, start: date, end: date, allowed) -> tuple[dict, list[str]]:
 def _ai(me: dict, data: dict) -> dict:
     blocked = usage.check_can_brief(me)              # 질문 · 비용 한도와 따로: 하루 N회 (사용자별, 기본 3회)
     if blocked:
-        return {"text": None, "blocked": blocked}
+        return {"text": None, "blocked": blocked, "limit": blocked == usage.BRIEF_LIMIT_MSG}
     conv_id = f"briefing-{int(time.time())}"
     qid = usage.record_question(me["id"], conv_id)
     settings = userdb.get_settings()

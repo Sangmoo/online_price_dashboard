@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { printReport, saveReportPng } from '../reportExport'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { FileImage, Loader2, Printer, RefreshCw, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, FileImage, Loader2, Printer, RefreshCw, Sparkles, X } from 'lucide-react'
 import { apiFetch, qs } from '../api'
 import { fmtNum } from '../format'
 
@@ -22,7 +22,7 @@ type StockPart = { brand: string; brandNm: string
 export type Briefing = {
   period: { from: string; to: string }; brands: string[]
   sales?: { brands: SaleBrand[]; ranges: Record<string, string[]> }; stock?: StockPart[]
-  ai: { text: string | null; blocked?: string; model?: string; costUsd?: number }
+  ai: { text: string | null; blocked?: string; limit?: boolean; model?: string; costUsd?: number }
   errors: string[]; asOf: string; sec: number; cached: boolean
   /** 오늘 AI 주간 브리핑 사용 · 한도 (대화 질문 · 비용 한도와 별도) */
   quota?: { used: number; limit: number }
@@ -104,6 +104,9 @@ export default function WeeklyBriefingModal({ brand, onClose }: { brand?: string
           </div>
         </div>
         {error && <div className="alert error report-no-print">{error}</div>}
+        {d?.ai.limit && !loading && (
+          <div className="alert warn report-no-print brief-limit" role="alert"><AlertTriangle size={16} /><span>{d.ai.blocked}</span></div>
+        )}
         {loading && (
           <div className="stock-loading report-no-print"><Loader2 size={16} className="spin" /> 지난주 판매 · RT · 재고 숫자를 모으고 AI 가 요약하는 중… {sec}초 (보통 20초~1분)</div>
         )}
@@ -121,7 +124,9 @@ export default function WeeklyBriefingModal({ brand, onClose }: { brand?: string
                 <section className="brief-ai">
                   {d.ai.text
                     ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{d.ai.text}</ReactMarkdown>
-                    : <div className="brief-blocked">{d.ai.blocked ?? 'AI 요약이 없습니다.'} — 오른쪽 숫자만 보여 드립니다.</div>}
+                    : d.ai.limit
+                      ? <div className="brief-blocked brief-limit-text">{d.ai.blocked}</div>
+                      : <div className="brief-blocked">{d.ai.blocked ?? 'AI 요약이 없습니다.'} — 오른쪽 숫자만 보여 드립니다.</div>}
                 </section>
                 <section className="brief-nums">
                   {d.sales && (

@@ -450,6 +450,8 @@
 .brief-ai ul, .brief-ai ol { margin: 0; padding-left: 18px; }
 .brief-ai li { margin: 1px 0; }
 .brief-ai p { margin: 2px 0; }
+.brief-limit { white-space: pre-line; font-weight: 600; font-size: 14px; align-items: center; }
+.brief-limit-text { white-space: pre-line; font-weight: 600; }
 .brief-blocked { padding: 10px 12px; background: #fff7ed; color: #9a3412; border-radius: 6px; font-size: 12.5px; }
 .brief-nums { display: flex; flex-direction: column; gap: 8px; min-width: 0; overflow: hidden; }
 .brief-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; font-size: 11px; }

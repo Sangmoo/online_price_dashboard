@@ -162,9 +162,10 @@ def _validate(usr_id: str, body: dict) -> dict:
         v = body["dailyBriefings"]
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 100):
             _bad("AI 주간 브리핑 하루 횟수는 0~100 사이 정수(또는 기본값)입니다.")
-        if not userdb.has_brief_col():
+        if v is not None and not userdb.has_brief_col():
             _bad(f"사용자별 브리핑 횟수를 저장할 열이 없습니다. {userdb.BRIEF_DDL} 를 SS10 스키마에서 실행하세요. (기본값은 AI 사용 설정에서 바꿀 수 있습니다)")
-        updates["daily_briefings"] = v
+        if userdb.has_brief_col():
+            updates["daily_briefings"] = v
     if "active" in body:
         if super_admin and not body["active"]:
             _bad("최고 관리자는 비활성화할 수 없습니다.")

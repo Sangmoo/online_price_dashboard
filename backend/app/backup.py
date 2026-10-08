@@ -20,8 +20,8 @@ from . import admin, ai_tools, audit, auth, userdb
 APP_ID = "erp-sales-web"
 VERSION = 1
 SECTIONS = ("users", "settings", "aiTools")
-USER_KEYS = ("role", "pages", "brands", "aiEnabled", "dailyQuestions", "dailyCostUsd", "active")
-SETTING_KEYS = ("aiEnabled", "defaultDailyQuestions", "defaultDailyCostUsd", "model", "effort", "logKeepDays", "autoModel", "simpleModel", "feedbackImageKeepMonths")
+USER_KEYS = ("role", "pages", "brands", "aiEnabled", "dailyQuestions", "dailyCostUsd", "dailyBriefings", "active")
+SETTING_KEYS = ("aiEnabled", "defaultDailyQuestions", "defaultDailyCostUsd", "defaultDailyBriefings", "model", "effort", "logKeepDays", "autoModel", "simpleModel", "feedbackImageKeepMonths")
 CUSTOM_KEYS = ("label", "description", "page", "sql", "params", "maxRows", "enabled")
 
 
@@ -35,7 +35,8 @@ def _users_now() -> dict[str, dict]:
         out[u["usr_id"]] = {
             "id": u["usr_id"], "name": u["usr_nm"], "role": u["role"], "pages": json.loads(u["pages"] or "[]"),
             "brands": json.loads(u.get("brands") or "[]") or None, "aiEnabled": bool(u["ai_enabled"]),
-            "dailyQuestions": u["daily_questions"], "dailyCostUsd": u["daily_cost_usd"], "active": bool(u["active"]),
+            "dailyQuestions": u["daily_questions"], "dailyCostUsd": u["daily_cost_usd"], "dailyBriefings": u.get("daily_briefings"),
+            "active": bool(u["active"]),
         }
     return out
 
@@ -71,7 +72,8 @@ def _norm_user(u: dict) -> dict:
     b = u.get("brands")
     return {"role": u.get("role"), "pages": sorted(u.get("pages") or []), "brands": sorted(b) if b else None,
             "aiEnabled": bool(u.get("aiEnabled", True)), "dailyQuestions": u.get("dailyQuestions"),
-            "dailyCostUsd": float(u["dailyCostUsd"]) if u.get("dailyCostUsd") is not None else None, "active": bool(u.get("active", True))}
+            "dailyCostUsd": float(u["dailyCostUsd"]) if u.get("dailyCostUsd") is not None else None,
+            "dailyBriefings": u.get("dailyBriefings"), "active": bool(u.get("active", True))}
 
 
 def preview(data: Any) -> dict:
@@ -88,7 +90,7 @@ def preview(data: Any) -> dict:
             added.append({"id": uid, "name": fu.get("name")})
             continue
         a, b = _norm_user(cur), _norm_user(fu)
-        diff = {k: {"before": a[k], "after": b[k]} for k in USER_KEYS if a[k] != b[k]}
+        diff = {k: {"before": a[k], "after": b[k]} for k in USER_KEYS if a[k] != b[k] and (k in fu or k != "dailyBriefings")}
         if diff:
             changed.append({"id": uid, "name": cur["name"], "diff": diff})
         else:
@@ -121,7 +123,8 @@ def preview(data: Any) -> dict:
 def _user_body(u: dict) -> dict:
     return {"role": u.get("role"), "pages": [p for p in (u.get("pages") or []) if p in auth.PAGES], "brands": u.get("brands") or None,
             "aiEnabled": bool(u.get("aiEnabled", True)), "dailyQuestions": u.get("dailyQuestions"),
-            "dailyCostUsd": u.get("dailyCostUsd"), "active": bool(u.get("active", True))}
+            "dailyCostUsd": u.get("dailyCostUsd"), "active": bool(u.get("active", True)),
+            **({"dailyBriefings": u.get("dailyBriefings")} if "dailyBriefings" in u else {})}
 
 
 def apply(me: dict, data: Any, sections: list[str]) -> dict:

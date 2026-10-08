@@ -141,7 +141,7 @@ def test_roles_save_apply_and_reapply(fake_oracle, users, monkeypatch):
     res = roles.apply(ADMIN, r["id"], ["900002", "900003", "900009"])
     assert res["applied"] == ["900002", "900003"] and res["skipped"][0]["id"] == "900009"
     assert saved["900002"][0] == {"pages": ["sale_dashboard", "sale_monthly"], "brands": None, "aiEnabled": True,
-                                  "dailyQuestions": 20, "dailyCostUsd": None}
+                                  "dailyQuestions": 20, "dailyCostUsd": None, "dailyBriefings": None}
     lst = roles.list_roles()["roles"][0]
     assert lst["name"] == "영업 기본" and {m["id"] for m in lst["members"]} == {"900002", "900003"}
     assert roles.role_of("900002")["name"] == "영업 기본"

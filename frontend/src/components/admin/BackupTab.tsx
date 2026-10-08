@@ -6,8 +6,8 @@ type Notify = (text: string, error?: boolean) => void
 type Section = 'users' | 'settings' | 'aiTools'
 const SECTION_LABEL: Record<Section, string> = { users: '사용자 · 권한', settings: '전역 설정', aiTools: 'AI 도구' }
 const KEY_LABEL: Record<string, string> = {
-  role: '권한', pages: '메뉴', brands: '브랜드', aiEnabled: 'AI 사용', dailyQuestions: '질문 한도', dailyCostUsd: '비용 한도', active: '계정 사용',
-  defaultDailyQuestions: '기본 질문 한도', defaultDailyCostUsd: '기본 비용 한도', model: '모델', effort: 'effort', logKeepDays: '로그 보관 일수',
+  role: '권한', pages: '메뉴', brands: '브랜드', aiEnabled: 'AI 사용', dailyQuestions: '질문 한도', dailyCostUsd: '비용 한도', dailyBriefings: '브리핑 횟수', active: '계정 사용',
+  defaultDailyQuestions: '기본 질문 한도', defaultDailyCostUsd: '기본 비용 한도', defaultDailyBriefings: '기본 브리핑 횟수', model: '모델', effort: 'effort', logKeepDays: '로그 보관 일수',
   autoModel: '모델 자동 선택', simpleModel: '단순 조회 모델',
 }
 const show = (v: unknown) => (v === null || v === undefined ? '기본/전체' : Array.isArray(v) ? v.join(', ') || '(없음)' : typeof v === 'boolean' ? (v ? '예' : '아니오') : String(v))

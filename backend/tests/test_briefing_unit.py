@@ -79,7 +79,7 @@ def test_briefing_limit_is_separate_from_chat_limits(monkeypatch):
     assert usage.check_can_brief({"id": "U1", "ai": ai}) is None                      # 대화 한도를 다 써도 브리핑은 된다
     assert usage.check_can_ask({"id": "U1", "ai": ai}) is not None
     used["briefings"] = 3
-    assert "3회" in usage.check_can_brief({"id": "U1", "ai": ai})
+    assert usage.check_can_brief({"id": "U1", "ai": ai}) == usage.BRIEF_LIMIT_MSG == "AI 주간 브리핑 일일 사용량 한도 초과\n관리자에게 문의바랍니다."
     assert usage.check_can_brief({"id": "U1", "ai": {**ai, "dailyBriefings": 5}}) is None   # 사용자별 값이 우선
     row = {"usr_id": "U1", "usr_nm": "가", "role": "USER", "pages": "[]", "brands": "[]", "active": 1, "ai_enabled": 1,
            "daily_questions": None, "daily_cost_usd": None, "daily_briefings": None}
@@ -99,3 +99,33 @@ def test_scorecard_rt_sum_and_usage_kinds():
     assert r["acceptRate"] == round(8 / 13 * 100, 1) and r["avgHours"] == round(26 / 10, 1)        # 자동거부 시간은 처리 시간에서 뺀다
     k = usage._kinds([{"kind": "briefing", "questions": 2, "calls": 2, "input_tokens": 5, "output_tokens": 1, "cost": 0.4, "users": 1}])
     assert [x["kind"] for x in k] == ["chat", "briefing"] and k[0]["cost"] == 0 and k[1]["name"] == "AI 주간 브리핑"
+
+
+def test_ai_limit_flag(monkeypatch):
+    from app import usage
+
+    monkeypatch.setattr(usage, "check_can_brief", lambda me: usage.BRIEF_LIMIT_MSG)
+    out = briefing._ai({"id": "U1"}, {"period": {}})
+    assert out["limit"] is True and out["blocked"].startswith("AI 주간 브리핑 일일 사용량 한도 초과")
+
+
+def test_backup_and_roles_carry_briefing_limit(monkeypatch):
+    """설정 백업 · 권한 묶음에 사용자별 브리핑 횟수 — 예전 백업(값 없음)은 브리핑 횟수를 건드리지 않는다"""
+    from app import admin, backup, roles, userdb
+
+    monkeypatch.setattr(userdb, "has_brief_col", lambda: True)
+    cur = {"id": "U1", "name": "가", "role": "USER", "pages": ["stock_rt"], "brands": None, "aiEnabled": True, "dailyQuestions": None,
+           "dailyCostUsd": None, "dailyBriefings": 5, "active": True}
+    monkeypatch.setattr(backup, "_users_now", lambda: {"U1": cur})
+    monkeypatch.setattr(backup, "_settings_now", lambda: {})
+    monkeypatch.setattr(backup, "_tools_now", lambda: {"builtin": {}, "custom": []})
+    monkeypatch.setattr(backup.auth, "is_super_admin", lambda uid: False)
+    old = {k: v for k, v in cur.items() if k != "dailyBriefings"}
+    data = {"app": backup.APP_ID, "version": backup.VERSION, "users": [old]}
+    assert backup.preview(data)["users"]["same"] == 1                                  # 예전 파일: 차이 없음
+    assert "dailyBriefings" not in backup._user_body(old)
+    data["users"] = [{**cur, "dailyBriefings": 2}]
+    ch = backup.preview(data)["users"]["changed"][0]["diff"]
+    assert ch == {"dailyBriefings": {"before": 5, "after": 2}} and backup._user_body(data["users"][0])["dailyBriefings"] == 2
+    assert roles._conf({"pages": ["stock_rt"], "dailyBriefings": 4})["dailyBriefings"] == 4
+    assert admin._validate("U1", {"dailyBriefings": 4}) == {"daily_briefings": 4}

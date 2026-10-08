@@ -103,7 +103,8 @@ export const noticeFileUrl = (id: string, no: number) => `/api/notices/${id}/fil
 export type Maintenance = { on: boolean; manual?: boolean; scheduledNow?: boolean; scheduled?: boolean; message: string; start?: string | null; until: string | null }
 export type UpcomingMaintenance = { start: string; until: string; message: string }
 
-export type RoleConf = { pages: string[]; brands: string[] | null; aiEnabled: boolean; dailyQuestions: number | null; dailyCostUsd: number | null }
+export type RoleConf = { pages: string[]; brands: string[] | null; aiEnabled: boolean; dailyQuestions: number | null; dailyCostUsd: number | null
+  dailyBriefings?: number | null }
 export type Role = {
   id: string; name: string; description: string; conf: RoleConf; pageLabels: string[]
   members: { id: string; name: string; appliedAt: string | null; by: string | null }[]; updatedBy: string | null; updatedAt: string | null
